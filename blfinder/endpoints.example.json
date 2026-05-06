@@ -1,0 +1,70 @@
+[
+  {
+    "url": "/api/v1/users/me",
+    "method": "GET",
+    "body": {},
+    "params": {}
+  },
+  {
+    "url": "/api/v1/checkout",
+    "method": "POST",
+    "body": {
+      "product_id": 123,
+      "quantity": 1,
+      "price": 99.99,
+      "coupon_code": "SAVE10"
+    },
+    "params": {}
+  },
+  {
+    "url": "/api/v1/orders/456",
+    "method": "GET",
+    "body": {},
+    "params": {}
+  },
+  {
+    "url": "/api/v1/orders",
+    "method": "GET",
+    "body": {},
+    "params": {"limit": 10, "offset": 0}
+  },
+  {
+    "url": "/api/v1/profile",
+    "method": "PUT",
+    "body": {
+      "user_id": 100,
+      "name": "Test User",
+      "email": "test@example.com"
+    },
+    "params": {}
+  },
+  {
+    "url": "/api/v1/coupons/redeem",
+    "method": "POST",
+    "body": {
+      "coupon_code": "FREESHIP",
+      "order_id": 456
+    },
+    "params": {}
+  },
+  {
+    "url": "/api/v1/payments",
+    "method": "POST",
+    "body": {
+      "amount": 100,
+      "currency": "USD",
+      "payment_method": "card",
+      "order_id": 456
+    },
+    "params": {}
+  },
+  {
+    "url": "/api/v1/auth/login",
+    "method": "POST",
+    "body": {
+      "email": "user@example.com",
+      "password": "password123"
+    },
+    "params": {}
+  }
+]
