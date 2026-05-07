@@ -1,4 +1,4 @@
-<div align="center">
+isiv align="center">
 
 ```
 ██████╗ ██╗     ███████╗██╗███╗   ██╗██████╗ ███████╗██████╗
@@ -29,7 +29,7 @@
 
 ## About the Author
 
-Vulnora is built by **Adoyi Steven(séç gúy)**, a cybersecurity researcher and penetration tester focused on practical tools for ethical hacking, bug bounty hunting, and enterprise GRC.
+BLFINDER is built by **Adoyi Steven(séç gúy)**, a cybersecurity researcher and penetration tester focused on practical tools for ethical hacking, bug bounty hunting, and enterprise GRC.
 
 ---
 
@@ -184,7 +184,7 @@ pkg install python git -y
 pip install aiohttp --break-system-packages
 
 # Step 3: Clone the tool
-git clone https://github.com/YOURUSERNAME/blfinder ~/blfinder
+git clone  https://github.com/Steven5233/BLFScanner.git ~/blfinder
 cd ~/blfinder
 
 # Step 4: Verify
@@ -195,7 +195,7 @@ python blfinder.py --help
 
 ```bash
 # Clone
-git clone https://github.com/YOURUSERNAME/blfinder
+git clone https://github.com/Steven5233/BLFScanner.git
 cd blfinder
 
 # Install dependencies
