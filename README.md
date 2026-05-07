@@ -27,6 +27,12 @@
 
 ---
 
+## About the Author
+
+Vulnora is built by **Adoyi Steven(séç gúy)**, a cybersecurity researcher and penetration tester focused on practical tools for ethical hacking, bug bounty hunting, and enterprise GRC.
+
+---
+
 ## Table of Contents
 
 - [What is BLFinder?](#-what-is-blfinder)
