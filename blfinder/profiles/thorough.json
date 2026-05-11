@@ -1,0 +1,37 @@
+{
+  "name": "thorough",
+  "description": "Maximum coverage scan. All modules enabled, conservative rate, highest confidence settings. Use when you have time and authorization.",
+  "settings": {
+    "rate_limit": 0.8,
+    "min_confidence": 50,
+    "confirm_attempts": 3,
+    "fuzz_depth": 4,
+    "strict_validation": true,
+    "blind_idor": true,
+    "idor_range": 200,
+    "idor_harvest": true,
+    "idor_cross_endpoint": true,
+    "run_graphql_deep": true,
+    "run_websocket": true,
+    "run_version_scan": true,
+    "run_recon": true,
+    "js_secrets": true
+  },
+  "flows": [
+    "ecommerce_checkout",
+    "ecommerce_refund",
+    "subscription_upgrade",
+    "funds_transfer",
+    "withdrawal",
+    "password_reset",
+    "user_registration",
+    "redeem_reward",
+    "referral_bonus",
+    "kyc_verification",
+    "api_key_creation"
+  ],
+  "auto_flows": true,
+  "priority_modules": [],
+  "skip_modules": [],
+  "notes": "Runs everything. Expect 30-60 minutes for large targets. Use --db to persist results. Pair with two accounts for full IDOR confirmation."
+}
