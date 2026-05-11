@@ -1,30 +1,16 @@
 #!/usr/bin/env python3
 """
-BLFinder v3.1 Phase 3 — CLI Entry Point
-
-New Phase 3 flags:
-  --recon             Enable subdomain mapping + JS secret extraction
-  --recon-only        Recon only, print targets, don't scan
-  --js-secrets        Extract secrets from JS files (requires --recon or standalone)
-  --subdomain-size N  Wordlist size for subdomain brute force (default: 50)
-  --strict-validation Enable strict endpoint validation (recommended for real targets)
-  --flow TEMPLATE     Run a named built-in flow template (repeatable)
-  --flow-file FILE    Load flow definitions from a JSON file
-  --auto-flows        Auto-detect application type and run relevant templates
-  --oauth-url URL     OAuth2 token endpoint
-  --oauth-id ID       OAuth2 client_id
-  --oauth-secret SEC  OAuth2 client_secret
-  --oauth-grant TYPE  client_credentials | password | refresh_token
-  --oauth-user USER   Username for password grant
-  --oauth-pass PASS   Password for password grant
-  --refresh-url URL   Token refresh endpoint
-  --refresh-token TOK Refresh token value
-  --login-url URL     Re-login URL (fallback refresh)
-  --login-body JSON   Re-login body as JSON string
-  --blind-idor        Enable blind IDOR oracle scanning
-  --samples N         Oracle sample count (default: 4)
-  --product-id N      Product ID for e-commerce flow templates
-  --product-price F   Product price for e-commerce flow templates
+BLFinder v3.1 Phase 4 — CLI Entry Point
+All Phase 3 flags retained. New Phase 4 flags:
+  --idor-range N         Enumerate N IDs per endpoint (enables mass IDOR)
+  --idor-harvest         Use IDs extracted from responses for cross-testing
+  --idor-cross-endpoint  Test harvested IDs across all endpoints (BOLA)
+  --websocket            Enable WebSocket business logic scanning
+  --ws-url URL           Specific WebSocket URL to test directly
+  --ws-race-count N      Concurrent WS messages for race test (default: 15)
+  --graphql-deep         Enable full GraphQL attack suite
+  --version-scan         Enable API version downgrade scanning
+  --classify             Print attack plan before scanning and exit
 """
 
 import asyncio
@@ -37,32 +23,33 @@ from pathlib import Path
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="BLFinder v3.1 Phase 3 — Business Logic Flaw Scanner",
+        description="BLFinder v3.1 Phase 4 — Business Logic Flaw Scanner",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 EXAMPLES:
-  # Basic scan with smart discovery
-  python blfinder.py -t https://api.target.com -T "token"
+  # Full Phase 4 scan — all new modules
+  python blfinder.py -t https://api.target.com -T token -T2 token2 \\
+    -e endpoints.json \\
+    --idor-range 200 --idor-harvest --idor-cross-endpoint \\
+    --graphql-deep --version-scan --websocket \\
+    --html --md -o ~/results -v
 
-  # Two accounts — enables confirmed IDOR
-  python blfinder.py -t https://api.target.com -T user1 -T2 user2 -e endpoints.json
+  # Print attack plan before scanning
+  python blfinder.py -t https://api.target.com -T token -e endpoints.json --classify
 
-  # Full Phase 3 scan with recon
-  python blfinder.py -t https://api.target.com -T "token" --recon --js-secrets \\
-    --html --json --md -o ~/results -v
+  # Mass IDOR only
+  python blfinder.py -t https://api.target.com -T user1 -T2 user2 \\
+    -e endpoints.json --idor-range 500 --html -o ~/results
 
-  # Recon only — discover subdomains without scanning
-  python blfinder.py -t https://target.com --recon-only
+  # GraphQL deep scan
+  python blfinder.py -t https://api.target.com -T token --graphql-deep \\
+    --html -o ~/results
 
-  # E-commerce flow attack
-  python blfinder.py -t https://shop.target.com -T "token" --flow ecommerce_checkout
+  # WebSocket scan
+  python blfinder.py -t https://app.target.com -T token --websocket \\
+    --html -o ~/results
 
-  # OAuth2 auto-authenticate then scan
-  python blfinder.py -t https://api.target.com \\
-    --oauth-url https://auth.target.com/token \\
-    --oauth-id client_id --oauth-secret secret
-
-  # Full professional bug bounty scan
+  # Full professional bug bounty scan (all phases)
   python blfinder.py \\
     -t https://api.target.com \\
     -T user1_token -T2 user2_token \\
@@ -70,6 +57,8 @@ EXAMPLES:
     --recon --js-secrets \\
     --flow ecommerce_checkout --auto-flows \\
     --blind-idor --strict-validation \\
+    --idor-range 200 --idor-harvest \\
+    --graphql-deep --version-scan --websocket \\
     --html --json --md -o ~/results -v
 """,
     )
@@ -80,30 +69,28 @@ EXAMPLES:
     p.add_argument("-T2", "--token2",      default="",               help="Auth token for User 2 (IDOR confirmation)")
     p.add_argument("-T3", "--token3",      default="",               help="Auth token for User 3")
     p.add_argument("-e",  "--endpoints",   default="",               help="Endpoints JSON file")
-    p.add_argument("-H",  "--header",      action="append", default=[], metavar="Key:Value",
-                   help="Extra headers (repeatable)")
-    p.add_argument("-c",  "--cookie",      action="append", default=[], metavar="name=value",
-                   help="Cookies (repeatable)")
+    p.add_argument("-H",  "--header",      action="append", default=[], metavar="Key:Value")
+    p.add_argument("-c",  "--cookie",      action="append", default=[], metavar="name=value")
     p.add_argument("--proxy",              default="",               help="HTTP proxy e.g. http://127.0.0.1:8080")
-    p.add_argument("-r",  "--rate",        type=float, default=0.3,  help="Base request delay in seconds (default: 0.3)")
-    p.add_argument("--timeout",            type=int,   default=20,   help="Request timeout in seconds (default: 20)")
+    p.add_argument("-r",  "--rate",        type=float, default=0.3,  help="Base request delay (default: 0.3)")
+    p.add_argument("--timeout",            type=int,   default=20,   help="Request timeout seconds (default: 20)")
     p.add_argument("--no-discover",        action="store_true",      help="Disable smart endpoint discovery")
     p.add_argument("--no-ssl-verify",      action="store_true",      help="Disable SSL verification")
     p.add_argument("--fuzz-depth",         type=int,   default=2,    help="Nested JSON mutation depth (default: 2)")
     p.add_argument("--min-confidence",     type=int,   default=40,   help="Min confidence %% to report (default: 40)")
     p.add_argument("--confirm-attempts",   type=int,   default=2,    help="Re-verification attempts (default: 2)")
 
-    # ── Phase 3: Recon ────────────────────────────────────────────────────────
+    # ── Phase 3: Recon + Validation ───────────────────────────────────────────
     p.add_argument("--recon",              action="store_true",
-                   help="Enable subdomain mapping + JS secret extraction before scan")
+                   help="Enable subdomain mapping + JS secret extraction")
     p.add_argument("--recon-only",         action="store_true",
-                   help="Recon only — print discovered targets, do not scan")
+                   help="Recon only — print targets, do not scan")
     p.add_argument("--js-secrets",         action="store_true",
-                   help="Extract API keys and tokens from JavaScript files")
+                   help="Extract secrets from JavaScript files")
     p.add_argument("--subdomain-size",     type=int,   default=50,
-                   help="Subdomain wordlist size for brute force (default: 50)")
+                   help="Subdomain wordlist size (default: 50)")
     p.add_argument("--strict-validation",  action="store_true",
-                   help="Strict endpoint validation — skip soft-404 and HTML responses")
+                   help="Skip soft-404 and HTML endpoints before testing")
 
     # ── Phase 1: Flows ────────────────────────────────────────────────────────
     p.add_argument(
@@ -112,54 +99,72 @@ EXAMPLES:
         metavar="TEMPLATE_NAME",
         help=(
             "Run a named built-in flow template (repeatable). "
-            "Options: ecommerce_checkout, ecommerce_refund, subscription_upgrade, "
-            "funds_transfer, withdrawal, password_reset, user_registration, "
-            "redeem_reward, referral_bonus, kyc_verification, api_key_creation"
+            "Options: ecommerce_checkout, ecommerce_refund, "
+            "subscription_upgrade, funds_transfer, withdrawal, "
+            "password_reset, user_registration, redeem_reward, "
+            "referral_bonus, kyc_verification, api_key_creation"
         ),
     )
-    p.add_argument("--flow-file",          default="",
-                   help="Path to a JSON file containing custom flow definitions")
-    p.add_argument("--auto-flows",         action="store_true",
-                   help="Auto-detect app type and run relevant flow templates")
-    p.add_argument("--product-id",         type=int,   default=1,
-                   help="Product ID for e-commerce flow templates (default: 1)")
-    p.add_argument("--product-price",      type=float, default=99.99,
-                   help="Product price for e-commerce flow templates (default: 99.99)")
+    p.add_argument("--flow-file",          default="",               help="Custom flow definitions JSON file")
+    p.add_argument("--auto-flows",         action="store_true",      help="Auto-detect and run relevant flow templates")
+    p.add_argument("--product-id",         type=int,   default=1,    help="Product ID for e-commerce flows")
+    p.add_argument("--product-price",      type=float, default=99.99, help="Product price for e-commerce flows")
 
-    # ── Phase 1: OAuth2 ───────────────────────────────────────────────────────
-    p.add_argument("--oauth-url",          default="", help="OAuth2 token endpoint URL")
-    p.add_argument("--oauth-id",           default="", help="OAuth2 client_id")
-    p.add_argument("--oauth-secret",       default="", help="OAuth2 client_secret")
-    p.add_argument(
-        "--oauth-grant",
-        default="client_credentials",
-        choices=["client_credentials", "password", "refresh_token"],
-        help="OAuth2 grant type (default: client_credentials)",
-    )
-    p.add_argument("--oauth-user",         default="", help="Username for OAuth2 password grant")
-    p.add_argument("--oauth-pass",         default="", help="Password for OAuth2 password grant")
-    p.add_argument("--oauth-scope",        default="", help="OAuth2 scope")
-
-    # ── Phase 1: Token refresh ────────────────────────────────────────────────
-    p.add_argument("--refresh-url",        default="", help="Token refresh endpoint URL")
-    p.add_argument("--refresh-token",      default="", help="Refresh token value")
-    p.add_argument("--login-url",          default="", help="Re-login URL for fallback refresh")
-    p.add_argument("--login-body",         default="",
-                   help='Re-login body as JSON string e.g. \'{"email":"x","password":"y"}\'')
+    # ── Phase 1: OAuth2 + Token Refresh ───────────────────────────────────────
+    p.add_argument("--oauth-url",          default="",               help="OAuth2 token endpoint URL")
+    p.add_argument("--oauth-id",           default="",               help="OAuth2 client_id")
+    p.add_argument("--oauth-secret",       default="",               help="OAuth2 client_secret")
+    p.add_argument("--oauth-grant",        default="client_credentials",
+                   choices=["client_credentials", "password", "refresh_token"])
+    p.add_argument("--oauth-user",         default="",               help="Username for OAuth2 password grant")
+    p.add_argument("--oauth-pass",         default="",               help="Password for OAuth2 password grant")
+    p.add_argument("--oauth-scope",        default="",               help="OAuth2 scope")
+    p.add_argument("--refresh-url",        default="",               help="Token refresh endpoint URL")
+    p.add_argument("--refresh-token",      default="",               help="Refresh token value")
+    p.add_argument("--login-url",          default="",               help="Re-login URL for fallback refresh")
+    p.add_argument("--login-body",         default="",               help="Re-login body as JSON string")
 
     # ── Phase 1: Blind IDOR ───────────────────────────────────────────────────
-    p.add_argument("--blind-idor",         action="store_true",
-                   help="Enable blind IDOR oracle scanning (slower, more thorough)")
-    p.add_argument("--samples",            type=int,   default=4,
-                   help="Oracle sample count per test (default: 4)")
+    p.add_argument("--blind-idor",         action="store_true",      help="Enable blind IDOR oracle scanning")
+    p.add_argument("--samples",            type=int,   default=4,    help="Oracle sample count (default: 4)")
+
+    # ── Phase 4: Mass IDOR ────────────────────────────────────────────────────
+    p.add_argument("--idor-range",         type=int,   default=0,
+                   help="Enumerate N IDs per endpoint (0=disabled, default: 0)")
+    p.add_argument("--idor-harvest",       action="store_true",
+                   help="Harvest IDs from all responses and test cross-endpoint")
+    p.add_argument("--idor-cross-endpoint", action="store_true",
+                   help="Test harvested IDs across all endpoints (BOLA detection)")
+    p.add_argument("--idor-batch-size",    type=int,   default=20,
+                   help="Concurrent batch size for IDOR enumeration (default: 20)")
+
+    # ── Phase 4: WebSocket ────────────────────────────────────────────────────
+    p.add_argument("--websocket",          action="store_true",
+                   help="Enable WebSocket business logic scanning")
+    p.add_argument("--ws-url",             default="",
+                   help="Specific WebSocket URL to test (in addition to discovery)")
+    p.add_argument("--ws-race-count",      type=int,   default=15,
+                   help="Concurrent WS messages for race condition test (default: 15)")
+
+    # ── Phase 4: GraphQL Deep ─────────────────────────────────────────────────
+    p.add_argument("--graphql-deep",       action="store_true",
+                   help="Enable full GraphQL attack suite (alias IDOR, batch bypass, mutations)")
+
+    # ── Phase 4: API Version Abuse ────────────────────────────────────────────
+    p.add_argument("--version-scan",       action="store_true",
+                   help="Enable API version downgrade scanning")
+
+    # ── Phase 4: Business Classifier ─────────────────────────────────────────
+    p.add_argument("--classify",           action="store_true",
+                   help="Print attack plan with endpoint classification before scanning")
 
     # ── Output ────────────────────────────────────────────────────────────────
-    p.add_argument("-o",  "--output",      default=".",  help="Output directory for reports")
-    p.add_argument("--html",               action="store_true", help="Generate HTML evidence report")
-    p.add_argument("--json",               action="store_true", help="Generate JSON report")
-    p.add_argument("--md",                 action="store_true", help="Generate Markdown / HackerOne report")
-    p.add_argument("-v",  "--verbose",     action="store_true", help="Verbose request logging")
-    p.add_argument("--no-color",           action="store_true", help="Disable ANSI colors (for log files)")
+    p.add_argument("-o",  "--output",      default=".",              help="Output directory for reports")
+    p.add_argument("--html",               action="store_true",      help="Generate HTML evidence report")
+    p.add_argument("--json",               action="store_true",      help="Generate JSON report")
+    p.add_argument("--md",                 action="store_true",      help="Generate Markdown / HackerOne report")
+    p.add_argument("-v",  "--verbose",     action="store_true",      help="Verbose request logging")
+    p.add_argument("--no-color",           action="store_true",      help="Disable ANSI colors")
 
     return p.parse_args()
 
@@ -190,10 +195,8 @@ def load_flow_file(path: str) -> list[dict]:
             return data
         if isinstance(data, dict) and "steps" in data:
             return [data]
-    except FileNotFoundError:
-        print(f"[!] Flow file not found: {path}")
-    except json.JSONDecodeError as e:
-        print(f"[!] Invalid JSON in flow file: {e}")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"[!] Flow file error: {e}")
     return []
 
 
@@ -215,8 +218,6 @@ def parse_cookies(cookie_list: list[str]) -> dict:
     return c
 
 
-# ── Config builders ───────────────────────────────────────────────────────────
-
 def build_oauth_config(args):
     if not args.oauth_url:
         return None
@@ -232,7 +233,6 @@ def build_oauth_config(args):
             scope=args.oauth_scope,
         )
     except ImportError:
-        print("[!] OAuth handler not available")
         return None
 
 
@@ -246,7 +246,7 @@ def build_refresh_config(args):
             try:
                 login_body = json.loads(args.login_body)
             except json.JSONDecodeError:
-                print(f"[!] Invalid --login-body JSON")
+                pass
         return RefreshConfig(
             refresh_url=args.refresh_url,
             refresh_token_value=args.refresh_token,
@@ -258,23 +258,19 @@ def build_refresh_config(args):
 
 
 def build_flow_configs(args) -> list:
-    """Resolve flow template names and custom flow files into config list."""
     configs = []
-    for template_name in args.flow:
-        configs.append({"__template__": template_name})
+    for name in args.flow:
+        configs.append({"__template__": name})
     for flow_def in load_flow_file(args.flow_file):
         configs.append(flow_def)
     return configs
 
 
 def resolve_flow_templates(flow_configs: list, args) -> list:
-    """Convert template name references into actual FlowStep lists."""
     try:
         from core.flows.flow_templates import FlowTemplates
     except ImportError:
-        print("[!] Flow templates not available")
         return flow_configs
-
     resolved = []
     for fc in flow_configs:
         if isinstance(fc, dict) and "__template__" in fc:
@@ -282,16 +278,13 @@ def resolve_flow_templates(flow_configs: list, args) -> list:
             fn   = getattr(FlowTemplates, name, None)
             if fn is None:
                 print(f"[!] Unknown flow template: {name}")
-                print(f"[!] Available: {', '.join(FlowTemplates.list_all())}")
                 continue
             try:
-                if name == "ecommerce_checkout":
-                    steps = fn(
-                        product_id=args.product_id,
-                        price=args.product_price,
-                    )
-                else:
-                    steps = fn()
+                steps = (
+                    fn(product_id=args.product_id, price=args.product_price)
+                    if name == "ecommerce_checkout"
+                    else fn()
+                )
                 resolved.append(steps)
                 print(f"[*] Flow template loaded: {name}")
             except Exception as e:
@@ -301,15 +294,27 @@ def resolve_flow_templates(flow_configs: list, args) -> list:
     return resolved
 
 
-# ── Recon-only runner ─────────────────────────────────────────────────────────
+# ── classify-only mode ────────────────────────────────────────────────────────
+
+def run_classify(endpoints: list[dict]):
+    """Print attack plan without scanning."""
+    try:
+        from core.intelligence.business_classifier import BusinessClassifier
+    except ImportError:
+        print("[!] Business classifier not available")
+        return
+
+    classifier = BusinessClassifier()
+    plan       = classifier.build_plan(endpoints)
+    plan.print_report(verbose=True)
+
+
+# ── Recon-only mode ───────────────────────────────────────────────────────────
 
 async def run_recon_only(args):
-    """Run subdomain mapping and JS extraction without scanning."""
     from urllib.parse import urlparse
-
     target_domain = urlparse(args.target).netloc or args.target
-
-    print(f"[*] BLFinder v3.1 Phase 3 — Recon only: {target_domain}\n")
+    print(f"[*] BLFinder v3.1 Phase 4 — Recon only: {target_domain}\n")
 
     try:
         import aiohttp
@@ -319,78 +324,41 @@ async def run_recon_only(args):
             timeout=aiohttp.ClientTimeout(total=15),
         )
     except ImportError:
-        print("[!] aiohttp not available. Run: pip install aiohttp --break-system-packages")
+        print("[!] aiohttp required: pip install aiohttp --break-system-packages")
         return
 
     try:
-        # Subdomain mapping
         try:
             from core.recon.subdomain_mapper import SubdomainMapper
             mapper = SubdomainMapper(verbose=args.verbose)
             result = await mapper.map(
-                target_domain,
-                max_wordlist=args.subdomain_size,
-                session=session,
+                target_domain, max_wordlist=args.subdomain_size, session=session
             )
-            print(f"\n[*] Subdomain results for {target_domain}:")
-            print(f"    Total found : {result.total_found}")
-            print(f"    Live        : {result.live_count}")
-            print(f"    API surface : {result.api_count}")
-            print()
+            print(f"\n[*] Subdomains for {target_domain}:")
             for sub in result.subdomains:
                 if sub.is_live:
-                    marker = f"[{sub.priority}]"
-                    notes  = ", ".join(sub.notes[:2]) if sub.notes else ""
-                    print(f"  {marker:<12} {sub.hostname:<40} score={sub.score:<3} {notes}")
-
-            # Save targets
+                    print(f"  [{sub.priority:<8}] {sub.hostname:<40} score={sub.score}")
             os.makedirs(args.output, exist_ok=True)
-            targets_path = f"{args.output}/targets.json"
-            with open(targets_path, "w") as fh:
+            with open(f"{args.output}/targets.json", "w") as fh:
                 json.dump(
-                    [
-                        {
-                            "hostname": s.hostname,
-                            "priority": s.priority,
-                            "score":    s.score,
-                            "api_paths": s.api_paths,
-                        }
-                        for s in result.subdomains if s.is_live
-                    ],
-                    fh,
-                    indent=2,
+                    [{"hostname": s.hostname, "priority": s.priority,
+                      "score": s.score} for s in result.subdomains if s.is_live],
+                    fh, indent=2,
                 )
-            print(f"\n[+] Targets saved → {targets_path}")
-
+            print(f"[+] Targets → {args.output}/targets.json")
         except ImportError:
             print("[!] Subdomain mapper not available")
 
-        # JS secret extraction
         if args.js_secrets:
             try:
                 from core.recon.js_secret_extractor import JSSecretExtractor
                 extractor = JSSecretExtractor(verbose=args.verbose)
                 js_result = await extractor.extract(args.target, session=session)
-                print(f"\n[*] JS Secrets for {args.target}:")
-                print(f"    Files scanned : {js_result.js_files_scanned}")
-                print(f"    Secrets found : {len(js_result.confirmed_secrets)}")
-                print()
-                for secret in js_result.confirmed_secrets:
-                    sev = secret.severity
-                    print(
-                        f"  [{sev}] {secret.pattern_name}: "
-                        f"{secret.redacted} "
-                        f"(line {secret.line_number} in {secret.source_url[-40:]})"
-                    )
-
-                if js_result.endpoints:
-                    print(f"\n[*] Internal endpoints found in JS:")
-                    for ep in js_result.endpoints[:20]:
-                        print(f"  {ep}")
-
+                print(f"\n[*] JS Secrets: {len(js_result.confirmed_secrets)} found")
+                for s in js_result.confirmed_secrets:
+                    print(f"  [{s.severity}] {s.pattern_name}: {s.redacted}")
             except ImportError:
-                print("[!] JS secret extractor not available")
-
+                print("[!] JS extractor not available")
     finally:
         await session.close()
 
@@ -400,7 +368,6 @@ async def run_recon_only(args):
 async def main():
     args = parse_args()
 
-    # Recon-only mode — no scanning
     if args.recon_only:
         await run_recon_only(args)
         return 0
@@ -447,21 +414,29 @@ async def main():
     config.subdomain_wordlist_size = args.subdomain_size
     config.strict_validation      = args.strict_validation
 
-    # ── Phase 1: Flows ────────────────────────────────────────────────────────
-    raw_flow_configs = build_flow_configs(args)
-    resolved_flows   = resolve_flow_templates(raw_flow_configs, args)
-    config.run_flows       = bool(resolved_flows) or args.auto_flows
-    config.flow_configs    = resolved_flows
+    # ── Phase 1 config ────────────────────────────────────────────────────────
+    raw_flow_configs   = build_flow_configs(args)
+    resolved_flows     = resolve_flow_templates(raw_flow_configs, args)
+    config.run_flows   = bool(resolved_flows) or args.auto_flows
+    config.flow_configs = resolved_flows
     config.auto_detect_flows = args.auto_flows
-    config.product_id      = args.product_id
-    config.product_price   = args.product_price
-
-    # ── Phase 1: OAuth ────────────────────────────────────────────────────────
+    config.product_id  = args.product_id
+    config.product_price = args.product_price
     config.oauth_config   = build_oauth_config(args)
     config.refresh_config = build_refresh_config(args)
-
-    # ── Phase 1: Blind IDOR ───────────────────────────────────────────────────
     config.oracle_samples = args.samples
+
+    # ── Phase 4 config ────────────────────────────────────────────────────────
+    config.idor_range          = args.idor_range
+    config.idor_harvest        = args.idor_harvest
+    config.idor_cross_endpoint = args.idor_cross_endpoint
+    config.idor_batch_size     = args.idor_batch_size
+    config.run_websocket       = args.websocket
+    config.ws_url              = args.ws_url
+    config.ws_race_count       = args.ws_race_count
+    config.run_graphql_deep    = args.graphql_deep
+    config.run_version_scan    = args.version_scan
+    config.print_attack_plan   = args.classify
 
     # ── Load endpoints ────────────────────────────────────────────────────────
     endpoints = load_endpoints(args.endpoints)
@@ -469,6 +444,13 @@ async def main():
         endpoints = [{"url": "/", "method": "GET", "body": {}, "params": {}}]
         if not args.recon:
             print("[*] No endpoints file — using smart discovery only")
+
+    # ── Classify-only mode ────────────────────────────────────────────────────
+    if args.classify and endpoints:
+        run_classify(endpoints)
+        if not args.target:
+            return 0
+        print("[*] Proceeding with scan...\n")
 
     # ── Run scanner ───────────────────────────────────────────────────────────
     async with BLFScanner(config) as scanner:
@@ -483,7 +465,6 @@ async def main():
     else:
         print(f"\n[+] Scan complete. {len(findings)} findings.")
 
-    # Default to HTML if no format specified
     if args.html or not (args.json or args.md):
         try:
             from core.reporting.evidence_report import EvidenceReportGenerator
@@ -499,16 +480,13 @@ async def main():
     if args.md:
         generate_markdown_report(findings, cfg_dict, f"{args.output}/report.md")
 
-    # Print validation stats summary
     skipped = getattr(scanner, "_skipped_endpoints", [])
     if skipped:
-        print(f"\n[*] Skipped {len(skipped)} endpoint(s) that failed validation:")
-        for url in skipped[:10]:
-            print(f"    {url}")
-        if len(skipped) > 10:
-            print(f"    ... and {len(skipped)-10} more")
+        print(f"\n[*] Skipped {len(skipped)} endpoint(s) that failed validation")
 
-    return 1 if any(f.severity.value == "CRITICAL" for f in findings) else 0
+    return 1 if any(
+        f.severity.value == "CRITICAL" for f in findings
+    ) else 0
 
 
 if __name__ == "__main__":
