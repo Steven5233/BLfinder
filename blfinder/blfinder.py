@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-BLFinder v3.1 Phase 4 — CLI Entry Point
-All Phase 3 flags retained. New Phase 4 flags:
-  --idor-range N         Enumerate N IDs per endpoint (enables mass IDOR)
-  --idor-harvest         Use IDs extracted from responses for cross-testing
-  --idor-cross-endpoint  Test harvested IDs across all endpoints (BOLA)
-  --websocket            Enable WebSocket business logic scanning
-  --ws-url URL           Specific WebSocket URL to test directly
-  --ws-race-count N      Concurrent WS messages for race test (default: 15)
-  --graphql-deep         Enable full GraphQL attack suite
-  --version-scan         Enable API version downgrade scanning
-  --classify             Print attack plan before scanning and exit
+BLFinder v3.1 Phase 5 — CLI Entry Point
+Complete platform with all phases integrated.
+
+New Phase 5 flags:
+  --import-burp FILE    Import Burp Suite XML/JSON traffic export
+  --import-har FILE     Import browser HAR file
+  --import-mitmproxy FILE  Import mitmproxy flows file
+  --import-filter REGEX Filter imported URLs (e.g. /api/)
+  --import-save FILE    Save generated endpoints.json to this path
+  --db PATH             SQLite database path (default: ~/.blfinder.db)
+  --no-repeat           Skip endpoints already in database (dedup)
+  --program HANDLE      Tag findings with HackerOne program handle
+  --export-h1 HANDLE    Export new findings to HackerOne as drafts
+  --h1-token TOKEN      HackerOne API token (username:api_token)
+  --show-history        Print finding history from DB and exit
+  --search QUERY        Search past findings and exit
+  --profile NAME        Load settings from profiles/NAME.json
+  --dashboard           Enable live TUI dashboard
 """
 
 import asyncio
@@ -21,155 +28,217 @@ import sys
 from pathlib import Path
 
 
+# ── Profile loader ────────────────────────────────────────────────────────────
+
+def load_profile(name: str) -> dict:
+    """Load a scan profile from the profiles/ directory."""
+    # Search locations
+    search_dirs = [
+        Path(__file__).parent / "profiles",
+        Path.home() / ".blfinder" / "profiles",
+        Path.cwd() / "profiles",
+    ]
+    for dir_path in search_dirs:
+        profile_path = dir_path / f"{name}.json"
+        if profile_path.exists():
+            try:
+                with open(profile_path) as f:
+                    data = json.load(f)
+                print(f"[*] Profile loaded: {name} ({profile_path})")
+                return data
+            except Exception as e:
+                print(f"[!] Profile load error ({profile_path}): {e}")
+
+    print(f"[!] Profile not found: {name}")
+    print(f"[!] Available profiles: ecommerce, fintech, saas, stealth, fast, graphql, api_only, thorough")
+    return {}
+
+
+def merge_profile_with_args(profile: dict, args) -> dict:
+    """
+    Merge profile settings with CLI args.
+    CLI args take priority over profile settings.
+    Returns a dict of merged settings to apply to config.
+    """
+    settings = dict(profile.get("settings", {}))
+
+    # CLI flags override profile — check which were explicitly set
+    # argparse doesn't easily tell us which were defaults, so we use
+    # None sentinel approach: if CLI value is the default AND profile has it,
+    # use profile. Otherwise, CLI wins.
+    cli_overrides = {
+        "rate_limit":       args.rate != 0.3,   # Non-default = CLI override
+        "min_confidence":   args.min_confidence != 40,
+        "confirm_attempts": args.confirm_attempts != 2,
+        "fuzz_depth":       args.fuzz_depth != 2,
+    }
+    for key, was_overridden in cli_overrides.items():
+        if was_overridden:
+            # CLI wins — remove from profile settings so config keeps CLI value
+            settings.pop(key, None)
+
+    # Boolean flags: if CLI set them, they win
+    for flag, attr in [
+        ("strict_validation", "strict_validation"),
+        ("blind_idor",        "blind_idor"),
+        ("run_graphql_deep",  "graphql_deep"),
+        ("run_websocket",     "websocket"),
+        ("run_version_scan",  "version_scan"),
+        ("run_recon",         "recon"),
+        ("js_secrets",        "js_secrets"),
+    ]:
+        if getattr(args, attr, False):
+            settings[flag] = True   # CLI flag set = override profile
+
+    return settings
+
+
+# ── Argument parser ───────────────────────────────────────────────────────────
+
 def parse_args():
     p = argparse.ArgumentParser(
-        description="BLFinder v3.1 Phase 4 — Business Logic Flaw Scanner",
+        description="BLFinder v3.1 Phase 5 — Business Logic Flaw Scanner",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 EXAMPLES:
-  # Full Phase 4 scan — all new modules
-  python blfinder.py -t https://api.target.com -T token -T2 token2 \\
-    -e endpoints.json \\
-    --idor-range 200 --idor-harvest --idor-cross-endpoint \\
-    --graphql-deep --version-scan --websocket \\
-    --html --md -o ~/results -v
+  # Import from Burp and scan with ecommerce profile
+  python blfinder.py -t https://shop.target.com -T token \\
+    --import-burp burp_export.xml --profile ecommerce \\
+    --db ~/.blfinder.db --program target_h1 \\
+    --html --md -o ~/results
 
-  # Print attack plan before scanning
-  python blfinder.py -t https://api.target.com -T token -e endpoints.json --classify
-
-  # Mass IDOR only
-  python blfinder.py -t https://api.target.com -T user1 -T2 user2 \\
-    -e endpoints.json --idor-range 500 --html -o ~/results
-
-  # GraphQL deep scan
-  python blfinder.py -t https://api.target.com -T token --graphql-deep \\
-    --html -o ~/results
-
-  # WebSocket scan
-  python blfinder.py -t https://app.target.com -T token --websocket \\
-    --html -o ~/results
-
-  # Full professional bug bounty scan (all phases)
+  # Full Phase 5 professional scan
   python blfinder.py \\
     -t https://api.target.com \\
     -T user1_token -T2 user2_token \\
-    -e endpoints.json \\
-    --recon --js-secrets \\
-    --flow ecommerce_checkout --auto-flows \\
-    --blind-idor --strict-validation \\
-    --idor-range 200 --idor-harvest \\
-    --graphql-deep --version-scan --websocket \\
-    --html --json --md -o ~/results -v
+    --import-burp traffic.xml \\
+    --profile thorough \\
+    --db ~/.blfinder.db --program target_h1 \\
+    --dashboard \\
+    --html --json --md -o ~/results
+
+  # Import HAR and preview attack plan
+  python blfinder.py -t https://api.target.com -T token \\
+    --import-har requests.har --classify
+
+  # Show finding history
+  python blfinder.py --show-history --db ~/.blfinder.db
+
+  # Search past findings
+  python blfinder.py --search "IDOR payment" --db ~/.blfinder.db
+
+  # Export finding to HackerOne
+  python blfinder.py --export-h1 target_program \\
+    --h1-token username:api_token \\
+    --db ~/.blfinder.db
+
+  # Recon only
+  python blfinder.py -t https://target.com --recon-only -o ~/recon
 """,
     )
 
     # ── Core ──────────────────────────────────────────────────────────────────
-    p.add_argument("-t",  "--target",      required=True,            help="Target base URL")
+    p.add_argument("-t",  "--target",      default="",               help="Target base URL")
     p.add_argument("-T",  "--token",       default="",               help="Auth token for User 1")
-    p.add_argument("-T2", "--token2",      default="",               help="Auth token for User 2 (IDOR confirmation)")
+    p.add_argument("-T2", "--token2",      default="",               help="Auth token for User 2")
     p.add_argument("-T3", "--token3",      default="",               help="Auth token for User 3")
     p.add_argument("-e",  "--endpoints",   default="",               help="Endpoints JSON file")
     p.add_argument("-H",  "--header",      action="append", default=[], metavar="Key:Value")
     p.add_argument("-c",  "--cookie",      action="append", default=[], metavar="name=value")
-    p.add_argument("--proxy",              default="",               help="HTTP proxy e.g. http://127.0.0.1:8080")
+    p.add_argument("--proxy",              default="",               help="HTTP proxy")
     p.add_argument("-r",  "--rate",        type=float, default=0.3,  help="Base request delay (default: 0.3)")
-    p.add_argument("--timeout",            type=int,   default=20,   help="Request timeout seconds (default: 20)")
-    p.add_argument("--no-discover",        action="store_true",      help="Disable smart endpoint discovery")
-    p.add_argument("--no-ssl-verify",      action="store_true",      help="Disable SSL verification")
-    p.add_argument("--fuzz-depth",         type=int,   default=2,    help="Nested JSON mutation depth (default: 2)")
-    p.add_argument("--min-confidence",     type=int,   default=40,   help="Min confidence %% to report (default: 40)")
-    p.add_argument("--confirm-attempts",   type=int,   default=2,    help="Re-verification attempts (default: 2)")
+    p.add_argument("--timeout",            type=int,   default=20,   help="Request timeout (default: 20)")
+    p.add_argument("--no-discover",        action="store_true")
+    p.add_argument("--no-ssl-verify",      action="store_true")
+    p.add_argument("--fuzz-depth",         type=int,   default=2)
+    p.add_argument("--min-confidence",     type=int,   default=40)
+    p.add_argument("--confirm-attempts",   type=int,   default=2)
 
-    # ── Phase 3: Recon + Validation ───────────────────────────────────────────
-    p.add_argument("--recon",              action="store_true",
-                   help="Enable subdomain mapping + JS secret extraction")
-    p.add_argument("--recon-only",         action="store_true",
-                   help="Recon only — print targets, do not scan")
-    p.add_argument("--js-secrets",         action="store_true",
-                   help="Extract secrets from JavaScript files")
-    p.add_argument("--subdomain-size",     type=int,   default=50,
-                   help="Subdomain wordlist size (default: 50)")
-    p.add_argument("--strict-validation",  action="store_true",
-                   help="Skip soft-404 and HTML endpoints before testing")
+    # ── Phase 5: Profile ──────────────────────────────────────────────────────
+    p.add_argument("--profile",            default="",
+                   help="Load settings from profiles/NAME.json "
+                        "(ecommerce|fintech|saas|stealth|fast|graphql|api_only|thorough)")
+
+    # ── Phase 5: Import ───────────────────────────────────────────────────────
+    p.add_argument("--import-burp",        default="",               help="Import Burp Suite XML/JSON export")
+    p.add_argument("--import-har",         default="",               help="Import browser HAR file")
+    p.add_argument("--import-mitmproxy",   default="",               help="Import mitmproxy flows file")
+    p.add_argument("--import-filter",      default="",               help="Regex filter for imported URLs (e.g. /api/)")
+    p.add_argument("--import-save",        default="",               help="Save generated endpoints.json to this path")
+
+    # ── Phase 5: Database ─────────────────────────────────────────────────────
+    p.add_argument("--db",                 default="~/.blfinder.db", help="SQLite database path")
+    p.add_argument("--no-repeat",          action="store_true",
+                   help="Skip endpoints already confirmed vulnerable in DB")
+    p.add_argument("--program",            default="",
+                   help="Tag findings with this HackerOne program handle")
+    p.add_argument("--export-h1",          default="",
+                   help="Export new findings to HackerOne as drafts (requires --h1-token)")
+    p.add_argument("--h1-token",           default="",
+                   help="HackerOne API token (format: username:api_token)")
+    p.add_argument("--show-history",       action="store_true",
+                   help="Print finding history from DB and exit")
+    p.add_argument("--search",             default="",
+                   help="Search past findings by keyword and exit")
+
+    # ── Phase 5: Dashboard ────────────────────────────────────────────────────
+    p.add_argument("--dashboard",          action="store_true",
+                   help="Enable live TUI dashboard during scan")
+    p.add_argument("--force-ansi",         action="store_true",
+                   help="Force ANSI output even if curses is available")
+
+    # ── Phase 3: Recon ────────────────────────────────────────────────────────
+    p.add_argument("--recon",              action="store_true")
+    p.add_argument("--recon-only",         action="store_true")
+    p.add_argument("--js-secrets",         action="store_true")
+    p.add_argument("--subdomain-size",     type=int,   default=50)
+    p.add_argument("--strict-validation",  action="store_true")
 
     # ── Phase 1: Flows ────────────────────────────────────────────────────────
-    p.add_argument(
-        "--flow",
-        action="append", default=[],
-        metavar="TEMPLATE_NAME",
-        help=(
-            "Run a named built-in flow template (repeatable). "
-            "Options: ecommerce_checkout, ecommerce_refund, "
-            "subscription_upgrade, funds_transfer, withdrawal, "
-            "password_reset, user_registration, redeem_reward, "
-            "referral_bonus, kyc_verification, api_key_creation"
-        ),
-    )
-    p.add_argument("--flow-file",          default="",               help="Custom flow definitions JSON file")
-    p.add_argument("--auto-flows",         action="store_true",      help="Auto-detect and run relevant flow templates")
-    p.add_argument("--product-id",         type=int,   default=1,    help="Product ID for e-commerce flows")
-    p.add_argument("--product-price",      type=float, default=99.99, help="Product price for e-commerce flows")
-
-    # ── Phase 1: OAuth2 + Token Refresh ───────────────────────────────────────
-    p.add_argument("--oauth-url",          default="",               help="OAuth2 token endpoint URL")
-    p.add_argument("--oauth-id",           default="",               help="OAuth2 client_id")
-    p.add_argument("--oauth-secret",       default="",               help="OAuth2 client_secret")
+    p.add_argument("--flow",               action="append", default=[], metavar="TEMPLATE")
+    p.add_argument("--flow-file",          default="")
+    p.add_argument("--auto-flows",         action="store_true")
+    p.add_argument("--product-id",         type=int,   default=1)
+    p.add_argument("--product-price",      type=float, default=99.99)
+    p.add_argument("--oauth-url",          default="")
+    p.add_argument("--oauth-id",           default="")
+    p.add_argument("--oauth-secret",       default="")
     p.add_argument("--oauth-grant",        default="client_credentials",
                    choices=["client_credentials", "password", "refresh_token"])
-    p.add_argument("--oauth-user",         default="",               help="Username for OAuth2 password grant")
-    p.add_argument("--oauth-pass",         default="",               help="Password for OAuth2 password grant")
-    p.add_argument("--oauth-scope",        default="",               help="OAuth2 scope")
-    p.add_argument("--refresh-url",        default="",               help="Token refresh endpoint URL")
-    p.add_argument("--refresh-token",      default="",               help="Refresh token value")
-    p.add_argument("--login-url",          default="",               help="Re-login URL for fallback refresh")
-    p.add_argument("--login-body",         default="",               help="Re-login body as JSON string")
+    p.add_argument("--oauth-user",         default="")
+    p.add_argument("--oauth-pass",         default="")
+    p.add_argument("--oauth-scope",        default="")
+    p.add_argument("--refresh-url",        default="")
+    p.add_argument("--refresh-token",      default="")
+    p.add_argument("--login-url",          default="")
+    p.add_argument("--login-body",         default="")
+    p.add_argument("--blind-idor",         action="store_true")
+    p.add_argument("--samples",            type=int,   default=4)
 
-    # ── Phase 1: Blind IDOR ───────────────────────────────────────────────────
-    p.add_argument("--blind-idor",         action="store_true",      help="Enable blind IDOR oracle scanning")
-    p.add_argument("--samples",            type=int,   default=4,    help="Oracle sample count (default: 4)")
-
-    # ── Phase 4: Mass IDOR ────────────────────────────────────────────────────
-    p.add_argument("--idor-range",         type=int,   default=0,
-                   help="Enumerate N IDs per endpoint (0=disabled, default: 0)")
-    p.add_argument("--idor-harvest",       action="store_true",
-                   help="Harvest IDs from all responses and test cross-endpoint")
-    p.add_argument("--idor-cross-endpoint", action="store_true",
-                   help="Test harvested IDs across all endpoints (BOLA detection)")
-    p.add_argument("--idor-batch-size",    type=int,   default=20,
-                   help="Concurrent batch size for IDOR enumeration (default: 20)")
-
-    # ── Phase 4: WebSocket ────────────────────────────────────────────────────
-    p.add_argument("--websocket",          action="store_true",
-                   help="Enable WebSocket business logic scanning")
-    p.add_argument("--ws-url",             default="",
-                   help="Specific WebSocket URL to test (in addition to discovery)")
-    p.add_argument("--ws-race-count",      type=int,   default=15,
-                   help="Concurrent WS messages for race condition test (default: 15)")
-
-    # ── Phase 4: GraphQL Deep ─────────────────────────────────────────────────
-    p.add_argument("--graphql-deep",       action="store_true",
-                   help="Enable full GraphQL attack suite (alias IDOR, batch bypass, mutations)")
-
-    # ── Phase 4: API Version Abuse ────────────────────────────────────────────
-    p.add_argument("--version-scan",       action="store_true",
-                   help="Enable API version downgrade scanning")
-
-    # ── Phase 4: Business Classifier ─────────────────────────────────────────
-    p.add_argument("--classify",           action="store_true",
-                   help="Print attack plan with endpoint classification before scanning")
+    # ── Phase 4: Attack Surface ───────────────────────────────────────────────
+    p.add_argument("--idor-range",         type=int,   default=0)
+    p.add_argument("--idor-harvest",       action="store_true")
+    p.add_argument("--idor-cross-endpoint", action="store_true")
+    p.add_argument("--idor-batch-size",    type=int,   default=20)
+    p.add_argument("--websocket",          action="store_true")
+    p.add_argument("--ws-url",             default="")
+    p.add_argument("--ws-race-count",      type=int,   default=15)
+    p.add_argument("--graphql-deep",       action="store_true")
+    p.add_argument("--version-scan",       action="store_true")
+    p.add_argument("--classify",           action="store_true")
 
     # ── Output ────────────────────────────────────────────────────────────────
-    p.add_argument("-o",  "--output",      default=".",              help="Output directory for reports")
-    p.add_argument("--html",               action="store_true",      help="Generate HTML evidence report")
-    p.add_argument("--json",               action="store_true",      help="Generate JSON report")
-    p.add_argument("--md",                 action="store_true",      help="Generate Markdown / HackerOne report")
-    p.add_argument("-v",  "--verbose",     action="store_true",      help="Verbose request logging")
-    p.add_argument("--no-color",           action="store_true",      help="Disable ANSI colors")
+    p.add_argument("-o",  "--output",      default=".",              help="Output directory")
+    p.add_argument("--html",               action="store_true")
+    p.add_argument("--json",               action="store_true")
+    p.add_argument("--md",                 action="store_true")
+    p.add_argument("-v",  "--verbose",     action="store_true")
+    p.add_argument("--no-color",           action="store_true")
 
     return p.parse_args()
 
 
-# ── Loaders ───────────────────────────────────────────────────────────────────
+# ── Helper functions ──────────────────────────────────────────────────────────
 
 def load_endpoints(path: str) -> list[dict]:
     if not path:
@@ -191,10 +260,7 @@ def load_flow_file(path: str) -> list[dict]:
     try:
         with open(path) as f:
             data = json.load(f)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and "steps" in data:
-            return [data]
+        return data if isinstance(data, list) else ([data] if "steps" in data else [])
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"[!] Flow file error: {e}")
     return []
@@ -224,12 +290,9 @@ def build_oauth_config(args):
     try:
         from core.auth.oauth_handler import OAuthConfig
         return OAuthConfig(
-            token_url=args.oauth_url,
-            client_id=args.oauth_id,
-            client_secret=args.oauth_secret,
-            grant_type=args.oauth_grant,
-            username=args.oauth_user,
-            password=args.oauth_pass,
+            token_url=args.oauth_url, client_id=args.oauth_id,
+            client_secret=args.oauth_secret, grant_type=args.oauth_grant,
+            username=args.oauth_user, password=args.oauth_pass,
             scope=args.oauth_scope,
         )
     except ImportError:
@@ -257,12 +320,17 @@ def build_refresh_config(args):
         return None
 
 
-def build_flow_configs(args) -> list:
+def build_flow_configs(args, profile: dict) -> list:
     configs = []
+    # CLI flows first
     for name in args.flow:
         configs.append({"__template__": name})
     for flow_def in load_flow_file(args.flow_file):
         configs.append(flow_def)
+    # Profile flows (only if no CLI flows specified)
+    if not args.flow and not args.flow_file:
+        for name in profile.get("flows", []):
+            configs.append({"__template__": name})
     return configs
 
 
@@ -282,11 +350,10 @@ def resolve_flow_templates(flow_configs: list, args) -> list:
             try:
                 steps = (
                     fn(product_id=args.product_id, price=args.product_price)
-                    if name == "ecommerce_checkout"
-                    else fn()
+                    if name == "ecommerce_checkout" else fn()
                 )
                 resolved.append(steps)
-                print(f"[*] Flow template loaded: {name}")
+                print(f"[*] Flow template: {name}")
             except Exception as e:
                 print(f"[!] Flow template error ({name}): {e}")
         else:
@@ -294,33 +361,122 @@ def resolve_flow_templates(flow_configs: list, args) -> list:
     return resolved
 
 
-# ── classify-only mode ────────────────────────────────────────────────────────
+def import_traffic(args) -> list[dict]:
+    """Import endpoints from Burp/HAR/mitmproxy if flags are set."""
+    imported: list[dict] = []
 
-def run_classify(endpoints: list[dict]):
-    """Print attack plan without scanning."""
     try:
-        from core.intelligence.business_classifier import BusinessClassifier
+        from core.integrations.burp_importer import TrafficImporter
+        importer = TrafficImporter(verbose=args.verbose)
     except ImportError:
-        print("[!] Business classifier not available")
+        if any([args.import_burp, args.import_har, args.import_mitmproxy]):
+            print("[!] Burp importer not available — check core/integrations/burp_importer.py")
+        return []
+
+    for import_path, flag_name in [
+        (args.import_burp,       "Burp"),
+        (args.import_har,        "HAR"),
+        (args.import_mitmproxy,  "mitmproxy"),
+    ]:
+        if not import_path:
+            continue
+        result = importer.import_file(
+            import_path,
+            url_filter=args.import_filter if args.import_filter else None,
+        )
+        print(f"[+] {flag_name} import: {result.summary()}")
+        imported.extend(result.endpoints)
+
+        if args.import_save:
+            importer.save(result.endpoints, args.import_save)
+
+    return imported
+
+
+# ── DB-only commands ──────────────────────────────────────────────────────────
+
+async def cmd_show_history(args):
+    """Print finding history from the database."""
+    try:
+        from core.storage.scan_database import ScanDatabase
+    except ImportError:
+        print("[!] ScanDatabase not available")
         return
 
-    classifier = BusinessClassifier()
-    plan       = classifier.build_plan(endpoints)
-    plan.print_report(verbose=True)
+    async with ScanDatabase(args.db) as db:
+        stats = await db.get_stats(program=args.program)
+        db.print_stats(stats)
+        findings = await db.get_findings(
+            program=args.program, limit=50
+        )
+        db.print_findings(findings)
 
 
-# ── Recon-only mode ───────────────────────────────────────────────────────────
+async def cmd_search(args, query: str):
+    """Search past findings."""
+    try:
+        from core.storage.scan_database import ScanDatabase
+    except ImportError:
+        print("[!] ScanDatabase not available")
+        return
+
+    async with ScanDatabase(args.db) as db:
+        findings = await db.search(query)
+        print(f"\n[*] Search results for '{query}': {len(findings)} findings\n")
+        db.print_findings(findings)
+
+
+async def cmd_export_h1(args):
+    """Export all unreported findings to HackerOne."""
+    if not args.h1_token:
+        print("[!] --h1-token required for HackerOne export")
+        return
+    if not args.export_h1:
+        print("[!] --export-h1 PROGRAM_HANDLE required")
+        return
+
+    try:
+        from core.storage.scan_database import ScanDatabase
+    except ImportError:
+        print("[!] ScanDatabase not available")
+        return
+
+    async with ScanDatabase(args.db) as db:
+        findings = await db.get_findings(
+            program=args.program or args.export_h1,
+            status="new",
+        )
+        print(f"[*] Exporting {len(findings)} new findings to HackerOne/{args.export_h1}...")
+        success = 0
+        for f in findings:
+            try:
+                result = await db.export_to_hackerone(
+                    finding_id=f.id,
+                    h1_token=args.h1_token,
+                    program_handle=args.export_h1,
+                )
+                print(f"  [+] Exported: {result['report_url']}")
+                success += 1
+            except Exception as e:
+                print(f"  [!] Export failed ({f.title[:40]}): {e}")
+        print(f"\n[+] Exported {success}/{len(findings)} findings to HackerOne")
+
+
+# ── Recon-only ────────────────────────────────────────────────────────────────
 
 async def run_recon_only(args):
     from urllib.parse import urlparse
+    if not args.target:
+        print("[!] --target required for recon")
+        return
+
     target_domain = urlparse(args.target).netloc or args.target
-    print(f"[*] BLFinder v3.1 Phase 4 — Recon only: {target_domain}\n")
+    print(f"[*] BLFinder v3.1 Phase 5 — Recon: {target_domain}\n")
 
     try:
         import aiohttp
-        connector = aiohttp.TCPConnector(ssl=False, limit=20)
-        session   = aiohttp.ClientSession(
-            connector=connector,
+        session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=False, limit=20),
             timeout=aiohttp.ClientTimeout(total=15),
         )
     except ImportError:
@@ -334,7 +490,7 @@ async def run_recon_only(args):
             result = await mapper.map(
                 target_domain, max_wordlist=args.subdomain_size, session=session
             )
-            print(f"\n[*] Subdomains for {target_domain}:")
+            print(f"[*] Subdomains: {result.live_count} live, {result.api_count} API surface")
             for sub in result.subdomains:
                 if sub.is_live:
                     print(f"  [{sub.priority:<8}] {sub.hostname:<40} score={sub.score}")
@@ -342,7 +498,8 @@ async def run_recon_only(args):
             with open(f"{args.output}/targets.json", "w") as fh:
                 json.dump(
                     [{"hostname": s.hostname, "priority": s.priority,
-                      "score": s.score} for s in result.subdomains if s.is_live],
+                      "score": s.score, "api_paths": s.api_paths}
+                     for s in result.subdomains if s.is_live],
                     fh, indent=2,
                 )
             print(f"[+] Targets → {args.output}/targets.json")
@@ -368,9 +525,40 @@ async def run_recon_only(args):
 async def main():
     args = parse_args()
 
+    # ── DB-only commands (no scan needed) ─────────────────────────────────────
+    if args.show_history:
+        await cmd_show_history(args)
+        return 0
+
+    if args.search:
+        await cmd_search(args, args.search)
+        return 0
+
+    if args.export_h1:
+        await cmd_export_h1(args)
+        return 0
+
     if args.recon_only:
         await run_recon_only(args)
         return 0
+
+    # ── Require target for scanning ───────────────────────────────────────────
+    if not args.target:
+        print("[!] --target is required for scanning")
+        print("[!] Use --show-history, --search, or --export-h1 for DB operations")
+        return 1
+
+    # ── Load profile ──────────────────────────────────────────────────────────
+    profile: dict = {}
+    if args.profile:
+        profile = load_profile(args.profile)
+        if not profile:
+            print(f"[!] Continuing without profile")
+
+    merged_settings = merge_profile_with_args(profile, args) if profile else {}
+
+    # ── Import traffic ────────────────────────────────────────────────────────
+    imported_endpoints = import_traffic(args)
 
     try:
         from core.models import ScanConfig
@@ -383,7 +571,6 @@ async def main():
         )
     except ImportError as e:
         print(f"[!] Import error: {e}")
-        print("[!] Run: pip install aiohttp --break-system-packages")
         sys.exit(1)
 
     # ── Build ScanConfig ──────────────────────────────────────────────────────
@@ -395,66 +582,142 @@ async def main():
         headers=parse_headers(args.header),
         cookies=parse_cookies(args.cookie),
         proxy=args.proxy,
-        rate_limit=args.rate,
+        rate_limit=merged_settings.get("rate_limit", args.rate),
         timeout=args.timeout,
         verify_ssl=not args.no_ssl_verify,
         smart_discovery=not args.no_discover,
-        fuzz_depth=args.fuzz_depth,
+        fuzz_depth=merged_settings.get("fuzz_depth", args.fuzz_depth),
         output_dir=args.output,
         verbose=args.verbose,
         no_auth_check=True,
-        min_confidence=args.min_confidence,
-        confirmation_attempts=args.confirm_attempts,
+        min_confidence=merged_settings.get("min_confidence", args.min_confidence),
+        confirmation_attempts=merged_settings.get("confirm_attempts", args.confirm_attempts),
     )
 
-    # ── Phase 3 config ────────────────────────────────────────────────────────
-    config.run_recon              = args.recon
-    config.run_subdomain_map      = args.recon
-    config.run_js_extract         = args.js_secrets or args.recon
+    # ── Apply all phase configs ───────────────────────────────────────────────
+
+    # Phase 3
+    config.run_recon              = args.recon or merged_settings.get("run_recon", False)
+    config.run_subdomain_map      = config.run_recon
+    config.run_js_extract         = args.js_secrets or merged_settings.get("js_secrets", False) or config.run_recon
     config.subdomain_wordlist_size = args.subdomain_size
-    config.strict_validation      = args.strict_validation
+    config.strict_validation      = args.strict_validation or merged_settings.get("strict_validation", False)
 
-    # ── Phase 1 config ────────────────────────────────────────────────────────
-    raw_flow_configs   = build_flow_configs(args)
-    resolved_flows     = resolve_flow_templates(raw_flow_configs, args)
-    config.run_flows   = bool(resolved_flows) or args.auto_flows
-    config.flow_configs = resolved_flows
-    config.auto_detect_flows = args.auto_flows
-    config.product_id  = args.product_id
-    config.product_price = args.product_price
-    config.oauth_config   = build_oauth_config(args)
-    config.refresh_config = build_refresh_config(args)
-    config.oracle_samples = args.samples
+    # Phase 1: Flows — merge profile flows + CLI flows
+    raw_flow_configs = build_flow_configs(args, profile)
+    resolved_flows   = resolve_flow_templates(raw_flow_configs, args)
+    auto_flows       = args.auto_flows or profile.get("auto_flows", False)
+    config.run_flows       = bool(resolved_flows) or auto_flows
+    config.flow_configs    = resolved_flows
+    config.auto_detect_flows = auto_flows
+    config.product_id      = args.product_id
+    config.product_price   = args.product_price
+    config.oauth_config    = build_oauth_config(args)
+    config.refresh_config  = build_refresh_config(args)
+    config.oracle_samples  = args.samples
 
-    # ── Phase 4 config ────────────────────────────────────────────────────────
-    config.idor_range          = args.idor_range
-    config.idor_harvest        = args.idor_harvest
-    config.idor_cross_endpoint = args.idor_cross_endpoint
+    # Phase 4
+    prof_settings = profile.get("settings", {})
+    config.idor_range          = args.idor_range or prof_settings.get("idor_range", 0)
+    config.idor_harvest        = args.idor_harvest or prof_settings.get("idor_harvest", False)
+    config.idor_cross_endpoint = args.idor_cross_endpoint or prof_settings.get("idor_cross_endpoint", False)
     config.idor_batch_size     = args.idor_batch_size
-    config.run_websocket       = args.websocket
+    config.run_websocket       = args.websocket or prof_settings.get("run_websocket", False)
     config.ws_url              = args.ws_url
     config.ws_race_count       = args.ws_race_count
-    config.run_graphql_deep    = args.graphql_deep
-    config.run_version_scan    = args.version_scan
+    config.run_graphql_deep    = args.graphql_deep or prof_settings.get("run_graphql_deep", False)
+    config.run_version_scan    = args.version_scan or prof_settings.get("run_version_scan", False)
     config.print_attack_plan   = args.classify
+
+    # Phase 5 — database
+    config.db_path     = args.db
+    config.program     = args.program
+    config.no_repeat   = args.no_repeat
+    config.use_db      = bool(args.db) and args.db != "~/.blfinder.db" or args.program or args.no_repeat
 
     # ── Load endpoints ────────────────────────────────────────────────────────
     endpoints = load_endpoints(args.endpoints)
+    endpoints.extend(imported_endpoints)
+
     if not endpoints:
         endpoints = [{"url": "/", "method": "GET", "body": {}, "params": {}}]
         if not args.recon:
-            print("[*] No endpoints file — using smart discovery only")
+            print("[*] No endpoints — using smart discovery only")
 
-    # ── Classify-only mode ────────────────────────────────────────────────────
-    if args.classify and endpoints:
-        run_classify(endpoints)
+    # ── Classify-only ─────────────────────────────────────────────────────────
+    if args.classify:
+        try:
+            from core.intelligence.business_classifier import BusinessClassifier
+            classifier = BusinessClassifier()
+            plan       = classifier.build_plan(endpoints)
+            plan.print_report(verbose=args.verbose)
+        except ImportError:
+            print("[!] Business classifier not available")
         if not args.target:
             return 0
-        print("[*] Proceeding with scan...\n")
+
+    # ── Initialise database ───────────────────────────────────────────────────
+    db = None
+    scan_id = None
+    if config.use_db:
+        try:
+            from core.storage.scan_database import ScanDatabase
+            db = ScanDatabase(args.db)
+            await db.init()
+            scan_id = await db.start_scan(
+                target=args.target, program=args.program,
+                config={"profile": args.profile, "endpoints": len(endpoints)},
+            )
+            if args.program:
+                await db.register_program(args.program)
+            print(f"[*] Database: {args.db} (scan #{scan_id})")
+        except Exception as e:
+            print(f"[!] Database init failed: {e}")
+            db = None
 
     # ── Run scanner ───────────────────────────────────────────────────────────
+    findings = []
+
     async with BLFScanner(config) as scanner:
-        findings = await scanner.run_all_modules(endpoints)
+        # Apply profile to scanner
+        if profile:
+            scanner.apply_profile(profile)
+
+        # Setup dashboard
+        dashboard = None
+        if args.dashboard:
+            try:
+                from core.tui.live_dashboard import create_dashboard
+                dashboard, dash_state = create_dashboard(
+                    target=args.target,
+                    total_endpoints=len(endpoints),
+                    verbose=args.verbose,
+                    force_ansi=args.force_ansi,
+                )
+                scanner.set_dashboard_state(dash_state)
+                asyncio.create_task(dashboard.run())
+                print("[*] Dashboard started (q to quit)")
+            except ImportError:
+                print("[!] Dashboard not available")
+
+        try:
+            findings = await scanner.run_all_modules(endpoints)
+        finally:
+            if dashboard:
+                await dashboard.stop()
+
+    # ── Save to database ──────────────────────────────────────────────────────
+    if db and findings:
+        new_count, dupe_count = await db.save_findings(
+            findings, scan_id=scan_id, program=args.program or ""
+        )
+        await db.finish_scan(scan_id, finding_count=new_count)
+        print(f"[*] Database: {new_count} new, {dupe_count} duplicates")
+
+        if args.export_h1 and args.h1_token and new_count > 0:
+            await cmd_export_h1(args)
+
+        await db.close()
 
     # ── Generate reports ──────────────────────────────────────────────────────
     os.makedirs(args.output, exist_ok=True)
@@ -480,13 +743,7 @@ async def main():
     if args.md:
         generate_markdown_report(findings, cfg_dict, f"{args.output}/report.md")
 
-    skipped = getattr(scanner, "_skipped_endpoints", [])
-    if skipped:
-        print(f"\n[*] Skipped {len(skipped)} endpoint(s) that failed validation")
-
-    return 1 if any(
-        f.severity.value == "CRITICAL" for f in findings
-    ) else 0
+    return 1 if any(f.severity.value == "CRITICAL" for f in findings) else 0
 
 
 if __name__ == "__main__":
