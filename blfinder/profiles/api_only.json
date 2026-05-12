@@ -1,0 +1,35 @@
+{
+  "name": "api_only",
+  "description": "Pure REST API testing. No browser flows, no WebSocket. Optimized for programmatic API surfaces.",
+  "settings": {
+    "rate_limit": 0.3,
+    "min_confidence": 45,
+    "confirm_attempts": 2,
+    "fuzz_depth": 3,
+    "strict_validation": true,
+    "blind_idor": true,
+    "idor_range": 30,
+    "idor_harvest": true,
+    "run_graphql_deep": false,
+    "run_websocket": false,
+    "run_version_scan": true
+  },
+  "flows": [],
+  "auto_flows": false,
+  "priority_modules": [
+    "idor_bola",
+    "blind_idor",
+    "bopla",
+    "mass_assignment",
+    "bfla",
+    "privilege_escalation",
+    "rate_condition",
+    "jwt_manipulation"
+  ],
+  "skip_modules": [
+    "coupon_stacking",
+    "soft_delete_bypass",
+    "http_method_override"
+  ],
+  "notes": "Pair with --import-burp or --import-har for best results. Use --idor-harvest for cross-endpoint BOLA testing."
+}
