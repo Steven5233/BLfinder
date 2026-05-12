@@ -1,0 +1,40 @@
+{
+  "name": "saas",
+  "description": "SaaS applications — dashboards, B2B portals, APIs. Emphasis on IDOR, privilege escalation, and mass assignment.",
+  "settings": {
+    "rate_limit": 0.4,
+    "min_confidence": 50,
+    "confirm_attempts": 2,
+    "fuzz_depth": 3,
+    "strict_validation": true,
+    "blind_idor": true,
+    "idor_range": 50,
+    "idor_harvest": true,
+    "idor_cross_endpoint": true,
+    "run_graphql_deep": true,
+    "run_websocket": false,
+    "run_version_scan": true
+  },
+  "flows": [
+    "user_registration",
+    "api_key_creation",
+    "subscription_upgrade"
+  ],
+  "auto_flows": true,
+  "priority_modules": [
+    "idor_bola",
+    "blind_idor",
+    "bopla",
+    "mass_assignment",
+    "privilege_escalation",
+    "bfla",
+    "soft_delete_bypass",
+    "graphql"
+  ],
+  "skip_modules": [
+    "coupon_stacking",
+    "time_bypass",
+    "integer_overflow"
+  ],
+  "notes": "Use --idor-harvest --idor-cross-endpoint to test BOLA across object types. Enable --graphql-deep if GraphQL endpoints found."
+}
