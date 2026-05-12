@@ -1,0 +1,36 @@
+{
+  "name": "stealth",
+  "description": "Low-noise scan for sensitive or WAF-protected targets. Very slow, random delays, minimal footprint.",
+  "settings": {
+    "rate_limit": 3.0,
+    "min_confidence": 70,
+    "confirm_attempts": 1,
+    "fuzz_depth": 1,
+    "strict_validation": true,
+    "blind_idor": false,
+    "idor_range": 5,
+    "run_graphql_deep": false,
+    "run_websocket": false,
+    "run_version_scan": false,
+    "user_agent_rotate": true,
+    "smart_discovery": false
+  },
+  "flows": [],
+  "auto_flows": false,
+  "priority_modules": [
+    "idor_bola",
+    "mass_assignment",
+    "bopla",
+    "hidden_parameter"
+  ],
+  "skip_modules": [
+    "race_condition",
+    "account_enumeration",
+    "graphql",
+    "parameter_pollution",
+    "http_method_override",
+    "soft_delete_bypass",
+    "blind_idor"
+  ],
+  "notes": "Avoid race condition tests (high noise). Use --no-discover to minimize requests. Disable VPN before running — WAFs block known VPN IPs."
+}
