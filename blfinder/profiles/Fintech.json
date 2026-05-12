@@ -1,0 +1,39 @@
+{
+  "name": "fintech",
+  "description": "Banking, wallets, and financial transfer platforms. Highest bounty potential. Very conservative rate to avoid triggering fraud detection.",
+  "settings": {
+    "rate_limit": 1.5,
+    "min_confidence": 70,
+    "confirm_attempts": 3,
+    "fuzz_depth": 2,
+    "strict_validation": true,
+    "blind_idor": true,
+    "idor_range": 10,
+    "run_graphql_deep": false,
+    "run_websocket": true,
+    "run_version_scan": true
+  },
+  "flows": [
+    "funds_transfer",
+    "withdrawal"
+  ],
+  "auto_flows": false,
+  "priority_modules": [
+    "race_condition",
+    "negative_quantity",
+    "idor_bola",
+    "blind_idor",
+    "price_manipulation",
+    "integer_overflow",
+    "workflow_bypass",
+    "state_machine_abuse"
+  ],
+  "skip_modules": [
+    "graphql",
+    "coupon_stacking",
+    "soft_delete_bypass",
+    "parameter_pollution",
+    "http_method_override"
+  ],
+  "notes": "Use maximum caution. Always use --no-repeat to avoid retesting. Rate 1.5s avoids triggering velocity fraud alerts. Two accounts mandatory."
+}
