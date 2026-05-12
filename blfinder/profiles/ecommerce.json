@@ -1,0 +1,38 @@
+{
+  "name": "ecommerce",
+  "description": "Optimized for e-commerce and payment platforms. Focus on price manipulation, race conditions, and coupon abuse. Always use two accounts (-T and -T2).",
+  "settings": {
+    "rate_limit": 0.5,
+    "min_confidence": 60,
+    "confirm_attempts": 3,
+    "fuzz_depth": 3,
+    "strict_validation": true,
+    "blind_idor": false,
+    "idor_range": 20,
+    "run_graphql_deep": false,
+    "run_websocket": false,
+    "run_version_scan": true
+  },
+  "flows": [
+    "ecommerce_checkout",
+    "ecommerce_refund",
+    "redeem_reward"
+  ],
+  "auto_flows": true,
+  "priority_modules": [
+    "price_manipulation",
+    "negative_quantity",
+    "coupon_stacking",
+    "race_condition",
+    "state_machine_abuse",
+    "idor_bola",
+    "integer_overflow"
+  ],
+  "skip_modules": [
+    "account_enumeration",
+    "graphql",
+    "soft_delete_bypass",
+    "http_method_override"
+  ],
+  "notes": "Focus on payment flows. Use --idor-range 50 --idor-harvest for deeper testing. Check /api/v1 fallbacks with --version-scan."
+}
