@@ -1,0 +1,37 @@
+{
+  "name": "fast",
+  "description": "Quick reconnaissance scan. High rate, low confidence threshold. Not suitable for reporting — triage only.",
+  "settings": {
+    "rate_limit": 0.05,
+    "min_confidence": 30,
+    "confirm_attempts": 1,
+    "fuzz_depth": 1,
+    "strict_validation": false,
+    "blind_idor": false,
+    "idor_range": 0,
+    "run_graphql_deep": false,
+    "run_websocket": false,
+    "run_version_scan": false,
+    "smart_discovery": true
+  },
+  "flows": [],
+  "auto_flows": false,
+  "priority_modules": [
+    "idor_bola",
+    "mass_assignment",
+    "price_manipulation",
+    "bfla",
+    "jwt_manipulation"
+  ],
+  "skip_modules": [
+    "race_condition",
+    "blind_idor",
+    "account_enumeration",
+    "limit_offset",
+    "soft_delete_bypass",
+    "parameter_pollution",
+    "http_method_override",
+    "integer_overflow"
+  ],
+  "notes": "Use for initial triage only. Results at 30% confidence need manual verification before reporting."
+}
