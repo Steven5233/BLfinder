@@ -18,6 +18,18 @@ New Phase 5 flags:
   --search QUERY        Search past findings and exit
   --profile NAME        Load settings from profiles/NAME.json
   --dashboard           Enable live TUI dashboard
+
+Deep Discovery flags (new modules):
+  --deep-discovery      Enable full multi-layer discovery pipeline
+  --wordlist-depth N    Wordlist depth 1=tiny … 5=exhaustive (default: 2)
+  --no-wordlist         Skip wordlist layer entirely
+  --openapi-path PATH   Extra path to probe for OpenAPI/Swagger spec
+  --discovery-save FILE Save discovered endpoints JSON to this path
+  --no-robots           Skip robots.txt / sitemap.xml parsing
+  --no-js-ast           Skip JS AST pass (keep regex-only JS scan)
+  --no-openapi          Skip OpenAPI/Swagger/Postman spec probing
+  --no-version-permute  Skip API version-shadow discovery in pipeline
+  --business-tags TAGS  Comma-separated business context tags for wordlist
 """
 
 import asyncio
@@ -32,7 +44,6 @@ from pathlib import Path
 
 def load_profile(name: str) -> dict:
     """Load a scan profile from the profiles/ directory."""
-    # Search locations
     search_dirs = [
         Path(__file__).parent / "profiles",
         Path.home() / ".blfinder" / "profiles",
@@ -62,22 +73,16 @@ def merge_profile_with_args(profile: dict, args) -> dict:
     """
     settings = dict(profile.get("settings", {}))
 
-    # CLI flags override profile — check which were explicitly set
-    # argparse doesn't easily tell us which were defaults, so we use
-    # None sentinel approach: if CLI value is the default AND profile has it,
-    # use profile. Otherwise, CLI wins.
     cli_overrides = {
-        "rate_limit":       args.rate != 0.3,   # Non-default = CLI override
+        "rate_limit":       args.rate != 0.3,
         "min_confidence":   args.min_confidence != 40,
         "confirm_attempts": args.confirm_attempts != 2,
         "fuzz_depth":       args.fuzz_depth != 2,
     }
     for key, was_overridden in cli_overrides.items():
         if was_overridden:
-            # CLI wins — remove from profile settings so config keeps CLI value
             settings.pop(key, None)
 
-    # Boolean flags: if CLI set them, they win
     for flag, attr in [
         ("strict_validation", "strict_validation"),
         ("blind_idor",        "blind_idor"),
@@ -86,9 +91,10 @@ def merge_profile_with_args(profile: dict, args) -> dict:
         ("run_version_scan",  "version_scan"),
         ("run_recon",         "recon"),
         ("js_secrets",        "js_secrets"),
+        ("deep_discovery",    "deep_discovery"),
     ]:
         if getattr(args, attr, False):
-            settings[flag] = True   # CLI flag set = override profile
+            settings[flag] = True
 
     return settings
 
@@ -99,7 +105,7 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="BLFinder v3.1 Phase 5 — Business Logic Flaw Scanner",
         formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""
+        epilog="""\
 EXAMPLES:
   # Import from Burp and scan with ecommerce profile
   python blfinder.py -t https://shop.target.com -T token \\
@@ -107,12 +113,13 @@ EXAMPLES:
     --db ~/.blfinder.db --program target_h1 \\
     --html --md -o ~/results
 
-  # Full Phase 5 professional scan
+  # Full Phase 5 professional scan with deep discovery
   python blfinder.py \\
     -t https://api.target.com \\
     -T user1_token -T2 user2_token \\
     --import-burp traffic.xml \\
     --profile thorough \\
+    --deep-discovery --wordlist-depth 3 \\
     --db ~/.blfinder.db --program target_h1 \\
     --dashboard \\
     --html --json --md -o ~/results
@@ -134,6 +141,11 @@ EXAMPLES:
 
   # Recon only
   python blfinder.py -t https://target.com --recon-only -o ~/recon
+
+  # Deep discovery only — dump endpoint list without scanning
+  python blfinder.py -t https://api.target.com -T token \\
+    --deep-discovery --wordlist-depth 2 \\
+    --discovery-save discovered.json --no-scan
 """,
     )
 
@@ -153,6 +165,8 @@ EXAMPLES:
     p.add_argument("--fuzz-depth",         type=int,   default=2)
     p.add_argument("--min-confidence",     type=int,   default=40)
     p.add_argument("--confirm-attempts",   type=int,   default=2)
+    p.add_argument("--no-scan",            action="store_true",
+                   help="Run discovery only, skip attack modules")
 
     # ── Phase 5: Profile ──────────────────────────────────────────────────────
     p.add_argument("--profile",            default="",
@@ -186,6 +200,30 @@ EXAMPLES:
                    help="Enable live TUI dashboard during scan")
     p.add_argument("--force-ansi",         action="store_true",
                    help="Force ANSI output even if curses is available")
+
+    # ── Deep Discovery (new layer system) ─────────────────────────────────────
+    p.add_argument("--deep-discovery",     action="store_true",
+                   help="Enable full multi-layer discovery pipeline "
+                        "(robots, JS AST, OpenAPI, wordlist, version permutation, dedup)")
+    p.add_argument("--wordlist-depth",     type=int,   default=2,
+                   help="Wordlist depth 1=tiny … 5=exhaustive (default: 2)")
+    p.add_argument("--no-wordlist",        action="store_true",
+                   help="Skip wordlist layer in deep discovery")
+    p.add_argument("--openapi-path",       action="append", default=[], metavar="PATH",
+                   help="Extra path(s) to probe for OpenAPI/Swagger/Postman spec")
+    p.add_argument("--discovery-save",     default="",
+                   help="Save deep-discovered endpoints JSON to this path")
+    p.add_argument("--no-robots",          action="store_true",
+                   help="Skip robots.txt / sitemap.xml parsing in deep discovery")
+    p.add_argument("--no-js-ast",          action="store_true",
+                   help="Skip JS AST pass (keep regex-only JS scan in smart_discover)")
+    p.add_argument("--no-openapi",         action="store_true",
+                   help="Skip OpenAPI/Swagger/Postman spec probing in deep discovery")
+    p.add_argument("--no-version-permute", action="store_true",
+                   help="Skip API version-shadow discovery in deep discovery pipeline")
+    p.add_argument("--business-tags",      default="",
+                   help="Comma-separated business context tags for wordlist seeding "
+                        "(e.g. payment,order,user,subscription)")
 
     # ── Phase 3: Recon ────────────────────────────────────────────────────────
     p.add_argument("--recon",              action="store_true")
@@ -322,12 +360,10 @@ def build_refresh_config(args):
 
 def build_flow_configs(args, profile: dict) -> list:
     configs = []
-    # CLI flows first
     for name in args.flow:
         configs.append({"__template__": name})
     for flow_def in load_flow_file(args.flow_file):
         configs.append(flow_def)
-    # Profile flows (only if no CLI flows specified)
     if not args.flow and not args.flow_file:
         for name in profile.get("flows", []):
             configs.append({"__template__": name})
@@ -359,6 +395,40 @@ def resolve_flow_templates(flow_configs: list, args) -> list:
         else:
             resolved.append(fc)
     return resolved
+
+
+def build_discovery_config(args, profile: dict):
+    """Build a DiscoveryConfig from CLI args and profile settings."""
+    try:
+        from core.discovery.models import DiscoveryConfig
+    except ImportError:
+        return None
+
+    prof_disc = profile.get("discovery", {})
+    business_tags: list[str] = []
+    if args.business_tags:
+        business_tags = [t.strip() for t in args.business_tags.split(",") if t.strip()]
+    elif prof_disc.get("business_tags"):
+        business_tags = prof_disc["business_tags"]
+
+    return DiscoveryConfig(
+        subdomain_wordlist_size=args.subdomain_size,
+        # Layer 2
+        openapi_paths=args.openapi_path or prof_disc.get("openapi_paths", []),
+        follow_js_imports=not args.no_js_ast,
+        max_js_files=prof_disc.get("max_js_files", 30),
+        graphql_deep=args.graphql_deep or prof_disc.get("graphql_deep", False),
+        # Layer 4
+        wordlist_depth=args.wordlist_depth,
+        no_wordlist=args.no_wordlist or prof_disc.get("no_wordlist", False),
+        business_tags=business_tags,
+        # General
+        auth_token=args.token,
+        second_token=args.token2,
+        timeout_s=args.timeout,
+        verbose=args.verbose,
+        save_discovery_path=args.discovery_save,
+    )
 
 
 def import_traffic(args) -> list[dict]:
@@ -520,6 +590,178 @@ async def run_recon_only(args):
         await session.close()
 
 
+# ── Deep discovery runner ─────────────────────────────────────────────────────
+
+async def run_deep_discovery(args, discovery_cfg, session) -> list[dict]:
+    """
+    Run the full multi-layer discovery pipeline and return a deduplicated
+    list of endpoint dicts suitable for the scanner.
+
+    Layer 1: robots.txt / sitemap.xml  (RobotsParser)
+    Layer 2: JS AST endpoint extraction (JSASTParser)
+    Layer 2: OpenAPI / Swagger / Postman spec probing (OpenAPIParser)
+    Layer 4: Context-seeded wordlist probing (SmartWordlist)
+    Layer 4: API version-shadow discovery (VersionPermuter)
+    Layer 5: URL normalisation + dedup (normaliser)
+    """
+    if discovery_cfg is None:
+        return []
+
+    print("[*] Deep Discovery — running multi-layer pipeline...")
+
+    discovered_paths: list[str] = []   # paths found so far, fed into wordlist
+    all_endpoints: list = []           # DiscoveredEndpoint objects
+
+    # ── Layer 1: robots.txt + sitemap ────────────────────────────────────────
+    if not args.no_robots:
+        try:
+            from core.discovery.layer1_surface.robots_parser import RobotsParser
+            robots = RobotsParser(verbose=args.verbose)
+            r1 = await robots.run(
+                target_url=args.target,
+                session=session,
+                config=discovery_cfg,
+                auth_token=args.token,
+            )
+            all_endpoints.extend(r1.endpoints)
+            discovered_paths.extend(
+                ep.url.split("?")[0] for ep in r1.endpoints
+            )
+            print(f"  [L1:robots]  {r1.summary()}")
+            if r1.errors and args.verbose:
+                for err in r1.errors[:3]:
+                    print(f"    [!] {err}")
+        except ImportError:
+            if args.verbose:
+                print("  [L1:robots]  not available — skipped")
+
+    # ── Layer 2a: JS AST + regex endpoint extraction ──────────────────────────
+    if not args.no_js_ast:
+        try:
+            from core.discovery.layer2_static.js_ast_parser import JSASTParser
+            js_parser = JSASTParser(verbose=args.verbose)
+            r2a = await js_parser.run(
+                target_url=args.target,
+                session=session,
+                config=discovery_cfg,
+                auth_token=args.token,
+            )
+            all_endpoints.extend(r2a.endpoints)
+            discovered_paths.extend(
+                ep.url.split("?")[0] for ep in r2a.endpoints
+            )
+            print(f"  [L2:js_ast]  {r2a.summary()}")
+        except ImportError:
+            if args.verbose:
+                print("  [L2:js_ast]  not available — skipped")
+
+    # ── Layer 2b: OpenAPI / Swagger / Postman spec probing ───────────────────
+    if not args.no_openapi:
+        try:
+            from core.discovery.layer2_static.openapi_parser import OpenAPIParser
+            oa_parser = OpenAPIParser(verbose=args.verbose)
+            r2b = await oa_parser.run(
+                target_url=args.target,
+                session=session,
+                config=discovery_cfg,
+                auth_token=args.token,
+            )
+            all_endpoints.extend(r2b.endpoints)
+            discovered_paths.extend(
+                ep.url.split("?")[0] for ep in r2b.endpoints
+            )
+            print(f"  [L2:openapi] {r2b.summary()}")
+        except ImportError:
+            if args.verbose:
+                print("  [L2:openapi] not available — skipped")
+
+    # ── Layer 4a: Smart wordlist probing ──────────────────────────────────────
+    try:
+        from core.discovery.layer4_wordlist.smart_wordlist import SmartWordlist
+
+        # Collect baseline bodies from any existing session if available
+        baseline_bodies: list[str] = []
+
+        wl = SmartWordlist(verbose=args.verbose)
+        r4a = await wl.run(
+            target_url=args.target,
+            session=session,
+            config=discovery_cfg,
+            auth_token=args.token,
+            discovered_paths=list(set(discovered_paths)),
+            baseline_bodies=baseline_bodies,
+        )
+        all_endpoints.extend(r4a.endpoints)
+        print(f"  [L4:wordlist] {r4a.summary()}")
+    except ImportError:
+        if args.verbose:
+            print("  [L4:wordlist] not available — skipped")
+
+    # ── Layer 4b: API version permutation ─────────────────────────────────────
+    if not args.no_version_permute:
+        try:
+            from core.discovery.layer4_wordlist.version_permuter import VersionPermuter
+            known_urls = [ep.url for ep in all_endpoints]
+            vp = VersionPermuter(verbose=args.verbose)
+            r4b = await vp.run(
+                target_url=args.target,
+                session=session,
+                config=discovery_cfg,
+                auth_token=args.token,
+                known_endpoints=known_urls,
+            )
+            all_endpoints.extend(r4b.endpoints)
+            print(f"  [L4:version] {r4b.summary()}")
+        except ImportError:
+            if args.verbose:
+                print("  [L4:version] not available — skipped")
+
+    # ── Layer 5: Normalise + dedup ────────────────────────────────────────────
+    try:
+        from core.discovery.layer5_dedup.normaliser import dedup_key, batch_normalise
+        seen_keys: set[str] = set()
+        unique_eps = []
+        for ep in all_endpoints:
+            k = dedup_key(ep.url, ep.method)
+            if k not in seen_keys:
+                seen_keys.add(k)
+                unique_eps.append(ep)
+        dedup_dropped = len(all_endpoints) - len(unique_eps)
+        all_endpoints = unique_eps
+        if dedup_dropped and args.verbose:
+            print(f"  [L5:dedup]   removed {dedup_dropped} duplicate endpoints")
+    except ImportError:
+        pass
+
+    # Convert DiscoveredEndpoint objects → plain dicts for the scanner
+    result_dicts: list[dict] = []
+    for ep in all_endpoints:
+        result_dicts.append({
+            "url":    ep.url,
+            "method": ep.method,
+            "body":   ep.body   if ep.body   else {},
+            "params": ep.params if ep.params else {},
+        })
+
+    print(
+        f"\n[*] Deep discovery complete: "
+        f"{len(result_dicts)} unique endpoints found\n"
+    )
+
+    # Optionally save discovered endpoints
+    save_path = getattr(discovery_cfg, "save_discovery_path", "") or args.discovery_save
+    if save_path and result_dicts:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+            with open(save_path, "w") as fh:
+                json.dump(result_dicts, fh, indent=2)
+            print(f"[+] Discovery results → {save_path}")
+        except Exception as e:
+            print(f"[!] Could not save discovery results: {e}")
+
+    return result_dicts
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main():
@@ -559,6 +801,9 @@ async def main():
 
     # ── Import traffic ────────────────────────────────────────────────────────
     imported_endpoints = import_traffic(args)
+
+    # ── Build discovery config (for deep discovery pipeline) ─────────────────
+    discovery_cfg = build_discovery_config(args, profile)
 
     try:
         from core.models import ScanConfig
@@ -603,7 +848,7 @@ async def main():
     config.subdomain_wordlist_size = args.subdomain_size
     config.strict_validation      = args.strict_validation or merged_settings.get("strict_validation", False)
 
-    # Phase 1: Flows — merge profile flows + CLI flows
+    # Phase 1: Flows
     raw_flow_configs = build_flow_configs(args, profile)
     resolved_flows   = resolve_flow_templates(raw_flow_configs, args)
     auto_flows       = args.auto_flows or profile.get("auto_flows", False)
@@ -635,6 +880,14 @@ async def main():
     config.no_repeat   = args.no_repeat
     config.use_db      = bool(args.db) and args.db != "~/.blfinder.db" or args.program or args.no_repeat
 
+    # Deep discovery config attached to scan config
+    config.deep_discovery        = args.deep_discovery or merged_settings.get("deep_discovery", False)
+    config.discovery_cfg         = discovery_cfg
+    config.no_js_ast             = args.no_js_ast
+    config.no_robots             = args.no_robots
+    config.no_openapi            = args.no_openapi
+    config.no_version_permute    = args.no_version_permute
+
     # ── Load endpoints ────────────────────────────────────────────────────────
     endpoints = load_endpoints(args.endpoints)
     endpoints.extend(imported_endpoints)
@@ -642,7 +895,7 @@ async def main():
     if not endpoints:
         endpoints = [{"url": "/", "method": "GET", "body": {}, "params": {}}]
         if not args.recon:
-            print("[*] No endpoints — using smart discovery only")
+            print("[*] No endpoints — using discovery")
 
     # ── Classify-only ─────────────────────────────────────────────────────────
     if args.classify:
@@ -674,6 +927,51 @@ async def main():
         except Exception as e:
             print(f"[!] Database init failed: {e}")
             db = None
+
+    # ── Run deep discovery pipeline (if requested) ────────────────────────────
+    if config.deep_discovery and discovery_cfg is not None:
+        try:
+            import aiohttp
+            disc_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(
+                    ssl=not args.no_ssl_verify, limit=20
+                ),
+                timeout=aiohttp.ClientTimeout(total=args.timeout),
+            )
+            try:
+                discovered = await run_deep_discovery(args, discovery_cfg, disc_session)
+            finally:
+                await disc_session.close()
+
+            # Merge discovered endpoints (deduplicate by url+method)
+            existing_keys = {
+                (ep["url"], ep.get("method", "GET")) for ep in endpoints
+            }
+            added = 0
+            for ep in discovered:
+                key = (ep["url"], ep.get("method", "GET"))
+                if key not in existing_keys:
+                    endpoints.append(ep)
+                    existing_keys.add(key)
+                    added += 1
+            if added:
+                print(f"[*] Deep discovery added {added} new endpoints")
+        except ImportError:
+            print("[!] aiohttp required for deep discovery")
+        except Exception as e:
+            print(f"[!] Deep discovery error: {e}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+
+    # ── No-scan mode: discovery only ──────────────────────────────────────────
+    if args.no_scan:
+        os.makedirs(args.output, exist_ok=True)
+        out_path = f"{args.output}/discovered_endpoints.json"
+        with open(out_path, "w") as fh:
+            json.dump(endpoints, fh, indent=2)
+        print(f"[+] {len(endpoints)} endpoints saved → {out_path}")
+        return 0
 
     # ── Run scanner ───────────────────────────────────────────────────────────
     findings = []
@@ -730,12 +1028,20 @@ async def main():
 
     if args.html or not (args.json or args.md):
         try:
-            from core.reporting.evidence_report import EvidenceReportGenerator
+            # Try the full evidence report first
+            from core.reporting import EvidenceReportGenerator
             EvidenceReportGenerator().generate(
                 findings, f"{args.output}/report.html", cfg_dict
             )
         except ImportError:
-            generate_html_report(findings, cfg_dict, f"{args.output}/report.html")
+            try:
+                # Fallback: evidence_report at its actual path
+                from core.reporting.core.reporting.evidence_report import EvidenceReportGenerator
+                EvidenceReportGenerator().generate(
+                    findings, f"{args.output}/report.html", cfg_dict
+                )
+            except ImportError:
+                generate_html_report(findings, cfg_dict, f"{args.output}/report.html")
 
     if args.json:
         generate_json_report(findings, cfg_dict, f"{args.output}/report.json")
