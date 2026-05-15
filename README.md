@@ -9,622 +9,341 @@
 ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝
 ```
 
-**Business Logic Flaw Detection Engine — v3.1 Phase 5**
+### Business Logic Flaw Detection Engine — v3.1 Phase 5+
 
-*The scanner that finds what 90% of bug bounty hunters miss — now with traffic import, persistent database, live dashboard, and HackerOne integration*
+*The scanner that finds what 90% of bug bounty hunters miss.*  
+*Traffic import · Persistent database · Deep discovery · Live dashboard · HackerOne integration.*
+
+<br>
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Platform](https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-green?style=flat-square)](https://termux.dev)
 [![License](https://img.shields.io/badge/License-MIT-purple?style=flat-square)](LICENSE)
 [![OWASP](https://img.shields.io/badge/OWASP-API%20Top%2010-red?style=flat-square)](https://owasp.org/API-Security)
 [![Bug Bounty](https://img.shields.io/badge/Bug%20Bounty-Ready-orange?style=flat-square)](https://hackerone.com)
-[![Version](https://img.shields.io/badge/Version-3.1%20Phase%205-blue?style=flat-square)](https://github.com/Steven5233/BLfinder)
+[![Version](https://img.shields.io/badge/Version-3.1%20Phase%205%2B-blue?style=flat-square)](https://github.com/Steven5233/BLfinder)
 [![GitHub](https://img.shields.io/badge/GitHub-Steven5233%2FBLfinder-181717?style=flat-square&logo=github)](https://github.com/Steven5233/BLfinder)
 
 </div>
 
 ---
 
-> **⚠️ Legal Disclaimer:** BLFinder is designed exclusively for **authorized security testing** — bug bounty programs, penetration testing engagements, and security research on systems you own or have explicit written permission to test. Unauthorized use against systems you do not have permission to test is illegal and unethical. The author assumes no liability for misuse.
+> **⚠️ Legal Notice:** BLFinder is designed exclusively for **authorised security testing** — bug bounty programmes, penetration testing engagements, and security research on systems you own or have explicit written permission to test. Unauthorised use against any system is illegal and unethical. The author assumes no liability for misuse.
 
 ---
 
 ## Table of Contents
 
 - [What is BLFinder?](#-what-is-blfinder)
-- [What's New in v3.1 Phase 5](#-whats-new-in-v31-phase-5)
-- [Why Business Logic?](#-why-business-logic)
-- [Detection Modules](#-detection-modules)
+- [What Sets It Apart](#-what-sets-it-apart)
 - [Phase Architecture](#-phase-architecture)
-- [Key Features](#-key-features)
-- [Installation](#-installation-termux--linux)
+- [Detection Modules — All 21](#-detection-modules--all-21)
+- [Phase 5+: Deep Discovery Engine](#-phase-5-deep-discovery-engine)
+- [Phase 5: Professional Operations](#-phase-5-professional-operations)
+- [Installation](#-installation)
 - [Quick Start](#-quick-start)
-- [Usage & All Flags](#-usage--all-flags)
-- [Phase 5: Traffic Import](#-phase-5-traffic-import)
-- [Phase 5: Scan Profiles](#-phase-5-scan-profiles)
-- [Phase 5: Persistent Database](#-phase-5-persistent-database)
-- [Phase 5: HackerOne Integration](#-phase-5-hackerone-integration)
-- [Phase 5: Live Dashboard](#-phase-5-live-dashboard)
+- [All CLI Flags](#-all-cli-flags)
+- [Traffic Import](#-traffic-import)
+- [Scan Profiles](#-scan-profiles)
+- [Persistent Database](#-persistent-database)
+- [HackerOne Integration](#-hackerone-integration)
+- [Live Dashboard](#-live-dashboard)
 - [Endpoints File Format](#-endpoints-file-format)
 - [Flow Templates](#-flow-templates)
 - [Evidence & Reports](#-evidence--reports)
 - [Understanding Results](#-understanding-results)
-- [Bug Bounty Tips](#-bug-bounty-tips)
+- [Bug Bounty Playbook](#-bug-bounty-playbook)
+- [Troubleshooting](#-troubleshooting)
 - [Project Structure](#-project-structure)
-- [About the Author](#-about-the-author)
 - [Contributing](#-contributing)
+- [About the Author](#-about-the-author)
 
 ---
 
 ## 🔍 What is BLFinder?
 
-BLFinder is an **async Python security scanner** purpose-built to detect business logic vulnerabilities in REST APIs and web applications. Unlike generic scanners (Burp Suite active scan, OWASP ZAP, nikto), BLFinder focuses exclusively on flaws that require **semantic understanding of the application's business rules** — vulnerabilities that signature-based tools cannot detect.
+BLFinder is an **async Python security scanner** built exclusively to detect business logic vulnerabilities in REST APIs and web applications. Unlike generic scanners (Burp Suite active scan, OWASP ZAP, nikto), BLFinder focuses on flaws that require **semantic understanding of the application's business rules** — vulnerabilities that no signature-based tool can detect.
 
-It was built to run natively on **Termux for Android**, so you can hunt bugs from anywhere with your phone.
+It runs natively on **Termux for Android**, so you can hunt from anywhere.
 
-**Every finding in v3.1 includes:**
-- **EvidencePackage** — real captured HTTP request/response pairs (not templates)
-- **Field-level diff** — exactly which JSON fields changed between baseline and attack
-- **Impact assessment** — actual PII, credentials, or sensitive data found in the response
-- **Confidence score** (0–100%) with reasoning and false-positive analysis
-- **Proof of Concept** — verified `curl`, Python script, Burp Suite raw HTTP, and HTTPie
-- **HackerOne-ready markdown** — one tab click generates a copy-paste submission
-- **Persistent database** — findings stored across sessions, duplicates automatically filtered
-- **Direct H1 export** — push findings to HackerOne as draft reports via API
+**Every finding includes:**
 
----
-
-## 🚀 What's New in v3.1 Phase 5
-
-Phase 5 is a professional-grade operational layer built on top of the existing Phase 1–4 detection engine. It adds the infrastructure serious hunters need to work at scale across multiple programs and sessions.
-
-### Traffic Import Pipeline
-
-Stop writing `endpoints.json` by hand. Import real traffic directly from your proxy:
-
-```bash
-# Import from Burp Suite session
-python blfinder.py -t https://target.com -T token \
-  --import-burp burp_export.xml
-
-# Import from browser HAR file (Chrome DevTools / Firefox)
-python blfinder.py -t https://target.com -T token \
-  --import-har session.har
-
-# Import from mitmproxy flows
-python blfinder.py -t https://target.com -T token \
-  --import-mitmproxy flows.bin
-
-# Filter to API endpoints only, save generated endpoints.json
-python blfinder.py -t https://target.com -T token \
-  --import-burp burp_export.xml \
-  --import-filter "/api/" \
-  --import-save ~/endpoints.json
-```
-
-### Scan Profiles
-
-Eight built-in profiles tune every scanner setting for a specific target type:
-
-```bash
-# E-commerce: price fields, coupon abuse, checkout flows
-python blfinder.py -t https://shop.target.com -T token --profile ecommerce
-
-# Financial APIs: high confidence threshold, slower rate, deep IDOR
-python blfinder.py -t https://api.bank.com -T token --profile fintech
-
-# Internal SaaS: mass assignment, BFLA, GraphQL deep
-python blfinder.py -t https://app.saas.com -T token --profile saas
-
-# Available: ecommerce | fintech | saas | stealth | fast | graphql | api_only | thorough
-```
-
-CLI flags always override profile settings. Profiles only fill in what you haven't explicitly set.
-
-### Persistent Finding Database
-
-Every scan writes to a local SQLite database. Duplicates are automatically skipped on subsequent runs:
-
-```bash
-# Tag findings with a program handle
-python blfinder.py -t https://target.com -T token \
-  --db ~/.blfinder.db --program target_h1
-
-# Skip endpoints already confirmed vulnerable (no duplicate reports)
-python blfinder.py -t https://target.com -T token \
-  --db ~/.blfinder.db --no-repeat
-
-# View finding history across all scans
-python blfinder.py --show-history --db ~/.blfinder.db
-
-# Search past findings by keyword
-python blfinder.py --search "IDOR payment" --db ~/.blfinder.db
-```
-
-### HackerOne API Integration
-
-Push findings directly to HackerOne as draft reports:
-
-```bash
-python blfinder.py --export-h1 target_program \
-  --h1-token username:api_token \
-  --db ~/.blfinder.db
-```
-
-Or auto-export new findings immediately after each scan:
-
-```bash
-python blfinder.py -t https://target.com -T token \
-  --db ~/.blfinder.db --program target_h1 \
-  --export-h1 target_h1 --h1-token username:api_token
-```
-
-### Live TUI Dashboard
-
-Real-time terminal dashboard during scanning. Supports pause/resume, live finding feed, and per-domain request stats:
-
-```bash
-python blfinder.py -t https://target.com -T token --dashboard
-```
+| Component | Detail |
+|---|---|
+| **EvidencePackage** | Live-captured HTTP pairs — not templates, not guesses |
+| **Field-level diff** | Exactly which JSON fields changed between baseline and attack |
+| **Impact assessment** | Actual PII, credentials, or financial data found in the response |
+| **Confidence score** | 0–100% with reasoning and false-positive analysis |
+| **Proof of Concept** | Verified `curl`, Python, Burp raw HTTP, and HTTPie |
+| **HackerOne markdown** | One-click copy-paste submission with real evidence |
+| **Persistent database** | Findings stored across sessions, duplicates auto-filtered |
+| **Direct H1 export** | Push to HackerOne as draft reports via API |
 
 ---
 
-## 🎯 Why Business Logic?
+## 🎯 What Sets It Apart
 
-Most automated scanners test for known vulnerability patterns — SQLi, XSS, path traversal. Business logic flaws require understanding **what the application is supposed to do** and testing whether it can be made to do something else.
+Most automated scanners test for known patterns — SQLi, XSS, path traversal. Business logic flaws require understanding **what the application is supposed to do** and testing whether it can be forced to do something else. No CVE, no signature, no SAST rule catches these.
 
-| Vulnerability Type | Burp Suite Active | OWASP ZAP | BLFinder |
+| Vulnerability Type | Burp Active | OWASP ZAP | BLFinder |
 |---|:---:|:---:|:---:|
 | Price / Quantity Manipulation | ❌ | ❌ | ✅ |
 | IDOR / BOLA (cross-user confirmed) | ⚠️ | ⚠️ | ✅ |
 | Blind IDOR (5-oracle detection) | ❌ | ❌ | ✅ |
-| Race Conditions | ❌ | ❌ | ✅ |
+| Race Conditions (double-spend) | ❌ | ❌ | ✅ |
 | JWT alg:none + Claim Escalation | ⚠️ | ❌ | ✅ |
 | State Machine Abuse | ❌ | ❌ | ✅ |
 | Mass Assignment | ⚠️ | ❌ | ✅ |
 | Multi-Step Flow Attacks | ❌ | ❌ | ✅ |
 | Workflow / MFA Bypass | ❌ | ❌ | ✅ |
-| GraphQL IDOR + Deep Scan | ❌ | ⚠️ | ✅ |
+| GraphQL Deep Scan + IDOR | ❌ | ⚠️ | ✅ |
 | WebSocket Vulnerability Scan | ❌ | ❌ | ✅ |
 | API Version Abuse | ❌ | ❌ | ✅ |
 | Coupon Stacking / Type Confusion | ❌ | ❌ | ✅ |
 | BOPLA (hidden field exposure) | ❌ | ❌ | ✅ |
 | OAuth2 Vulnerability Testing | ❌ | ❌ | ✅ |
-| Soft Delete Bypass | ❌ | ❌ | ✅ |
-| Burp/HAR/mitmproxy Import | manual | manual | ✅ |
+| JS AST Endpoint Extraction | ❌ | ❌ | ✅ |
+| OpenAPI / Swagger Auto-Discovery | ❌ | ⚠️ | ✅ |
+| Headless SPA Crawl (Playwright) | ❌ | ❌ | ✅ |
+| Burp / HAR / mitmproxy Import | manual | manual | ✅ |
 | Persistent Finding Database | ❌ | ❌ | ✅ |
 | HackerOne API Export | ❌ | ❌ | ✅ |
-| Real Evidence Capture (Burp format) | manual | manual | ✅ |
-
----
-
-## 🧩 Detection Modules
-
-BLFinder v3.1 ships **21 detection modules** across three severity tiers, plus Phase 4 expanded attack surface modules.
-
-### 🔴 Critical Severity Modules
-
-| # | Module | What It Finds |
-|---|--------|---------------|
-| 1 | **Price Manipulation** | Tampers price/amount/total fields including deeply nested JSON. Confirms when orders are created at attacker-controlled prices via response field comparison |
-| 2 | **Negative Quantity** | Submits negative quantities to trigger reverse charges, negative inventory, or credit abuse. Canary-tested to eliminate false positives |
-| 3 | **IDOR / BOLA** | Path IDs, body IDs, UUID swaps, header injection (`X-User-Id`, `X-Admin-User`), no-auth access — all with cross-user confirmation and full evidence capture |
-| 4 | **Blind IDOR** | 5-oracle detection (status, size, error message, timing, cross-user) for IDORs where the server returns HTTP 200 for everything |
-| 5 | **Mass Assignment** | Injects privileged fields (`is_admin`, `role`, `kyc_verified`) and confirms reflection with baseline comparison — eliminates false positives from pre-set fields |
-| 6 | **State Machine Abuse** | Forces objects to privileged states (`paid`, `approved`, `verified`) without satisfying transition conditions. Confirms via response reflection |
-| 7 | **Race Conditions** | Fires 15 concurrent requests to detect double-spending and single-use bypass. Re-verifies with single request after burst |
-| 8 | **JWT alg:none + Claims** | Tests signature bypass and arbitrary claim injection. Canary-verified with a random invalid token to eliminate false positives |
-| 9 | **BFLA / Privilege Escalation** | Probes admin endpoints with low-privilege and no-auth tokens. Verifies actual content is returned (not a generic landing page) |
-
-### 🟠 High Severity Modules
-
-| # | Module | What It Finds |
-|---|--------|---------------|
-| 10 | **Workflow / MFA Bypass** | Skips multi-step workflows, tests OTP/MFA token omission. Canary step tests prevent false positives |
-| 11 | **Coupon Abuse** | Array injection, type confusion, stacking. Confirms via discount amount comparison |
-| 12 | **BOPLA** | Hidden fields exposed via `?expand=all`, `?fields=*`, `?include_deleted=true`. Detects sensitive field names in new data |
-| 13 | **Time Logic Bypass** | Far-future/past timestamps in body and headers. Confirmed only when response differs from baseline |
-| 14 | **Integer Overflow** | Extreme values causing negative balances or 500 errors |
-| 15 | **Limit/Offset Abuse** | Pagination manipulation to dump all records. Compares actual record counts |
-| 16 | **Function Level Access (BFLA)** | User 2 performing DELETE/PUT on User 1's resources — requires second token |
-| 17 | **Soft Delete Bypass** | Accessing deleted/archived records via filter parameters. Semantic diff confirms real change |
-
-### 🟡 Medium Severity Modules
-
-| # | Module | What It Finds |
-|---|--------|---------------|
-| 18 | **GraphQL** | Introspection enabled, unauthenticated data access. Tests multiple common GQL endpoints |
-| 19 | **Account Enumeration** | Different error messages and statistical timing oracle revealing valid accounts |
-| 20 | **HTTP Method Override** | `X-HTTP-Method-Override` acceptance causing different responses |
-| 21 | **Parameter Pollution** | Duplicate query parameters changing application behavior |
-
-### 🔬 Phase 4: Expanded Attack Surface
-
-These modules activate with dedicated flags and run after the standard 21-module sweep:
-
-| Module | Flag | What It Finds |
-|--------|------|---------------|
-| **GraphQL Deep Scan** | `--graphql-deep` | Full schema traversal, field-level IDOR, batching abuse, alias DoS |
-| **WebSocket Scanner** | `--websocket` | Auth bypass over WS, message injection, WS IDOR, race conditions |
-| **API Version Abuse** | `--version-scan` | Retired v1/v2 endpoints with weaker controls still accessible |
-| **IDOR Mass Enumeration** | `--idor-range N` | Rapid enumeration of ID ranges, harvests IDs from baseline responses |
-| **Cross-Endpoint BOLA** | `--idor-cross-endpoint` | Uses IDs harvested from one endpoint to attack others |
+| Real Evidence Capture | manual | manual | ✅ |
 
 ---
 
 ## 🏗️ Phase Architecture
 
-BLFinder is structured in five cumulative phases. Each phase builds on the last.
+BLFinder is structured in five cumulative phases. Each phase builds on the last — you get everything below your phase for free.
 
 ```
-Phase 1 — Detection Core
-  Multi-step flow attacks, blind IDOR oracles, session management, OAuth2
-
-Phase 2 — Evidence Engine
-  Real HTTP capture, field-level diff, impact scoring, Burp-format raw HTTP
-
-Phase 3 — Validation & Recon
-  Endpoint validator, soft-404 prevention, WAF detection, subdomain mapping,
-  JS secret extraction, response classification
-
-Phase 4 — Attack Surface Expansion
-  Mass IDOR enumeration, GraphQL deep scan, WebSocket scanner,
-  API version abuse, business context classifier
-
-Phase 5 — Professional Operations ← NEW
-  Traffic import (Burp/HAR/mitmproxy), scan profiles, SQLite database,
-  deduplication, HackerOne API export, live TUI dashboard
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Phase 1 — Detection Core                                               │
+│  Multi-step flow attacks · Blind IDOR oracles · Session management      │
+│  OAuth2 · Timing oracle · Volatile field learning                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Phase 2 — Evidence Engine                                              │
+│  Live HTTP capture · Field-level JSON diff · Impact scoring             │
+│  Burp-format raw HTTP · HackerOne-ready markdown generation             │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Phase 3 — Validation & Recon                                           │
+│  Soft-404 prevention · WAF detection · Subdomain mapping                │
+│  JS secret extraction · Response classification · Confidence capping    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Phase 4 — Attack Surface Expansion                                     │
+│  Mass IDOR enumeration · GraphQL deep scan · WebSocket scanner          │
+│  API version abuse · Business context classifier                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Phase 5 — Professional Operations                                      │
+│  Traffic import (Burp/HAR/mitmproxy) · Scan profiles · SQLite database  │
+│  Deduplication · HackerOne API export · Live TUI dashboard              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Phase 5+ — Deep Discovery Engine  ◄ NEW                               │
+│  JS AST parsing · OpenAPI/Swagger/Postman · Smart wordlist (depth 1–5)  │
+│  API version permutation · Headless SPA crawl · Priority scoring        │
+│  Schema enrichment · Proto/gRPC extraction · Soft-404 filter            │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## ✨ Key Features
+## 🧩 Detection Modules — All 21
 
-### 🔬 Real Evidence Capture
+### 🔴 Critical
 
-Every finding carries an `EvidencePackage` with live-captured HTTP — not generated templates.
+| # | Module | What It Detects |
+|---|--------|-----------------|
+| 1 | **Price Manipulation** | Tampers price/amount/total/fee fields including deeply nested JSON. Confirms when orders are accepted at attacker-controlled prices via response field comparison. Tests 10 tamper values including `0`, `0.01`, `-1`, `null`, and `false`. |
+| 2 | **Negative Quantity** | Submits negative quantities to trigger reverse charges, negative inventory, or credit abuse. Canary-tested to eliminate servers that accept any value indiscriminately. |
+| 3 | **IDOR / BOLA** | Path ID swaps, body ID mutation, UUID permutation, header injection (`X-User-Id`, `X-Admin-User`), and no-auth access — all with optional cross-user confirmation via second token. Full evidence capture on every test. |
+| 4 | **Blind IDOR** | 5-oracle detection (HTTP status, response size, error message, timing, cross-user similarity) for IDORs where the server returns HTTP 200 regardless. Designed for APIs with uniform success responses. |
+| 5 | **Mass Assignment** | Injects privileged fields (`is_admin`, `role`, `kyc_verified`, `price_override`) and confirms reflection via baseline comparison. Eliminates false positives from pre-set fields by comparing against the baseline response. |
+| 6 | **State Machine Abuse** | Forces objects to privileged states (`paid`, `approved`, `completed`, `verified`) without satisfying transition conditions. Confirmed when the state appears in the response body. |
+| 7 | **Race Conditions** | Fires 15 concurrent requests to detect double-spending, reward duplication, and single-use bypass. Re-verifies with a single sequential request after the burst to establish the ground truth. |
+| 8 | **JWT alg:none Bypass** | Tests signature bypass by replacing the algorithm with `none`. Canary-verified with a fully random invalid token to confirm the server does not accept everything. |
+| 9 | **BFLA / Privilege Escalation** | Probes 12 admin and internal paths with low-privilege and no-auth tokens. Confirms actual content is returned (not a generic landing page) before reporting. |
 
-```
-EvidencePackage per finding:
-├── baseline_request    ← Exact Burp Suite format raw HTTP (normal request)
-├── baseline_response   ← Full response with headers + body
-├── attack_request      ← Exact raw HTTP of the exploit
-├── attack_response     ← Full response proving the vulnerability
-├── diff_analysis       ← Field-level JSON diff (which fields changed)
-├── impact_report       ← Sensitive data found (PII, credentials, financial)
-├── verified_curl       ← curl command that was actually executed
-└── cross_user_pair     ← Cross-user confirmation HTTP pair
-```
+### 🟠 High
 
-**HTML report tabs per finding:**
+| # | Module | What It Detects |
+|---|--------|-----------------|
+| 10 | **Workflow / MFA Bypass** | Skips numbered workflow steps (`step_2` → `step_5`), tests OTP/MFA token omission. Canary step (999) prevents false positives. |
+| 11 | **Coupon Abuse** | Array injection and type confusion (`["CODE","CODE"]`). Confirmed by comparing extracted discount amounts before and after. |
+| 12 | **BOPLA** | Hidden fields exposed via `?expand=all`, `?fields=*`, `?include_deleted=true`. Detects sensitive field names (`password`, `salary`, `ssn`, `secret`) in newly exposed keys. |
+| 13 | **Time Logic Bypass** | Far-future (`2099-12-31`) and negative UNIX timestamps in body fields. Confirmed only when the response meaningfully differs from the baseline. |
+| 14 | **Integer Overflow** | Extreme values (`2^31-1`, `2^63-1`, `-2^31`) that cause HTTP 500 or negative values in the response (e.g. negative balance after large deposit). |
+| 15 | **Limit / Offset Abuse** | Pagination manipulation (`limit=99999`) to bulk-export records. Compares actual parsed record counts, not just byte length. |
+| 16 | **BFLA (Cross-User)** | User 2 performing `DELETE`/`PUT`/`PATCH` on User 1's resources — requires a second token. Reports confirmed only when the mutating method succeeds. |
+| 17 | **Soft Delete Bypass** | Accessing deleted/archived records via filter parameters. Semantic diff confirms a real change, not noise. |
 
-```
-Overview | Evidence | Diff | Impact | Reproduce | Raw HTTP | HackerOne
-```
+### 🟡 Medium
 
-The **HackerOne tab** generates a complete copy-paste ready submission with real endpoints, real request/response pairs, and real impact data — directly from the scan.
+| # | Module | What It Detects |
+|---|--------|-----------------|
+| 18 | **GraphQL** | Introspection enabled in production, unauthenticated data access (`users`, `me`). Tests multiple common GraphQL paths automatically. |
+| 19 | **Account Enumeration** | Different error messages for valid vs invalid accounts, and a statistical timing oracle (>200ms delta triggers a low-confidence finding). |
+| 20 | **HTTP Method Override** | `X-HTTP-Method-Override: DELETE` and `_method=DELETE` headers causing a different response than the plain `POST` baseline. |
+| 21 | **Parameter Pollution** | Duplicate query parameters (e.g. `id=1&id=999999`) changing application behaviour via semantic diff. |
 
-### 📊 Confidence Scoring & FP Reduction
+### 🔬 Phase 4: Expanded Attack Surface
 
-Each finding is scored 0–100% before reporting:
-- HTTP status comparison (403→200 = strong signal)
-- Semantic body analysis (success/failure token detection)
-- Response similarity scoring using `difflib` (ignores noise)
-- JSON structure diff (new keys, sensitive field detection)
-- Canary request testing (confirms server doesn't accept everything)
-- WAF detection (flags blocked responses automatically)
-- Re-verification loop — every finding re-tested N times before reporting
+Activate with dedicated flags. Run after the standard 21-module sweep.
 
-### ⚡ Adaptive Rate Limiter
-
-```
-429 received → exponential backoff (2^n × base_delay, max 30s)
-10 clean responses → auto speed-up (×0.85 per cycle)
-Per-domain tracking → multiple targets handled independently
-```
-
-### 🔄 Multi-Step Flow Attacks
-
-```
-Flow definition → execute baseline → attack each marked step
-                                   ↓
-                    Price manipulation at any step
-                    Coupon stacking across full flow
-                    Workflow bypass (skip steps)
-                    Race condition on final step
-                    State machine abuse mid-flow
-                    Mass assignment at registration
-```
-
-### 🔒 Session Management
-
-- Auto-detect `401` responses and trigger token refresh
-- CSRF token extraction from HTML meta tags and response headers
-- Live cookie jar maintained across all requests
-- OAuth2 `client_credentials` and `password` grant support
-
-### 🗄️ Persistent Finding Database (Phase 5)
-
-The SQLite database tracks every finding across sessions. Key capabilities:
-- **Deduplication** — `--no-repeat` skips endpoints confirmed vulnerable in previous scans
-- **Program tagging** — `--program handle` associates all findings with a bug bounty program
-- **Cross-session history** — `--show-history` prints an aggregated stats view
-- **Search** — `--search "IDOR payment"` finds past findings by keyword
-- **Status tracking** — findings move from `new` → `exported` after H1 submission
+| Module | Flag | What It Detects |
+|--------|------|-----------------|
+| **GraphQL Deep Scan** | `--graphql-deep` | Full schema traversal, field-level IDOR, batching abuse, alias DoS |
+| **WebSocket Scanner** | `--websocket` | Auth bypass over WS, message injection, WS IDOR, race conditions |
+| **API Version Abuse** | `--version-scan` | Retired `v1`/`v2` endpoints with weaker controls still accessible |
+| **IDOR Mass Enumeration** | `--idor-range N` | Rapid ID-range enumeration; harvests IDs from baseline responses |
+| **Cross-Endpoint BOLA** | `--idor-cross-endpoint` | Uses IDs harvested from one endpoint to attack others in the same session |
 
 ---
 
-## 📱 Installation (Termux + Linux)
+## 🌐 Phase 5+: Deep Discovery Engine
 
-### Termux (Android) — Recommended
+The Deep Discovery Engine replaces the legacy regex crawler with a multi-layer pipeline that finds endpoints invisible to traditional crawlers.
 
-```bash
-# Step 1: Install from F-Droid (NOT Play Store — outdated there)
-# https://f-droid.org/en/packages/com.termux/
-
-# Step 2: Install dependencies
-pkg update && pkg upgrade -y
-pkg install python git -y
-pip install aiohttp --break-system-packages
-
-# Step 3: Clone
-git clone https://github.com/Steven5233/BLfinder.git ~/BLfinder
-cd ~/BLfinder
-
-# Step 4: Verify
-python blfinder.py --help
+```
+Layer 1  →  robots.txt · sitemap.xml                   (RobotsParser)
+Layer 2a →  JS file fetching + AST endpoint extraction  (JSASTParser)
+Layer 2b →  OpenAPI / Swagger / Postman spec probing    (OpenAPIParser)
+             (30+ well-known paths auto-probed + custom --openapi-path)
+Layer 4a →  Business-context-seeded smart wordlist      (SmartWordlist)
+             depth 1 (~200 paths) … depth 5 (~10,000 paths)
+Layer 4b →  API version shadow discovery                (VersionPermuter)
+             v1→v2→v3→internal→legacy→beta permutations
+Layer 5  →  URL normalisation + deduplication           (normaliser)
+Optional →  Playwright headless SPA crawl               (--use-headless)
+             Intercepts all XHR/fetch calls during navigation
+             Clicks buttons/forms with --headless-interact
 ```
 
-### Linux / macOS
+### Discovery Flags
 
 ```bash
-git clone https://github.com/Steven5233/BLfinder.git
-cd BLfinder
-pip install aiohttp
-python blfinder.py --help
+# Enable the full pipeline
+--deep-discovery
+
+# Wordlist depth (default: 2)
+--wordlist-depth 3          # ~1500 paths + full sub-resource tree
+
+# Engine-level depth (used by the inner scanner engine)
+--discovery-depth 3
+
+# Skip individual layers
+--no-robots                 # Skip robots.txt / sitemap.xml
+--no-js-ast                 # Skip JS AST pass
+--no-openapi                # Skip OpenAPI/Swagger probing
+--no-version-permute        # Skip version shadow discovery
+--no-wordlist               # Skip wordlist entirely (spec/JS/headless only)
+
+# Extra spec paths beyond the 30+ probed automatically
+--openapi-path /api/v1/openapi.json
+--openapi-path /internal/swagger.yaml
+
+# Business context tags — seeds the wordlist with domain-specific paths
+--business-tags payment,order,admin,transfer
+
+# Headless crawl (requires: pip install playwright && playwright install chromium)
+--use-headless
+--headless-interact         # Also click buttons and submit forms
+
+# gRPC / Protobuf
+--proto-path ./protos/user_service.proto
+
+# Save all discovered endpoints before scanning
+--save-discovery ~/discovered.json
+--no-deep-discovery         # Fall back to legacy smart_discover() regex crawl
+
+# Discovery-only — skip all attack modules
+--no-scan
 ```
 
-### Requirements
-
-| Requirement | Version |
-|-------------|---------|
-| Python | 3.10+ |
-| aiohttp | Latest |
-| Android (Termux) | 7.0+ |
-| RAM | ~100MB |
-| Storage | ~5MB |
-
-No other dependencies. Runs entirely on stock Python + aiohttp.
-
----
-
-## ⚡ Quick Start
+### Example: Deep Discovery Pipeline
 
 ```bash
-# 1. Basic scan — smart discovery finds endpoints automatically
-python blfinder.py -t https://api.target.com
-
-# 2. With your auth token
-python blfinder.py -t https://api.target.com \
-  -T "eyJhbGciOiJIUzI1NiJ9..."
-
-# 3. Full bug bounty scan — two accounts for IDOR confirmation
+# Full pipeline at depth 3 with headless crawl and business tags
 python blfinder.py \
   -t https://api.target.com \
-  -T "user1_token_here" \
-  -T2 "user2_token_here" \
+  -T mytoken \
+  --deep-discovery \
+  --wordlist-depth 3 \
+  --business-tags payment,order,subscription \
+  --use-headless \
+  --save-discovery discovered.json \
+  --html -o ~/results
+
+# Discovery only — review endpoints before attacking
+python blfinder.py \
+  -t https://api.target.com -T mytoken \
+  --deep-discovery --wordlist-depth 2 \
+  --save-discovery endpoints.json \
+  --no-scan
+
+# Then scan the saved endpoints
+python blfinder.py \
+  -t https://api.target.com -T mytoken \
   -e endpoints.json \
-  --html --json --md \
-  -o ~/results \
-  -v
-
-# 4. Phase 5 professional scan — full pipeline
-python blfinder.py \
-  -t https://api.target.com \
-  -T user1_token -T2 user2_token \
-  --import-burp traffic.xml \
-  --profile thorough \
-  --db ~/.blfinder.db --program target_h1 \
-  --dashboard \
-  --html --json --md -o ~/results
+  --html --json -o ~/results
 ```
 
-After running, open `~/results/report.html` for a full interactive report with 7 tabs per finding — including side-by-side request comparison, field-level diff, impact assessment, and a HackerOne-ready submission.
-
 ---
 
-## 📖 Usage & All Flags
+## ⚙️ Phase 5: Professional Operations
 
-### Core Options
+### Traffic Import
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-t`, `--target` | required | Target base URL |
-| `-T`, `--token` | — | Auth token for User 1 (primary account) |
-| `-T2`, `--token2` | — | Auth token for User 2 (enables IDOR cross-user confirmation) |
-| `-T3`, `--token3` | — | Auth token for User 3 (privilege chain testing) |
-| `-e`, `--endpoints` | — | Path to endpoints JSON file |
-| `-H`, `--header` | — | Extra headers, repeatable: `-H "X-Api-Key: abc"` |
-| `-c`, `--cookie` | — | Cookies, repeatable: `-c "session=abc123"` |
-| `--proxy` | — | HTTP proxy: `http://127.0.0.1:8080` |
-| `-r`, `--rate` | `0.3` | Base delay between requests (seconds) |
-| `--timeout` | `20` | Request timeout (seconds) |
-| `--no-discover` | off | Disable smart endpoint discovery |
-| `--no-ssl-verify` | off | Disable SSL certificate verification |
-| `--fuzz-depth` | `2` | Nested JSON mutation depth |
-| `--min-confidence` | `40` | Drop findings below this confidence % |
-| `--confirm-attempts` | `2` | Re-verification attempts per finding |
-
-### Phase 5: Traffic Import
-
-| Flag | Description |
-|------|-------------|
-| `--import-burp FILE` | Import Burp Suite XML or JSON traffic export |
-| `--import-har FILE` | Import browser HAR file (Chrome DevTools, Firefox, Insomnia) |
-| `--import-mitmproxy FILE` | Import mitmproxy flows file |
-| `--import-filter REGEX` | Filter imported URLs by regex, e.g. `/api/` |
-| `--import-save FILE` | Save generated endpoints.json to this path for reuse |
-
-### Phase 5: Scan Profiles
-
-| Flag | Description |
-|------|-------------|
-| `--profile NAME` | Load settings from `profiles/NAME.json`. CLI flags override profile settings. Available: `ecommerce`, `fintech`, `saas`, `stealth`, `fast`, `graphql`, `api_only`, `thorough` |
-
-### Phase 5: Database & Program Management
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--db PATH` | `~/.blfinder.db` | SQLite database path |
-| `--no-repeat` | off | Skip endpoints already confirmed vulnerable in DB |
-| `--program HANDLE` | — | Tag all findings with this HackerOne program handle |
-| `--export-h1 HANDLE` | — | Export new findings to HackerOne as drafts |
-| `--h1-token TOKEN` | — | HackerOne API token (`username:api_token`) |
-| `--show-history` | — | Print finding history from DB and exit |
-| `--search QUERY` | — | Search past findings by keyword and exit |
-
-### Phase 5: Dashboard
-
-| Flag | Description |
-|------|-------------|
-| `--dashboard` | Enable live TUI dashboard during scan |
-| `--force-ansi` | Force ANSI output even if curses is available |
-
-### Phase 3: Recon
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--recon` | off | Enable subdomain mapping + JS extraction before scan |
-| `--recon-only` | off | Run recon only, save `targets.json`, then exit |
-| `--js-secrets` | off | Enable JS file secret extraction |
-| `--subdomain-size` | `50` | Subdomain wordlist size |
-| `--strict-validation` | off | Drop endpoints that don't return a real API response |
-
-### Phase 1: Flows & Auth
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--flow TEMPLATE` | — | Run a named flow template (repeatable) |
-| `--flow-file FILE` | — | Load flow definitions from a JSON file |
-| `--auto-flows` | off | Auto-detect app type and run relevant flows |
-| `--product-id N` | `1` | Product ID for ecommerce flow templates |
-| `--product-price N` | `99.99` | Product price for ecommerce flow templates |
-| `--oauth-url URL` | — | OAuth2 token endpoint URL |
-| `--oauth-id ID` | — | OAuth2 client_id |
-| `--oauth-secret SECRET` | — | OAuth2 client_secret |
-| `--oauth-grant TYPE` | `client_credentials` | OAuth2 grant type |
-| `--oauth-user USER` | — | Username for password grant |
-| `--oauth-pass PASS` | — | Password for password grant |
-| `--refresh-url URL` | — | Token refresh endpoint URL |
-| `--refresh-token TOKEN` | — | Refresh token value |
-| `--login-url URL` | — | Re-login URL (fallback for refresh) |
-| `--login-body JSON` | — | Re-login body as JSON string |
-| `--blind-idor` | off | Enable blind IDOR oracle scanning (slower) |
-| `--samples N` | `4` | Oracle sample count per test |
-
-### Phase 4: Attack Surface
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--idor-range N` | `0` | Enable mass IDOR enumeration up to N IDs per endpoint |
-| `--idor-harvest` | off | Harvest IDs from baseline responses for cross-endpoint testing |
-| `--idor-cross-endpoint` | off | Test harvested IDs against all other endpoints |
-| `--idor-batch-size N` | `20` | Concurrent requests per IDOR batch |
-| `--websocket` | off | Enable WebSocket scanner |
-| `--ws-url URL` | — | WebSocket endpoint URL (overrides discovery) |
-| `--ws-race-count N` | `15` | Concurrent messages for WS race tests |
-| `--graphql-deep` | off | Enable full GraphQL deep scan |
-| `--version-scan` | off | Enable API version abuse scan |
-| `--classify` | off | Print business context attack plan and exit |
-
-### Output
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-o`, `--output` | `.` | Output directory for reports |
-| `--html` | off | Generate HTML report (default if no format specified) |
-| `--json` | off | Generate JSON report |
-| `--md` | off | Generate Markdown report |
-| `-v`, `--verbose` | off | Print every request in real time |
-| `--no-color` | off | Disable ANSI colors (for log files) |
-
----
-
-## 📥 Phase 5: Traffic Import
-
-Instead of building an `endpoints.json` by hand, import real application traffic captured during manual browsing.
-
-### Burp Suite Export
-
-1. In Burp Suite, go to **Target → Site map → right-click → Save selected items** (XML format)
-2. Or export from **Proxy → HTTP history → select all → Save items**
+Stop writing `endpoints.json` by hand. Import real traffic directly from your proxy.
 
 ```bash
+# Burp Suite XML/JSON export
 python blfinder.py -t https://target.com -T token \
-  --import-burp ~/burp_session.xml \
-  --import-filter "/api/v" \
+  --import-burp burp_session.xml
+
+# Browser HAR (Chrome DevTools → Network → Save all as HAR)
+python blfinder.py -t https://target.com -T token \
+  --import-har session.har
+
+# mitmproxy flows
+python blfinder.py -t https://target.com -T token \
+  --import-mitmproxy flows.bin
+
+# Filter to API paths and save generated endpoints file
+python blfinder.py -t https://target.com -T token \
+  --import-burp burp_session.xml \
+  --import-filter "/api/" \
   --import-save ~/endpoints.json
-```
 
-### Browser HAR File
-
-1. Open Chrome DevTools → **Network tab**
-2. Browse the application normally
-3. Right-click any request → **Save all as HAR with content**
-
-```bash
+# Combine all three sources — deduplication is automatic
 python blfinder.py -t https://target.com -T token \
-  --import-har ~/session.har \
-  --import-filter "/api/"
-```
-
-### mitmproxy Flows
-
-```bash
-# Capture traffic with mitmproxy first
-mitmproxy -w flows.bin
-
-# Then import
-python blfinder.py -t https://target.com -T token \
-  --import-mitmproxy ~/flows.bin
-```
-
-### Combining Sources
-
-All three import flags can be used together. Imported endpoints merge with `-e endpoints.json` and discovered endpoints. Deduplication is automatic:
-
-```bash
-python blfinder.py -t https://target.com -T token \
-  -e known_endpoints.json \
-  --import-burp burp_export.xml \
+  -e known.json \
+  --import-burp burp.xml \
   --import-har session.har \
-  --import-filter "/api/"
+  --import-filter "/api/v"
 ```
 
----
+### Scan Profiles
 
-## ⚙️ Phase 5: Scan Profiles
-
-Profiles are JSON files that pre-configure the scanner for a specific class of target. They live in `profiles/NAME.json` and can also be loaded from `~/.blfinder/profiles/` or `./profiles/`.
-
-**CLI flags always win.** If you pass `--rate 0.5` alongside `--profile fintech`, the CLI rate is used. Profiles only supply settings you haven't explicitly set.
-
-### Built-in Profiles
+Eight built-in profiles tune every scanner parameter for a specific target type. **CLI flags always override profile settings.**
 
 | Profile | Best For | Key Settings |
 |---------|----------|--------------|
-| `ecommerce` | Shopping carts, checkout flows | Price/coupon modules first, checkout flow template, IDOR on order IDs |
+| `ecommerce` | Shopping carts, checkout flows | Price/coupon modules first, checkout flow, IDOR on order IDs |
 | `fintech` | Banking, payment APIs | High confidence (70%), slow rate (1.5s), deep IDOR, strict validation |
-| `saas` | SaaS dashboards, admin panels | Mass assignment, BFLA, GraphQL deep, workspace/tenant IDOR |
-| `stealth` | Rate-limited or WAF-protected targets | Very slow rate (3s), random UA, minimal footprint |
-| `fast` | CTFs, test environments | Zero delay, low confidence threshold, all modules |
+| `saas` | SaaS dashboards, admin panels | Mass assignment, BFLA, GraphQL deep, tenant IDOR |
+| `stealth` | WAF-protected or rate-limited targets | Very slow rate (3s), random UA rotation, minimal footprint |
+| `fast` | CTFs, test environments | Zero delay, low confidence threshold, all modules enabled |
 | `graphql` | GraphQL-first APIs | GraphQL deep scan, introspection, batching abuse |
-| `api_only` | Pure REST APIs, no frontend | Skip JS extraction, subdomain recon off, API modules only |
-| `thorough` | Maximum coverage, high-value targets | All modules, multiple confirmation attempts, full recon |
+| `api_only` | Pure REST APIs, no frontend | JS extraction off, subdomain recon off, API modules only |
+| `thorough` | High-value targets, maximum coverage | All modules, multiple confirmation attempts, full recon |
 
-### Custom Profile
+```bash
+python blfinder.py -t https://shop.target.com -T token --profile ecommerce
+python blfinder.py -t https://api.bank.com    -T token --profile fintech
+python blfinder.py -t https://app.saas.com    -T token --profile saas
+```
 
-Create `profiles/myprofile.json`:
+**Custom profile** — create `profiles/myprofile.json`:
 
 ```json
 {
@@ -637,83 +356,66 @@ Create `profiles/myprofile.json`:
     "run_graphql_deep": true,
     "idor_range": 50,
     "idor_harvest": true,
-    "js_secrets": true
+    "js_secrets": true,
+    "deep_discovery": true,
+    "discovery_depth": 3
   },
   "flows": ["ecommerce_checkout", "funds_transfer"],
   "auto_flows": true,
   "priority_modules": ["price_manipulation", "idor_bola", "race_condition"],
-  "skip_modules": ["account_enumeration", "parameter_pollution"]
+  "skip_modules": ["account_enumeration", "parameter_pollution"],
+  "discovery": {
+    "business_tags": ["payment", "order", "refund"],
+    "no_wordlist": false,
+    "max_js_files": 50
+  }
 }
 ```
 
-```bash
-python blfinder.py -t https://target.com -T token --profile myprofile
-```
+### Persistent Database
 
----
-
-## 🗄️ Phase 5: Persistent Database
-
-BLFinder uses a local SQLite database to track findings across sessions. This makes it practical to work on the same program over days or weeks without re-reporting duplicates or losing context.
-
-### Database Operations
+Every scan writes to a local SQLite database. Duplicates are automatically filtered across sessions.
 
 ```bash
-# Run a scan and persist all findings
+# Tag findings with a program handle
 python blfinder.py -t https://target.com -T token \
   --db ~/.blfinder.db --program target_h1
 
-# Skip endpoints already confirmed vulnerable in previous scans
+# Skip endpoints already confirmed vulnerable
 python blfinder.py -t https://target.com -T token \
   --db ~/.blfinder.db --no-repeat
 
-# Print finding history summary
+# View history across all scans
 python blfinder.py --show-history --db ~/.blfinder.db
 
-# Search past findings
-python blfinder.py --search "price manipulation" --db ~/.blfinder.db
-python blfinder.py --search "IDOR" --db ~/.blfinder.db --program target_h1
+# Search past findings by keyword
+python blfinder.py --search "IDOR payment" --db ~/.blfinder.db
+python blfinder.py --search "race condition" --db ~/.blfinder.db --program target_h1
 ```
 
-### Database Schema
+**Database schema:**
 
 ```
-scans         ← scan_id, target, program, config, timestamps, finding_count
-findings      ← id, scan_id, title, severity, confirmed, confidence, status
-              ← endpoint, evidence, poc, program, created_at
-programs      ← handle, scope, notes, created_at
+scans     ← scan_id, target, program, config, timestamps, finding_count
+findings  ← id, scan_id, title, severity, confirmed, confidence, status,
+            endpoint, evidence, poc, program, created_at
+programs  ← handle, scope, notes, created_at
 ```
 
-### Finding Lifecycle
+**Finding lifecycle:** `new` → `exported` (after H1 submission) → `closed / duplicate / informative`
 
-```
-new → exported (after H1 submission) → closed / duplicate / informative
-```
+### HackerOne Integration
 
----
-
-## 🏴 Phase 5: HackerOne Integration
-
-BLFinder can push findings directly to HackerOne as draft reports via the H1 API. Drafts are created but not submitted — you review and submit manually.
-
-### Setup
-
-Get your API token from [HackerOne Account Settings](https://hackerone.com/settings/api_token/edit). The format is `username:api_token`.
-
-### Export After Scan
+Push findings directly to HackerOne as draft reports. Drafts are created but **not** submitted — you review and submit manually.
 
 ```bash
-# Auto-export new findings immediately after scanning
+# Auto-export new findings immediately after scan
 python blfinder.py -t https://target.com -T token \
   --db ~/.blfinder.db --program target_h1 \
   --export-h1 target_h1 \
   --h1-token yourusername:your_api_token
-```
 
-### Export from Database (No New Scan)
-
-```bash
-# Export all findings with status "new" for a program
+# Export from database only (no new scan)
 python blfinder.py \
   --export-h1 target_h1 \
   --h1-token yourusername:your_api_token \
@@ -721,46 +423,275 @@ python blfinder.py \
   --program target_h1
 ```
 
-Each finding generates a HackerOne report with:
-- Title from the finding
-- CVSS score, CWE, OWASP reference
-- Step-by-step reproduction (from the PoC)
-- Real request/response evidence (from the EvidencePackage)
-- Impact statement (from the impact assessor)
+Each exported report contains: title, CVSS, CWE, OWASP reference, step-by-step reproduction, real request/response pairs, and impact statement — all sourced from the live scan evidence.
 
----
+Get your API token at: [hackerone.com/settings/api_token/edit](https://hackerone.com/settings/api_token/edit). Format: `username:api_token`.
 
-## 📊 Phase 5: Live Dashboard
-
-The `--dashboard` flag launches a terminal UI that shows scan progress in real time.
+### Live Dashboard
 
 ```bash
 python blfinder.py -t https://target.com -T token --dashboard
+python blfinder.py -t https://target.com -T token --dashboard --force-ansi
 ```
 
-**Dashboard panels:**
-
 ```
-┌─ BLFinder v3.1 ─────────────────────────────────────────────────────────────┐
-│ Target: https://api.target.com                      Scan #42                │
-│ Endpoints: 18/64 scanned    Requests: 312    429s: 2    Elapsed: 00:04:12   │
-│ Current: /api/v1/orders/456                                                  │
-├─ Findings ──────────────────────────────────────────────────────────────────┤
-│ [CRITICAL ✓] IDOR — Path ID 456→455 returned different resource             │
-│ [HIGH]       BOPLA — expand=all exposes hidden fields                       │
-│ [CRITICAL ✓] Race Condition — 8/15 concurrent requests succeeded            │
-├─ Per-domain Rate ────────────────────────────────────────────────────────────│
-│ api.target.com   delay=0.42s   ok=310   429s=2                              │
-└─────────────────────── [p] Pause  [q] Quit ─────────────────────────────────┘
+┌─ BLFinder v3.1 ──────────────────────────────────────────────────────┐
+│ Target: https://api.target.com                        Scan #47        │
+│ Endpoints: 22/126 scanned  Requests: 847  429s: 3  Elapsed: 00:06:11 │
+│ Current: /api/v1/orders/455                                           │
+├─ Live Findings ───────────────────────────────────────────────────────┤
+│ [CRITICAL ✓] IDOR — Path ID 456→455 returned different resource       │
+│ [CRITICAL ✓] Race Condition — 8/15 concurrent requests succeeded      │
+│ [HIGH]       BOPLA — expand=all exposes 7 hidden fields               │
+│ [MEDIUM]     GraphQL Introspection enabled in production               │
+├─ Rate — api.target.com ───────────────────────────────────────────────┤
+│ delay=0.38s   ok=843   429s=3   (auto-backing off)                    │
+└──────────────────────── [p] Pause   [q] Quit ─────────────────────────┘
 ```
 
-Use `p` to pause scanning mid-scan (useful when you want to inspect a finding before continuing), `q` to stop.
+Press **`p`** to pause mid-scan (inspect a finding before continuing), **`q`** to stop cleanly.
+
+---
+
+## 📱 Installation
+
+### Termux (Android) — Recommended
+
+```bash
+# Step 1: Install Termux from F-Droid (NOT the Play Store — it's outdated there)
+# https://f-droid.org/en/packages/com.termux/
+
+# Step 2: Install dependencies
+pkg update && pkg upgrade -y
+pkg install python git -y
+pip install aiohttp --break-system-packages
+
+# Step 3: Clone the repository
+git clone https://github.com/Steven5233/BLfinder.git ~/BLfinder
+cd ~/BLfinder
+
+# Step 4: Verify
+python blfinder.py --help
+
+# Optional: headless crawl support (~300MB Chromium)
+pip install playwright --break-system-packages
+playwright install chromium
+```
+
+### Linux / macOS
+
+```bash
+git clone https://github.com/Steven5233/BLfinder.git
+cd BLfinder
+pip install aiohttp
+python blfinder.py --help
+
+# Optional: headless crawl
+pip install playwright && playwright install chromium
+```
+
+### Requirements
+
+| Requirement | Version |
+|---|---|
+| Python | 3.10+ |
+| aiohttp | Latest |
+| Playwright | Optional (headless crawl only) |
+| RAM | ~100 MB |
+| Storage | ~5 MB (+ ~300 MB for Chromium if headless) |
+
+No other mandatory dependencies. Runs on stock Python + aiohttp.
+
+---
+
+## ⚡ Quick Start
+
+```bash
+# 1 — Basic scan, smart discovery finds endpoints automatically
+python blfinder.py -t https://api.target.com
+
+# 2 — With your auth token
+python blfinder.py -t https://api.target.com \
+  -T "eyJhbGciOiJIUzI1NiJ9..."
+
+# 3 — Full IDOR confirmation (two accounts — highest-value flag)
+python blfinder.py \
+  -t https://api.target.com \
+  -T "user1_token" -T2 "user2_token" \
+  -e endpoints.json \
+  --html --json --md -o ~/results -v
+
+# 4 — Import from Burp, use profile, save to DB
+python blfinder.py \
+  -t https://shop.target.com \
+  -T user1_token -T2 user2_token \
+  --import-burp traffic.xml \
+  --profile ecommerce \
+  --db ~/.blfinder.db --program target_h1 \
+  --html --md -o ~/results
+
+# 5 — Full Phase 5+ professional scan
+python blfinder.py \
+  -t https://api.target.com \
+  -T user1_token -T2 user2_token \
+  --import-burp traffic.xml \
+  --profile thorough \
+  --deep-discovery --wordlist-depth 3 \
+  --business-tags payment,order,subscription \
+  --db ~/.blfinder.db --program target_h1 \
+  --dashboard \
+  --html --json --md -o ~/results
+
+# 6 — Discovery only — review before attacking
+python blfinder.py \
+  -t https://api.target.com -T mytoken \
+  --deep-discovery --wordlist-depth 2 \
+  --save-discovery endpoints.json \
+  --no-scan
+```
+
+Open `~/results/report.html` for a full interactive report: 7 tabs per finding including side-by-side request comparison, field-level diff, impact assessment, and a HackerOne-ready submission.
+
+---
+
+## 📖 All CLI Flags
+
+### Core
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-t`, `--target` | required | Target base URL |
+| `-T`, `--token` | — | Auth token — User 1 (primary account) |
+| `-T2`, `--token2` | — | Auth token — User 2 (enables cross-user IDOR confirmation) |
+| `-T3`, `--token3` | — | Auth token — User 3 (privilege chain testing) |
+| `-e`, `--endpoints` | — | Endpoints JSON file |
+| `-H`, `--header` | — | Extra request header, repeatable: `-H "X-Api-Key: abc"` |
+| `-c`, `--cookie` | — | Extra cookie, repeatable: `-c "session=abc"` |
+| `--proxy` | — | HTTP proxy URL: `http://127.0.0.1:8080` |
+| `-r`, `--rate` | `0.3` | Base delay between requests (seconds) |
+| `--timeout` | `20` | Per-request timeout (seconds) |
+| `--no-discover` | off | Disable smart endpoint discovery |
+| `--no-ssl-verify` | off | Disable TLS certificate verification |
+| `--fuzz-depth` | `2` | Nested JSON mutation depth |
+| `--min-confidence` | `40` | Drop findings below this confidence % |
+| `--confirm-attempts` | `2` | Re-verification attempts per finding |
+| `--no-scan` | off | Run discovery only, skip all attack modules |
+
+### Traffic Import
+
+| Flag | Description |
+|------|-------------|
+| `--import-burp FILE` | Import Burp Suite XML or JSON export |
+| `--import-har FILE` | Import browser HAR file |
+| `--import-mitmproxy FILE` | Import mitmproxy flows file |
+| `--import-filter REGEX` | Filter imported URLs by regex, e.g. `/api/` |
+| `--import-save FILE` | Save generated endpoints JSON to this path |
+
+### Profiles & Database
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--profile NAME` | — | Load settings profile (`ecommerce`, `fintech`, `saas`, `stealth`, `fast`, `graphql`, `api_only`, `thorough`) |
+| `--db PATH` | `~/.blfinder.db` | SQLite database path |
+| `--no-repeat` | off | Skip endpoints already confirmed vulnerable in DB |
+| `--program HANDLE` | — | Tag findings with this HackerOne programme handle |
+| `--export-h1 HANDLE` | — | Export new findings to HackerOne as drafts |
+| `--h1-token TOKEN` | — | HackerOne API token (`username:api_token`) |
+| `--show-history` | — | Print finding history from DB and exit |
+| `--search QUERY` | — | Search past findings by keyword and exit |
+
+### Dashboard
+
+| Flag | Description |
+|------|-------------|
+| `--dashboard` | Enable live TUI dashboard during scan |
+| `--force-ansi` | Force ANSI output (disable curses) |
+
+### Deep Discovery Engine
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--deep-discovery` | off | Enable full multi-layer discovery pipeline |
+| `--wordlist-depth N` | `2` | Wordlist depth: `1`=~200 paths … `5`=~10,000 paths |
+| `--discovery-depth N` | `2` | Inner engine depth (mirrors `--wordlist-depth`) |
+| `--no-robots` | off | Skip robots.txt / sitemap.xml |
+| `--no-js-ast` | off | Skip JS AST extraction |
+| `--no-openapi` | off | Skip OpenAPI/Swagger/Postman probing |
+| `--no-version-permute` | off | Skip API version permutation |
+| `--no-wordlist` | off | Skip wordlist layer entirely |
+| `--openapi-path PATH` | — | Extra spec path to probe (repeatable) |
+| `--proto-path FILE` | — | Local `.proto` file for gRPC extraction (repeatable) |
+| `--business-tags TAGS` | — | Comma-separated tags: `payment,order,admin` |
+| `--discovery-tags TAGS` | — | Alias for `--business-tags` (engine-level) |
+| `--save-discovery FILE` | — | Save discovered endpoints JSON before scanning |
+| `--use-headless` | off | Enable Playwright headless browser crawl |
+| `--headless-interact` | off | Click buttons/forms during headless crawl |
+| `--no-deep-discovery` | off | Disable engine; fall back to legacy regex crawl |
+| `--discovery-save FILE` | — | Outer-pipeline alias for `--save-discovery` |
+
+### Recon
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--recon` | off | Enable subdomain mapping + JS extraction before scan |
+| `--recon-only` | off | Run recon only, save `targets.json`, and exit |
+| `--js-secrets` | off | Enable JS file secret extraction |
+| `--subdomain-size N` | `50` | Subdomain wordlist size |
+| `--strict-validation` | off | Reject endpoints that don't return a real API response |
+
+### Flows & Auth
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--flow TEMPLATE` | — | Run named flow template (repeatable) |
+| `--flow-file FILE` | — | Load flow definitions from JSON file |
+| `--auto-flows` | off | Auto-detect app type and run relevant flows |
+| `--product-id N` | `1` | Product ID for e-commerce flow templates |
+| `--product-price N` | `99.99` | Product price for e-commerce flow templates |
+| `--oauth-url URL` | — | OAuth2 token endpoint |
+| `--oauth-id ID` | — | OAuth2 client_id |
+| `--oauth-secret SECRET` | — | OAuth2 client_secret |
+| `--oauth-grant TYPE` | `client_credentials` | OAuth2 grant type |
+| `--oauth-user USER` | — | Username for password grant |
+| `--oauth-pass PASS` | — | Password for password grant |
+| `--refresh-url URL` | — | Token refresh endpoint |
+| `--refresh-token TOKEN` | — | Initial refresh token value |
+| `--login-url URL` | — | Re-login URL (fallback for refresh) |
+| `--login-body JSON` | — | Re-login body as JSON string |
+| `--blind-idor` | off | Enable 5-oracle blind IDOR scanning |
+| `--samples N` | `4` | Oracle sample count per test |
+
+### Phase 4: Attack Surface
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--idor-range N` | `0` | Enable mass IDOR enumeration up to N IDs |
+| `--idor-harvest` | off | Harvest IDs from baseline responses |
+| `--idor-cross-endpoint` | off | Test harvested IDs against all endpoints |
+| `--idor-batch-size N` | `20` | Concurrent requests per IDOR batch |
+| `--websocket` | off | Enable WebSocket scanner |
+| `--ws-url URL` | — | Override WebSocket URL |
+| `--ws-race-count N` | `15` | Concurrent messages for WS race tests |
+| `--graphql-deep` | off | Enable full GraphQL deep scan |
+| `--version-scan` | off | Enable API version abuse scan |
+| `--classify` | off | Print business context attack plan and exit |
+
+### Output
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o`, `--output` | `.` | Output directory |
+| `--html` | off | Generate HTML report (default if no format specified) |
+| `--json` | off | Generate JSON report |
+| `--md` | off | Generate Markdown report |
+| `-v`, `--verbose` | off | Print every request in real time |
+| `--no-color` | off | Disable ANSI colours (for log files / CI) |
 
 ---
 
 ## 📋 Endpoints File Format
 
-Create `endpoints.json` from Burp Suite history, browser DevTools, or the `--import-save` flag:
+Build this with `--import-burp` / `--import-har` + `--import-save`. Manual format:
 
 ```json
 [
@@ -788,16 +719,6 @@ Create `endpoints.json` from Burp Suite history, browser DevTools, or the `--imp
     "params": {"limit": 10, "offset": 0}
   },
   {
-    "url": "/api/v1/profile",
-    "method": "PUT",
-    "body": {
-      "user_id": 100,
-      "name": "Test User",
-      "email": "test@example.com"
-    },
-    "params": {}
-  },
-  {
     "url": "/api/v1/payments",
     "method": "POST",
     "body": {
@@ -807,20 +728,30 @@ Create `endpoints.json` from Burp Suite history, browser DevTools, or the `--imp
       "order_id": 456
     },
     "params": {}
+  },
+  {
+    "url": "/api/v1/profile",
+    "method": "PUT",
+    "body": {
+      "user_id": 100,
+      "name": "Test User",
+      "email": "test@example.com"
+    },
+    "params": {}
   }
 ]
 ```
 
-**Pro tip:** The easiest way to build this file is now `--import-burp` or `--import-har` with `--import-save`. Browse the app in Burp, export, and import — no manual JSON editing.
+All keys are passed directly to the attack modules. Include every field the real application sends — BLFinder uses the body structure to understand which fields to mutate.
 
 ---
 
 ## 🔄 Flow Templates
 
-BLFinder v3.1 includes 11 pre-built multi-step flow templates. Run them with `--flow <name>`.
+11 pre-built multi-step flow templates. Run with `--flow <name>`.
 
-| Template Name | What It Tests |
-|---------------|---------------|
+| Template | What It Tests |
+|----------|---------------|
 | `ecommerce_checkout` | Add to cart → coupon → checkout → payment |
 | `ecommerce_refund` | Return initiation → refund confirmation |
 | `subscription_upgrade` | Plan selection → upgrade confirmation |
@@ -833,13 +764,13 @@ BLFinder v3.1 includes 11 pre-built multi-step flow templates. Run them with `--
 | `kyc_verification` | Submit → upload doc → verify status |
 | `api_key_creation` | Request key → activate |
 
-Each template attacks every marked step for price manipulation, negative quantity, coupon abuse, state machine abuse, mass assignment, workflow bypass, and race conditions on the final step.
+Each template attacks every marked step for: price manipulation, negative quantity, coupon abuse, state machine abuse, mass assignment, workflow bypass, and race condition on the final step.
 
-### Custom Flow File
+**Custom flow file:**
 
 ```json
 {
-  "name": "my_custom_flow",
+  "name": "my_flow",
   "steps": [
     {
       "id": "add_item",
@@ -871,35 +802,34 @@ Use `{{variable}}` to inject values extracted from earlier steps.
 ### Terminal Output
 
 ```
-[*] BLFinder v3.1 Phase 5 — Target: https://api.target.com
+[*] BLFinder v3.1 Phase 5+ — Target: https://api.target.com
 [*] 8 endpoints queued
 
-[*] Smart Discovery — crawling for endpoints...
-  [+] Discovered: https://api.target.com/api/v1
-  [+] Discovered: https://api.target.com/swagger.json
-  [*] Discovered 14 endpoints
+[*] Deep Discovery — running multi-layer pipeline...
+  [L1:robots]   15 endpoints found
+  [L2:js_ast]   3 endpoints found
+  [L2:js_regex] 106 endpoints found
+  [L4:wordlist] 2 endpoints found
+  [L5:dedup]    removed 0 duplicates
 
-[*] Total after discovery: 22 endpoints
+[*] Total after deep discovery: 126 endpoints (+125 new)
 [*] Database: ~/.blfinder.db (scan #47)
 [*] Verifying 3 findings...
 
-──────────────────────────────────────────────────────────────
- BLFinder v3.1 Phase 5 — Scan Complete
- Target     : https://api.target.com
- Date       : 2026-05-09 14:32:11
-──────────────────────────────────────────────────────────────
-  CRITICAL   2
-  HIGH       1
-  TOTAL      3
-──────────────────────────────────────────────────────────────
+──────────────────────────────────────────────────────
+ BLFinder v3.1 Phase 5+ — Scan Complete
+ Target  : https://api.target.com
+ Date    : 2026-05-14 14:32:11
+──────────────────────────────────────────────────────
+ CRITICAL  2
+ HIGH      1
+ TOTAL     3
+──────────────────────────────────────────────────────
 [*] Database: 3 new, 0 duplicates
 
-[CRITICAL] 1. IDOR — Path ID 456→455 returned different resource ✓ CONFIRMED
+[CRITICAL] IDOR — Path ID 456→455 returned different resource ✓ CONFIRMED
   Endpoint   : https://api.target.com/api/v1/orders/455
-  Category   : Business Logic — IDOR/BOLA
-  CWE/OWASP  : CWE-639 / API1:2023
-  Confidence : 91% — cross-user confirmed; status 403→200; size +1,240B
-  Evidence   : email, phone, address newly exposed  [CROSS-USER CONFIRMED]
+  Confidence : 91% — cross-user confirmed; 403→200; +1,240B; email + phone exposed
 ```
 
 ### HTML Report — 7 Tabs per Finding
@@ -908,9 +838,9 @@ Use `{{variable}}` to inject values extracted from earlier steps.
 |-----|---------|
 | **Overview** | Description, endpoint, confidence reasoning, FP analysis, recommendation |
 | **Evidence** | Side-by-side baseline vs attack request and response (live captured) |
-| **Diff** | Field-level JSON diff with color-coded change table |
+| **Diff** | Field-level JSON diff with colour-coded change table |
 | **Impact** | Sensitive data detected, privacy/financial/credential flags, record count |
-| **Reproduce** | Verified curl command, step-by-step manual guide |
+| **Reproduce** | Verified `curl` command, step-by-step manual guide |
 | **Raw HTTP** | Burp Suite importable format for all captured pairs |
 | **HackerOne** | Complete copy-paste ready submission with real endpoints and evidence |
 
@@ -918,7 +848,10 @@ Use `{{variable}}` to inject values extracted from earlier steps.
 
 ```json
 {
-  "meta": {"tool": "BLFinder", "version": "3.1", "target": "...", "scan_date": "..."},
+  "meta": {
+    "tool": "BLFinder", "version": "3.1",
+    "target": "https://api.target.com", "scan_date": "2026-05-14T14:32:11"
+  },
   "summary": {"total": 3, "CRITICAL": 2, "HIGH": 1},
   "findings": [
     {
@@ -927,11 +860,13 @@ Use `{{variable}}` to inject values extracted from earlier steps.
       "confidence": 91,
       "confirmed": true,
       "endpoint": "https://api.target.com/api/v1/orders/455",
+      "cwe": "CWE-639",
+      "cvss": 9.1,
+      "owasp": "API1:2023 Broken Object Level Authorization",
       "evidence_package": {
-        "endpoint": "https://api.target.com/api/v1/orders/455",
         "confirmed": true,
         "has_sensitive": true,
-        "sensitive_data": "`email`, `phone`, `address`",
+        "sensitive_data": "email, phone, address",
         "verified_curl": "curl -sk -X GET ...",
         "diff_summary": "Size +1240B | email (ADDED) | phone (ADDED)",
         "impact_score": 75,
@@ -948,58 +883,67 @@ Use `{{variable}}` to inject values extracted from earlier steps.
 
 ### Confidence Score
 
-| Score | Meaning | Action |
-|-------|---------|--------|
+| Score | Meaning | Recommended Action |
+|-------|---------|-------------------|
 | 80–100% | Very likely real | Report immediately |
 | 60–79% | Probably real | Manual verify first |
-| 40–59% | Possible — needs confirmation | Test manually, then report |
+| 40–59% | Possible | Test manually, then report |
 | < 40% | Low confidence | Dropped automatically |
 
 ### Confirmed vs Unconfirmed
 
 | Badge | Meaning |
 |-------|---------|
-| `✓ CONFIRMED` | Cross-user verified OR re-tested N times and reproduced consistently |
-| *(no badge)* | Detected heuristically — manual verification recommended before reporting |
+| `✓ CONFIRMED` | Cross-user verified **or** consistently reproduced across N re-tests |
+| *(none)* | Detected heuristically — manual verification recommended before reporting |
 
 ### False Positive Notes
-
-The `FP Notes` field explains why a finding might be wrong:
 
 | Note | Action |
 |------|--------|
 | `WAF/security block detected` | Disable VPN and re-test |
-| `Responses nearly identical` | Difference is likely noise — skip |
+| `Responses nearly identical` | Difference is noise — skip |
 | `Intermittent reproduction` | Re-run with `--confirm-attempts 3` |
-| `Server accepts everything (canary)` | Server has no validation at all — low value |
+| `Server accepts everything (canary)` | No validation at all — low value |
 
 ---
 
-## 🏆 Bug Bounty Tips
+## 🏆 Bug Bounty Playbook
 
-### Getting the Best Results
+### Step 1 — Import real traffic (2 minutes)
 
-**1. Import your traffic — don't write endpoints.json by hand**
 ```bash
-# Browse the app in Burp, export, import — takes 2 minutes
+# Browse the app in Burp, export, import — infinitely better than guessing
 python blfinder.py -t https://target.com -T token \
-  --import-burp session.xml --import-save endpoints.json
+  --import-burp session.xml \
+  --import-filter "/api/" \
+  --import-save endpoints.json
 ```
 
-**2. Always use two accounts — the most important flag**
+### Step 2 — Use two accounts (most important flag)
+
 ```bash
-# Creates CONFIRMED findings — much higher payouts than heuristic ones
-python blfinder.py -T "account1_token" -T2 "account2_token"
+# CONFIRMED findings pay more than heuristic ones
+python blfinder.py -T "account1_token" -T2 "account2_token" ...
 ```
 
-**3. Use a profile matched to the target**
+### Step 3 — Pick the right profile
+
 ```bash
 --profile ecommerce   # Shopping / marketplace
 --profile fintech     # Banking / payments
 --profile saas        # B2B SaaS / admin portals
+--profile thorough    # Maximum coverage, high-value targets
 ```
 
-**4. Use the database to manage multi-day engagements**
+### Step 4 — Enable deep discovery on API-heavy targets
+
+```bash
+--deep-discovery --wordlist-depth 3 --business-tags payment,order,subscription
+```
+
+### Step 5 — Manage multi-day engagements with the database
+
 ```bash
 # Day 1 — scan scope A
 python blfinder.py ... --db ~/.blfinder.db --program target_h1
@@ -1007,33 +951,52 @@ python blfinder.py ... --db ~/.blfinder.db --program target_h1
 # Day 2 — scan scope B, skip already-found vulns
 python blfinder.py ... --db ~/.blfinder.db --program target_h1 --no-repeat
 
-# Review findings any time
+# Any time — review findings
 python blfinder.py --show-history --db ~/.blfinder.db
 ```
 
-**5. Use the HackerOne tab in the HTML report**
-The report's HackerOne tab generates a complete submission — real endpoint URLs, real request/response pairs, real impact. Do not write the report manually.
+### Step 6 — Use the HackerOne tab, not a blank report
 
-**6. Re-run without VPN if findings show WAF notes**
-WAF blocks from VPN IPs cause false positives. Disable VPN, re-run, compare results.
+The HTML report's **HackerOne tab** generates a complete submission — real endpoint URLs, real request/response pairs, real impact. Don't write the report from scratch.
 
-**7. Run flow templates on e-commerce targets**
-```bash
---flow ecommerce_checkout --flow ecommerce_refund --auto-flows
-```
+### Step 7 — Re-run without VPN if findings show WAF notes
+
+WAF blocks from VPN exit nodes inflate false positives. Disable VPN, re-run, compare.
 
 ### Typical Payout Ranges
 
-| Finding Type | Typical Payout |
+| Finding Type | Typical Range |
 |---|---|
-| IDOR/BOLA (confirmed, PII exposed) | $500 – $10,000+ |
-| Price/Quantity Manipulation | $500 – $5,000 |
+| IDOR / BOLA (confirmed, PII exposed) | $500 – $10,000+ |
+| Price / Quantity Manipulation | $500 – $5,000 |
 | Race Condition (double-spend) | $500 – $5,000 |
 | JWT alg:none bypass | $1,000 – $8,000 |
 | Mass Assignment (privilege escalation) | $500 – $3,000 |
-| Workflow/MFA bypass | $200 – $2,000 |
 | State Machine Abuse | $300 – $3,000 |
+| Workflow / MFA Bypass | $200 – $2,000 |
 | OAuth2 Vulnerability | $500 – $5,000 |
+
+---
+
+## 🛠️ Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `No module named aiohttp` | `pip install aiohttp --break-system-packages` |
+| `Connection refused` | Check URL; try `--no-ssl-verify` |
+| `All timeouts` | `--timeout 30` |
+| `Too many 429s` | `-r 2.0` or `--profile stealth` |
+| `0 findings, 0 endpoints tested` | Add `-e endpoints.json` or `--import-burp`, and `-T token` |
+| `120/128 endpoints skipped (soft-404)` | Apply `scanner_patch.py` — raises soft-404 threshold from 0.85 → 0.97 |
+| `RuntimeWarning: coroutine never awaited` | Apply `scanner_patch.py` — fixes lambda bug in `_run_endpoint_checks` |
+| `WAF FP notes on all findings` | Disable VPN and re-run |
+| `Profile not found` | Check `profiles/NAME.json` exists; use `~/.blfinder/profiles/` as alternative |
+| `Dashboard blank` | Try `--force-ansi` to switch from curses to ANSI mode |
+| `H1 export fails` | Token format must be `username:api_token`, not just the token |
+| `Database locked` | Only run one instance per `--db` path at a time |
+| `Playwright not found` | `pip install playwright --break-system-packages && playwright install chromium` |
+| `Permission denied` | `chmod +x blfinder.py` |
+| `Termux storage issues` | `termux-setup-storage`, use `~/storage/downloads/` for output |
 
 ---
 
@@ -1042,12 +1005,12 @@ WAF blocks from VPN IPs cause false positives. Disable VPN, re-run, compare resu
 ```
 BLfinder/
 │
-├── blfinder.py                        ← CLI entry point (all phase flags)
-├── endpoints.example.json             ← Template for endpoint definitions
-├── flows.example.json                 ← Template for custom flow definitions
+├── blfinder.py                      ← CLI entry point — all phase flags
+├── endpoints.example.json           ← Endpoint definition template
+├── flows.example.json               ← Custom flow definition template
 ├── README.md
 │
-├── profiles/                          ← Phase 5: Scan profile JSON files
+├── profiles/                        ← Phase 5: Scan profile JSON files
 │   ├── ecommerce.json
 │   ├── fintech.json
 │   ├── saas.json
@@ -1058,87 +1021,102 @@ BLfinder/
 │   └── thorough.json
 │
 └── core/
-    ├── __init__.py
-    ├── models.py                      ← Shared dataclasses (Finding, ScanConfig, PoC)
-    ├── scanner.py                     ← All 21 detection modules + evidence wiring
-    ├── confidence.py                  ← Confidence scoring & FP reduction engine
-    ├── poc.py                         ← Proof of concept generator
-    ├── verifier.py                    ← Finding re-verification loop
-    ├── reporter.py                    ← Report dispatcher (HTML/JSON/Markdown)
+    ├── models.py                    ← Shared dataclasses (Finding, ScanConfig, PoC)
+    ├── scanner.py                   ← All 21 detection modules + evidence wiring
+    ├── confidence.py                ← Confidence scoring + FP reduction engine
+    ├── poc.py                       ← Proof of Concept generator
+    ├── verifier.py                  ← Finding re-verification loop
+    ├── reporter.py                  ← Report dispatcher (HTML / JSON / Markdown)
     │
-    ├── evidence/                      ← Phase 2: Evidence capture system
-    │   ├── capture.py                 ← EvidencePackage + EvidenceCapture class
-    │   ├── http_recorder.py           ← Burp/curl/Python/HTTPie format converter
-    │   ├── diff_engine.py             ← Field-level JSON diff engine
-    │   └── impact_assessor.py        ← PII/credential/financial impact scoring
+    ├── discovery/                   ← Phase 5+: Deep Discovery Engine
+    │   ├── engine.py                ← DeepDiscoveryEngine orchestrator
+    │   ├── models.py                ← DiscoveryConfig, DiscoveredEndpoint
+    │   ├── cli_args.py              ← add_discovery_args() / apply_discovery_args()
+    │   ├── scanner_patch.py         ← Monkey-patch for coroutine + soft-404 bugs
+    │   ├── layer1_surface/
+    │   │   └── robots_parser.py     ← robots.txt + sitemap.xml parser
+    │   ├── layer2_static/
+    │   │   ├── js_ast_parser.py     ← JS AST + regex endpoint extractor
+    │   │   └── openapi_parser.py    ← OpenAPI / Swagger / Postman parser
+    │   ├── layer4_wordlist/
+    │   │   ├── smart_wordlist.py    ← Context-seeded wordlist prober
+    │   │   └── version_permuter.py  ← API version shadow discovery
+    │   └── layer5_dedup/
+    │       └── normaliser.py        ← URL normalisation + deduplication
     │
-    ├── reporting/                     ← Phase 2: Report generators
-    │   ├── hackerone_formatter.py     ← HackerOne-ready markdown generator
-    │   └── evidence_report.py        ← HTML report with 7-tab evidence layout
+    ├── evidence/                    ← Phase 2: Evidence capture
+    │   ├── capture.py               ← EvidencePackage + EvidenceCapture class
+    │   ├── http_recorder.py         ← Burp / curl / Python / HTTPie converter
+    │   ├── diff_engine.py           ← Field-level JSON diff engine
+    │   └── impact_assessor.py       ← PII / credential / financial impact scoring
     │
-    ├── analysis/                      ← Phase 1: Semantic analysis
-    │   ├── semantic_diff.py           ← JSON-aware response comparison
-    │   └── field_extractor.py         ← Volatile field learning + detection
+    ├── reporting/                   ← Phase 2: Report generators
+    │   ├── evidence_report.py       ← HTML report with 7-tab evidence layout
+    │   └── hackerone_formatter.py   ← HackerOne-ready markdown generator
     │
-    ├── oracles/                       ← Phase 1: Oracle-based detection
-    │   ├── timing_oracle.py           ← Statistical timing oracle
-    │   └── blind_idor.py              ← 5-oracle blind IDOR scanner
+    ├── analysis/                    ← Phase 1: Semantic analysis
+    │   ├── semantic_diff.py         ← JSON-aware response comparison
+    │   └── field_extractor.py       ← Volatile field learning + detection
     │
-    ├── auth/                          ← Phase 1: Session management
-    │   ├── session_manager.py         ← Token refresh + CSRF extraction
-    │   └── oauth_handler.py           ← OAuth2 flow + vulnerability testing
+    ├── oracles/                     ← Phase 1: Oracle-based detection
+    │   ├── timing_oracle.py         ← Statistical timing oracle
+    │   └── blind_idor.py            ← 5-oracle blind IDOR scanner
     │
-    ├── flows/                         ← Phase 1: Multi-step flows
-    │   ├── flow_replayer.py           ← Multi-step flow executor + attack engine
-    │   └── flow_templates.py          ← 11 pre-built business flow templates
+    ├── auth/                        ← Phase 1: Session management
+    │   ├── session_manager.py       ← Token refresh + CSRF extraction
+    │   └── oauth_handler.py         ← OAuth2 flow + vulnerability testing
     │
-    ├── validation/                    ← Phase 3: Endpoint validation
-    │   ├── endpoint_validator.py      ← Soft-404, WAF, not-GraphQL detection
-    │   └── response_classifier.py    ← Response class + confidence cap
+    ├── flows/                       ← Phase 1: Multi-step flows
+    │   ├── flow_replayer.py         ← Multi-step executor + attack engine
+    │   └── flow_templates.py        ← 11 pre-built business flow templates
     │
-    ├── recon/                         ← Phase 3: Reconnaissance
-    │   ├── subdomain_mapper.py        ← Subdomain discovery + API surface scoring
-    │   └── js_secret_extractor.py    ← JS file secret pattern extraction
+    ├── validation/                  ← Phase 3: Endpoint validation
+    │   ├── endpoint_validator.py    ← Soft-404, WAF, not-GraphQL detection
+    │   └── response_classifier.py  ← Response class + confidence capping
     │
-    ├── modules/                       ← Phase 4: Expanded attack surface
-    │   ├── idor_mass_enum.py          ← Mass IDOR enumeration + ID harvesting
-    │   ├── graphql_deep.py            ← GraphQL schema traversal + field IDOR
-    │   ├── websocket_scanner.py       ← WebSocket vulnerability scanner
-    │   └── api_version_abuse.py       ← Version endpoint discovery + downgrade
+    ├── recon/                       ← Phase 3: Reconnaissance
+    │   ├── subdomain_mapper.py      ← Subdomain discovery + API surface scoring
+    │   └── js_secret_extractor.py  ← JS file secret pattern extraction
     │
-    ├── intelligence/                  ← Phase 4: Business context
-    │   └── business_classifier.py    ← Endpoint classification + attack prioritization
+    ├── modules/                     ← Phase 4: Expanded attack surface
+    │   ├── idor_mass_enum.py        ← Mass IDOR enumeration + ID harvesting
+    │   ├── graphql_deep.py          ← GraphQL schema traversal + field IDOR
+    │   ├── websocket_scanner.py     ← WebSocket vulnerability scanner
+    │   └── api_version_abuse.py     ← Version endpoint discovery + downgrade
     │
-    ├── integrations/                  ← Phase 5: Traffic import
-    │   └── burp_importer.py           ← Burp XML/JSON, HAR, mitmproxy parser
+    ├── intelligence/                ← Phase 4: Business context
+    │   └── business_classifier.py  ← Endpoint classification + attack prioritisation
     │
-    ├── storage/                       ← Phase 5: Persistence
-    │   └── scan_database.py           ← SQLite DB, dedup, H1 export, history
+    ├── integrations/                ← Phase 5: Traffic import
+    │   └── burp_importer.py         ← Burp XML/JSON, HAR, mitmproxy parser
     │
-    └── tui/                           ← Phase 5: Live dashboard
-        └── live_dashboard.py          ← Curses/ANSI TUI dashboard + pause support
+    ├── storage/                     ← Phase 5: Persistence
+    │   └── scan_database.py         ← SQLite DB, dedup, H1 export, history
+    │
+    └── tui/                         ← Phase 5: Live dashboard
+        └── live_dashboard.py        ← Curses / ANSI TUI + pause support
 ```
 
 ---
 
-## 🛠️ Troubleshooting
+## 🤝 Contributing
 
-| Problem | Solution |
-|---------|----------|
-| `No module named aiohttp` | `pip install aiohttp --break-system-packages` |
-| `Connection refused` | Check URL, try `--no-ssl-verify` |
-| `All timeouts` | Increase: `--timeout 30` |
-| `Too many 429s` | Increase rate: `-r 2.0` or use `--profile stealth` |
-| `0 findings` | Add endpoints with `-e` or `--import-burp`, add auth token with `-T` |
-| `WAF FP notes on all findings` | Disable VPN and re-run |
-| `Permission denied` | `chmod +x blfinder.py` |
-| `Termux storage` | `termux-setup-storage` then use `~/storage/downloads/` |
-| `Database locked` | Only run one instance per `--db` path at a time |
-| `H1 export fails` | Check token format is `username:api_token`, not just the token |
-| `Dashboard blank` | Try `--force-ansi` to switch from curses to ANSI mode |
-| `Profile not found` | Check `profiles/NAME.json` exists; run without profile flag to proceed |
-| `Evidence package missing` | Ensure `core/evidence/` directory is present |
-| `HackerOne tab empty` | Requires `core/reporting/` directory |
+Contributions are welcome. To add a new detection module:
+
+1. Add your check as `async def _check_yourmodule(...) -> list[Finding]` in `core/scanner.py`
+2. Use `self._new_evidence()` and `self._req_ev()` to capture live HTTP evidence
+3. Call `self._build_pkg()` and `self._attach(f, pkg)` before `_finalize_finding()`
+4. Add the module to the `all_checks` list in `_run_endpoint_checks()` — **as a lambda, not a direct call** (see `core/discovery/scanner_patch.py` for why)
+5. Add a PoC builder in `core/poc.py` matching your category string
+6. Open a pull request describing what the module detects, with at least one real-world example
+
+**Every finding must include:**
+- A canary / FP check where applicable
+- A `cwe`, `cvss`, and `owasp` reference
+- Evidence capture via `_req_ev()` for both baseline and attack requests
+- A clear `recommendation` field
+
+To add a scan profile, create `profiles/NAME.json` following the schema in the [Scan Profiles](#scan-profiles) section.
 
 ---
 
@@ -1149,28 +1127,7 @@ BLFinder is built by **Adoyi Steven (séç gúy)**, a cybersecurity researcher a
 - **GitHub:** [Steven5233](https://github.com/Steven5233)
 - **Repository:** [BLFinder](https://github.com/Steven5233/BLfinder)
 
-BLFinder started as a personal tool to automate the business logic checks that manual testers run on every engagement — the checks that generic scanners consistently miss. It evolved into a full platform after consistently finding high-severity bugs that Burp Suite's active scanner walked past. Phase 5 adds the operational layer that makes it practical for sustained, multi-day bug bounty engagements.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome. To add a new detection module:
-
-1. Add your check method to `core/scanner.py` as `async def _check_yourmodule(...) -> list[Finding]`
-2. Use `self._new_evidence()` and `self._req_ev()` to capture HTTP evidence
-3. Call `self._build_pkg()` and `self._attach(f, pkg)` before `_finalize_finding()`
-4. Add the check to `_run_endpoint_checks()` in `scanner.py`
-5. Add a PoC builder in `core/poc.py` matching your category string
-6. Open a pull request with a description of what the module detects and at least one real-world example
-
-**Every finding must include:**
-- A canary/FP check where applicable
-- A `cwe`, `cvss`, and `owasp` reference
-- Evidence capture via `_req_ev()` for baseline and attack requests
-- A clear `recommendation` field
-
-To add a new scan profile, create `profiles/NAME.json` following the schema in the [Custom Profile](#custom-profile) section.
+BLFinder started as a personal tool to automate the business logic checks that manual testers run on every engagement — the checks that generic scanners walk straight past. It evolved into a full platform after consistently finding high-severity bugs that Burp Suite's active scanner missed. Phase 5 adds the professional operational layer for sustained, multi-day bug bounty engagements. Phase 5+ adds a discovery engine that finds the endpoints other tools never even know exist.
 
 ---
 
@@ -1185,7 +1142,7 @@ and/or sell copies of the Software, subject to the following conditions:
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 The author is not responsible for any misuse or damage caused by this tool.
-Use only on systems you own or have explicit authorization to test.
+Use only on systems you own or have explicit authorisation to test.
 ```
 
 ---
@@ -1196,7 +1153,7 @@ Use only on systems you own or have explicit authorization to test.
 - [PortSwigger Web Security Academy](https://portswigger.net/web-security) — research references
 - [HackerOne Hacktivity](https://hackerone.com/hacktivity) — real-world bug patterns
 - [Intigriti Blog](https://blog.intigriti.com) — business logic research
-- The bug bounty community for documenting what automated tools miss
+- The bug bounty community — for documenting what automated tools miss
 
 ---
 
@@ -1204,8 +1161,8 @@ Use only on systems you own or have explicit authorization to test.
 
 **Built for hunters. Runs on a phone. Reports with proof. Remembers everything.**
 
-*If this tool helped you get a bounty, consider starring the repo ⭐*
+*If BLFinder found you a bounty, a ⭐ on the repo is always appreciated.*
 
-**[⭐ Star on GitHub](https://github.com/Steven5233/BLfinder) · [🐛 Report Issues](https://github.com/Steven5233/BLfinder/issues) · [🍴 Fork](https://github.com/Steven5233/BLfinder/fork)**
+**[⭐ Star on GitHub](https://github.com/Steven5233/BLfinder) · [🐛 Issues](https://github.com/Steven5233/BLfinder/issues) · [🍴 Fork](https://github.com/Steven5233/BLfinder/fork)**
 
 </div>
