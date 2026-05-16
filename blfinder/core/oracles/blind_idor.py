@@ -1,90 +1,129 @@
 """
-BLFinder v3.0 — core/oracles/blind_idor.py
+BLFinder v3.1 — core/oracles/blind_idor.py
 Blind IDOR Detection via Multi-Oracle Analysis
-
-Detects IDOR vulnerabilities even when the server returns identical-looking
-responses for owned vs non-owned resources. Uses five oracle channels:
-
-  1. STATUS  — HTTP status code differences
-  2. SIZE    — response body size differences
-  3. ERROR   — "forbidden" vs "not found" message analysis
-  4. TIMING  — server response time differences (corroborated only)
-  5. CROSS   — cross-user token confirmation (strongest signal)
-
-Confirmed IDORs require signal from >=2 oracles OR 1 cross-user confirmation.
-All findings include FP analysis before being returned.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import statistics
+import string
 import hashlib
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlunparse
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Tuning constants
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TIMING_THRESHOLD    = 0.080   # seconds — minimum timing delta to count as oracle
+_SIZE_THRESHOLD      = 25      # bytes  — minimum size delta in _run_all_oracles
+
+# Minimum size delta for header injection findings specifically.
+# Kept higher than _SIZE_THRESHOLD because header injection produces more noise.
+MIN_SIZE_DELTA_BYTES = 20
+
+# Minimum number of oracle signals required for a header injection finding.
+# 1 oracle (status change alone) is insufficient — CDNs/WAFs echo headers.
+MIN_ORACLE_COUNT_HEADER = 2
+
+# HTTP statuses that make a baseline comparison meaningless.
+# 0   = connection failure / timeout
+# 5xx = server error (unreliable, may vary per request)
+# 408 = request timeout
+# 429 = rate limited (response body varies)
+INVALID_BASELINE_STATUSES = frozenset({0, 408, 429, 500, 502, 503, 504})
+
+# Methods that require authentication — skip if no token is provided.
+# These always fail unauthenticated, producing status-0 baselines.
+SKIP_UNAUTHENTICATED_METHODS = frozenset({"DELETE", "PUT", "PATCH"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data models
+# ─────────────────────────────────────────────────────────────────────────────
+
 @dataclass
 class OracleSignal:
-    name: str
-    triggered: bool = False
-    detail: str = ""
-    confidence_contribution: int = 0
+    name:                     str
+    triggered:                bool = False
+    detail:                   str  = ""
+    confidence_contribution:  int  = 0
 
 
 @dataclass
 class BlindIDORResult:
-    is_idor: bool = False
-    confidence: int = 0
-    confirmed: bool = False
-    signals: list[OracleSignal] = field(default_factory=list)
-    oracles_triggered: list[str] = field(default_factory=list)
-    timing_delta_ms: float = 0.0
-    size_delta_bytes: int = 0
-    status_owned: int = 0
-    status_tested: int = 0
-    error_diff: str = ""
-    owned_id: str = ""
-    tested_id: str = ""
-    owned_url: str = ""
-    tested_url: str = ""
-    method: str = "GET"
-    parameter: str = ""
-    fp_signals: list[str] = field(default_factory=list)
-    fp_risk: str = "LOW"
-    evidence: str = ""
-    title: str = ""
-    recommendation: str = (
+    is_idor:            bool              = False
+    confidence:         int               = 0
+    confirmed:          bool              = False
+    signals:            list[OracleSignal] = field(default_factory=list)
+    oracles_triggered:  list[str]         = field(default_factory=list)
+    timing_delta_ms:    float             = 0.0
+    size_delta_bytes:   int               = 0
+    status_owned:       int               = 0
+    status_tested:      int               = 0
+    error_diff:         str               = ""
+    owned_id:           str               = ""
+    tested_id:          str               = ""
+    owned_url:          str               = ""
+    tested_url:         str               = ""
+    method:             str               = "GET"
+    parameter:          str               = ""
+    fp_signals:         list[str]         = field(default_factory=list)
+    fp_risk:            str               = "LOW"
+    evidence:           str               = ""
+    title:              str               = ""
+    recommendation:     str               = (
         "Enforce server-side ownership checks. Verify the authenticated user owns "
         "the resource before returning any data, timing information, or error details. "
-        "Use consistent error messages for 'not found' and 'forbidden' to prevent oracle leakage."
+        "Use consistent error messages for 'not found' and 'forbidden' to prevent "
+        "oracle leakage."
     )
 
 
-_TIMING_THRESHOLD = 0.080
-_SIZE_THRESHOLD = 25
+# ─────────────────────────────────────────────────────────────────────────────
+# Pattern libraries
+# ─────────────────────────────────────────────────────────────────────────────
 
 _RESOURCE_EXISTS_PATTERNS = [
-    re.compile(r'\baccess\s+denied\b', re.I),
-    re.compile(r'\bforbidden\b', re.I),
-    re.compile(r'\bnot\s+authorized\b', re.I),
-    re.compile(r'\bunauthorized\b', re.I),
-    re.compile(r'\bpermission\s+denied\b', re.I),
-    re.compile(r'\byou\s+don.t\s+have\s+access\b', re.I),
+    re.compile(r'\baccess\s+denied\b',              re.I),
+    re.compile(r'\bforbidden\b',                    re.I),
+    re.compile(r'\bnot\s+authorized\b',             re.I),
+    re.compile(r'\bunauthorized\b',                 re.I),
+    re.compile(r'\bpermission\s+denied\b',          re.I),
+    re.compile(r'\byou\s+don.t\s+have\s+access\b',  re.I),
     re.compile(r'\binsufficien\w+\s+permissions?\b', re.I),
 ]
 
 _RESOURCE_NOTFOUND_PATTERNS = [
-    re.compile(r'\bnot\s+found\b', re.I),
-    re.compile(r'\bdoes\s+not\s+exist\b', re.I),
-    re.compile(r'\bno\s+such\b', re.I),
-    re.compile(r'\binvalid\s+id\b', re.I),
+    re.compile(r'\bnot\s+found\b',          re.I),
+    re.compile(r'\bdoes\s+not\s+exist\b',   re.I),
+    re.compile(r'\bno\s+such\b',            re.I),
+    re.compile(r'\binvalid\s+id\b',         re.I),
     re.compile(r'\bresource\s+unavailable\b', re.I),
-    re.compile(r'\bcould\s+not\s+find\b', re.I),
+    re.compile(r'\bcould\s+not\s+find\b',   re.I),
 ]
 
+# Headers to inject during header injection scan
+_INJECTION_HEADERS = [
+    {"X-User-Id":          "1"},
+    {"X-Account-Id":       "1"},
+    {"X-Admin-User":       "true"},
+    {"X-Internal-User":    "1"},
+    {"X-Forwarded-User":   "admin"},
+    {"X-Original-User-Id": "1"},
+    {"X-Impersonate-User": "1"},
+    {"X-Sudo":             "true"},
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BlindIDORScanner
+# ─────────────────────────────────────────────────────────────────────────────
 
 class BlindIDORScanner:
     """
@@ -93,20 +132,22 @@ class BlindIDORScanner:
     """
 
     def __init__(self, scanner):
-        self._r = scanner._request
+        self._r      = scanner._request
         self._config = scanner.config
+
+    # ── Public interface ──────────────────────────────────────────────────────
 
     async def scan_path(
         self,
-        url: str,
-        method: str = "GET",
-        body: dict | None = None,
-        token_owned: str = "",
-        token_other: str = "",
-        samples: int = 4,
+        url:         str,
+        method:      str       = "GET",
+        body:        dict | None = None,
+        token_owned: str       = "",
+        token_other: str       = "",
+        samples:     int       = 4,
     ) -> list[BlindIDORResult]:
         results = []
-        parsed = urlparse(url)
+        parsed   = urlparse(url)
         segments = parsed.path.split("/")
 
         for idx, seg in enumerate(segments):
@@ -118,7 +159,9 @@ class BlindIDORScanner:
                 for test_id in _adjacent_ids(original_id)[:3]:
                     new_segs = segments[:]
                     new_segs[idx] = str(test_id)
-                    test_url = urlunparse(parsed._replace(path="/".join(new_segs)))
+                    test_url = urlunparse(
+                        parsed._replace(path="/".join(new_segs))
+                    )
                     r = await self._run_all_oracles(
                         owned_url=url, test_url=test_url,
                         method=method, owned_body=body, test_body=body,
@@ -132,12 +175,14 @@ class BlindIDORScanner:
 
             elif re.match(
                 r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-                seg, re.I
+                seg, re.I,
             ):
                 for test_uuid in _test_uuids(seg):
                     new_segs = segments[:]
                     new_segs[idx] = test_uuid
-                    test_url = urlunparse(parsed._replace(path="/".join(new_segs)))
+                    test_url = urlunparse(
+                        parsed._replace(path="/".join(new_segs))
+                    )
                     r = await self._run_all_oracles(
                         owned_url=url, test_url=test_url,
                         method=method, owned_body=body, test_body=body,
@@ -153,12 +198,12 @@ class BlindIDORScanner:
 
     async def scan_body(
         self,
-        url: str,
-        method: str,
-        body: dict,
+        url:         str,
+        method:      str,
+        body:        dict,
         token_owned: str = "",
         token_other: str = "",
-        samples: int = 4,
+        samples:     int = 4,
     ) -> list[BlindIDORResult]:
         results = []
         id_keys = [
@@ -186,103 +231,296 @@ class BlindIDORScanner:
 
     async def scan_header_injection(
         self,
-        url: str,
-        method: str = "GET",
-        body: dict | None = None,
-        token_owned: str = "",
+        url:         str,
+        method:      str       = "GET",
+        body:        dict | None = None,
+        token_owned: str       = "",
     ) -> list[BlindIDORResult]:
+        """
+        Tests whether injecting user-context headers changes the server's
+        response in a way that suggests the header is being trusted for
+        authorization decisions.
+
+        Guards applied (all new in v3.1):
+          - Skip destructive methods without auth token
+          - Validate baseline status before comparing
+          - Canary header check (skip if endpoint reacts to all headers)
+          - Minimum size delta of 20 bytes
+          - Minimum 2 oracle signals
+          - 403 probe = server correctly rejected injection (not IDOR)
+        """
         results = []
-        baseline_status, _, baseline_body, _ = await self._r(
-            method, url,
-            json=body if body else None,
-            token_override=token_owned or None,
-        )
 
-        injection_headers = [
-            {"X-User-Id": "1"},
-            {"X-Account-Id": "1"},
-            {"X-Admin-User": "true"},
-            {"X-Internal-User": "1"},
-            {"X-Forwarded-User": "admin"},
-            {"X-Original-User-Id": "1"},
-            {"X-Impersonate-User": "1"},
-            {"X-Sudo": "true"},
-        ]
+        # ── Guard 1: Skip destructive methods without auth token ──────────────
+        # DELETE/PUT/PATCH without a token will almost always fail the
+        # connection (status 0), making any comparison meaningless.
+        if method.upper() in SKIP_UNAUTHENTICATED_METHODS and not token_owned:
+            if self._config.verbose:
+                print(
+                    f"  [blind_idor] SKIP header injection — "
+                    f"{method} without auth token: {url[:60]}"
+                )
+            return results
 
-        for hdr in injection_headers:
-            s, _, resp_body, _ = await self._r(
+        # ── Take baseline ─────────────────────────────────────────────────────
+        try:
+            baseline_status, _, baseline_body, _ = await self._r(
                 method, url,
                 json=body if body else None,
-                headers=hdr,
                 token_override=token_owned or None,
             )
+        except Exception:
+            return results
+
+        # ── Guard 2: Validate baseline status ─────────────────────────────────
+        # Status 0 = connection failure. Any probe response compared against
+        # a failed baseline will look like a "change" — this is the root cause
+        # of every false positive in the Twilio scan.
+        if baseline_status in INVALID_BASELINE_STATUSES:
+            if self._config.verbose:
+                print(
+                    f"  [blind_idor] SKIP header injection — "
+                    f"invalid baseline status {baseline_status}: {url[:60]}"
+                )
+            return results
+
+        # ── Guard 3: Canary header validation ─────────────────────────────────
+        # Send a completely random header. If it changes the response too,
+        # the endpoint reacts to ALL unknown headers — probes are unreliable.
+        canary_triggered = await self._canary_check(
+            url, method, body, token_owned, baseline_status, baseline_body
+        )
+        if canary_triggered:
+            if self._config.verbose:
+                print(
+                    f"  [blind_idor] SKIP header injection — "
+                    f"canary triggered (endpoint reacts to all unknown headers): "
+                    f"{url[:60]}"
+                )
+            return results
+
+        # ── Run injection probes ──────────────────────────────────────────────
+        for hdr in _INJECTION_HEADERS:
             hdr_name = list(hdr.keys())[0]
             hdr_val  = list(hdr.values())[0]
 
+            try:
+                s, _, resp_body, _ = await self._r(
+                    method, url,
+                    json=body if body else None,
+                    headers=hdr,
+                    token_override=token_owned or None,
+                )
+            except Exception:
+                continue
+
+            # No change at all — not interesting
             if s == baseline_status and not _responses_differ(baseline_body, resp_body):
                 continue
+
+            # WAF block — not a finding
             if _is_waf_block(resp_body):
                 continue
 
+            # ── Guard 4: 403 probe = server rejected the injection ─────────────
+            # A 403 response to the injected header means the server SAW the
+            # header and correctly rejected it. This is NOT an IDOR.
+            # The only valid 403 case is when the baseline was ALSO 403 (meaning
+            # the endpoint normally requires auth and the header didn't help).
+            if s == 403 and baseline_status != 403:
+                if self._config.verbose:
+                    print(
+                        f"  [blind_idor] SKIP {hdr_name} — "
+                        f"probe returned 403 (server correctly rejected injection)"
+                    )
+                continue
+
+            # ── Guard 5: Minimum size delta ───────────────────────────────────
+            size_delta = len(resp_body) - len(baseline_body)
+            status_changed = s != baseline_status
+
+            if not status_changed and abs(size_delta) < MIN_SIZE_DELTA_BYTES:
+                if self._config.verbose:
+                    print(
+                        f"  [blind_idor] SKIP {hdr_name} — "
+                        f"size delta {size_delta:+d}B is noise (< {MIN_SIZE_DELTA_BYTES}B)"
+                    )
+                continue
+
+            # ── Build oracle signals ──────────────────────────────────────────
+            oracle_signals: list[OracleSignal] = []
+
+            # Status oracle
+            if status_changed:
+                # Only count status change as a signal when it's meaningful:
+                # 200 → accessing something new (high confidence)
+                # 4xx → 2xx access gained (high confidence)
+                # Other changes are lower confidence
+                if s == 200 and baseline_status in (401, 403):
+                    contrib = 50
+                    detail  = f"Access gained: baseline {baseline_status} → injected header returns {s}"
+                elif s == 200 and baseline_status != 200:
+                    contrib = 35
+                    detail  = f"Status changed {baseline_status}→{s} with injected header"
+                else:
+                    contrib = 20
+                    detail  = f"Status changed {baseline_status}→{s}"
+
+                oracle_signals.append(OracleSignal(
+                    name="STATUS_CHANGE",
+                    triggered=True,
+                    detail=detail,
+                    confidence_contribution=contrib,
+                ))
+
+            # Size oracle (only if meaningful)
+            if abs(size_delta) >= MIN_SIZE_DELTA_BYTES:
+                contrib = 25 if abs(size_delta) >= 100 else 15
+                oracle_signals.append(OracleSignal(
+                    name="SIZE_DELTA",
+                    triggered=True,
+                    detail=f"Response size changed by {size_delta:+d}B",
+                    confidence_contribution=contrib,
+                ))
+
+            # Error message oracle
+            baseline_exists   = any(p.search(baseline_body) for p in _RESOURCE_EXISTS_PATTERNS)
+            baseline_notfound = any(p.search(baseline_body) for p in _RESOURCE_NOTFOUND_PATTERNS)
+            probe_exists      = any(p.search(resp_body)     for p in _RESOURCE_EXISTS_PATTERNS)
+            probe_notfound    = any(p.search(resp_body)     for p in _RESOURCE_NOTFOUND_PATTERNS)
+
+            if (baseline_exists and probe_notfound) or (baseline_notfound and probe_exists):
+                oracle_signals.append(OracleSignal(
+                    name="ERROR_MSG",
+                    triggered=True,
+                    detail="Server error message changed between baseline and injected probe",
+                    confidence_contribution=35,
+                ))
+
+            # Content analysis oracle — did the response gain meaningful data?
+            if (
+                s == 200
+                and _response_has_data(resp_body)
+                and not _response_has_data(baseline_body)
+            ):
+                oracle_signals.append(OracleSignal(
+                    name="DATA_GAINED",
+                    triggered=True,
+                    detail="Response gained structured data after header injection",
+                    confidence_contribution=40,
+                ))
+
+            # ── Guard 6: Minimum oracle count ─────────────────────────────────
+            if len(oracle_signals) < MIN_ORACLE_COUNT_HEADER:
+                if self._config.verbose:
+                    print(
+                        f"  [blind_idor] SKIP {hdr_name} — "
+                        f"only {len(oracle_signals)} oracle signal(s) "
+                        f"(need >= {MIN_ORACLE_COUNT_HEADER})"
+                    )
+                continue
+
+            # ── Build result ──────────────────────────────────────────────────
             r = BlindIDORResult()
-            r.owned_url      = url
-            r.tested_url     = url
-            r.method         = method
-            r.owned_id       = "current_user"
-            r.tested_id      = f"{hdr_name}: {hdr_val}"
-            r.parameter      = f"header:{hdr_name}"
-            r.status_owned   = baseline_status
-            r.status_tested  = s
-            r.size_delta_bytes = len(resp_body) - len(baseline_body)
-            r.confirmed      = True
-            sig = OracleSignal(
-                name="HEADER_INJECTION",
-                triggered=True,
-                detail=(
-                    f"`{hdr_name}: {hdr_val}` changed response "
-                    f"(status {baseline_status}→{s}, size delta {r.size_delta_bytes:+d}B)"
-                ),
-                confidence_contribution=60,
+            r.owned_url        = url
+            r.tested_url       = url
+            r.method           = method
+            r.owned_id         = "current_user"
+            r.tested_id        = f"{hdr_name}: {hdr_val}"
+            r.parameter        = f"header:{hdr_name}"
+            r.status_owned     = baseline_status
+            r.status_tested    = s
+            r.size_delta_bytes = size_delta
+            r.signals          = oracle_signals
+            r.oracles_triggered = [sig.detail for sig in oracle_signals]
+            r.confidence       = min(100, sum(sig.confidence_contribution for sig in oracle_signals))
+            r.is_idor          = True
+            r.confirmed        = True   # header injection that passes all guards is strong signal
+            r.fp_risk          = "LOW"
+            r.title            = (
+                f"Header-based IDOR — `{hdr_name}` overrides user context"
             )
-            r.signals.append(sig)
-            r.oracles_triggered.append(sig.detail)
-            r.confidence = 75
-            r.is_idor    = True
-            r.fp_risk    = "LOW"
-            r.title      = f"Header-based IDOR — `{hdr_name}` overrides user context"
-            r.evidence   = (
+            r.evidence         = (
                 f"Adding `{hdr_name}: {hdr_val}` changed the response. "
-                f"Status: {baseline_status}→{s}, Size delta: {r.size_delta_bytes:+d}B"
+                f"Status: {baseline_status}→{s}, "
+                f"Size delta: {size_delta:+d}B, "
+                f"Oracles: {', '.join(r.oracles_triggered)}"
             )
             results.append(r)
 
         return results
 
+    # ── Canary check ──────────────────────────────────────────────────────────
+
+    async def _canary_check(
+        self,
+        url:             str,
+        method:          str,
+        body:            dict | None,
+        token_owned:     str,
+        baseline_status: int,
+        baseline_body:   str,
+    ) -> bool:
+        """
+        Send a completely random nonsense header and check whether it changes
+        the response. If it does, the endpoint reacts to ALL unknown headers
+        (CDN/WAF/proxy echoing) — our injection probes would be unreliable.
+
+        Returns True if the canary changed the response (skip injection).
+        Returns False if the canary had no effect (injection is meaningful).
+        """
+        canary_name  = "X-Blfinder-Canary-" + "".join(
+            random.choices(string.ascii_uppercase, k=8)
+        )
+        canary_value = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+
+        try:
+            s, _, body_text, _ = await self._r(
+                method, url,
+                json=body if body else None,
+                headers={canary_name: canary_value},
+                token_override=token_owned or None,
+            )
+        except Exception:
+            return False  # If canary probe fails, assume injection is meaningful
+
+        # Canary changed the status code
+        if s != baseline_status:
+            return True
+
+        # Canary changed the body size meaningfully
+        if abs(len(body_text) - len(baseline_body)) >= MIN_SIZE_DELTA_BYTES:
+            return True
+
+        return False
+
+    # ── Core oracle engine ────────────────────────────────────────────────────
+
     async def _run_all_oracles(
         self,
-        owned_url: str,
-        test_url: str,
-        method: str,
-        owned_body: dict | None,
-        test_body: dict | None,
+        owned_url:   str,
+        test_url:    str,
+        method:      str,
+        owned_body:  dict | None,
+        test_body:   dict | None,
         token_owned: str,
         token_other: str,
-        owned_id: str,
-        tested_id: str,
-        parameter: str,
-        samples: int,
+        owned_id:    str,
+        tested_id:   str,
+        parameter:   str,
+        samples:     int,
     ) -> BlindIDORResult:
 
-        result = BlindIDORResult()
-        result.owned_url  = owned_url
+        result           = BlindIDORResult()
+        result.owned_url = owned_url
         result.tested_url = test_url
-        result.method     = method
-        result.owned_id   = owned_id
-        result.tested_id  = tested_id
-        result.parameter  = parameter
+        result.method    = method
+        result.owned_id  = owned_id
+        result.tested_id = tested_id
+        result.parameter = parameter
 
-        owned_resp = []
-        test_resp  = []
+        owned_resp: list[tuple[int, str, float]] = []
+        test_resp:  list[tuple[int, str, float]] = []
 
         for _ in range(max(2, samples)):
             s, _, b, t = await self._r(
@@ -305,31 +543,43 @@ class BlindIDORScanner:
             result.fp_signals.append("Could not collect response samples")
             return result
 
-        if all(r[0] == 0 for r in owned_resp) or all(r[0] == 0 for r in test_resp):
-            result.fp_signals.append("All requests timed out — endpoint unreachable")
-            return result
-
+        # ── FIX 7: Validate dominant owned status ─────────────────────────────
+        # Original code only checked "all timed out". This is not enough —
+        # if the dominant owned status is 0 (most samples failed), the
+        # comparison is still meaningless.
         owned_statuses = [r[0] for r in owned_resp]
         test_statuses  = [r[0] for r in test_resp]
-        dom_owned = _dominant(owned_statuses)
-        dom_test  = _dominant(test_statuses)
+        dom_owned      = _dominant(owned_statuses)
+        dom_test       = _dominant(test_statuses)
+
+        if dom_owned in INVALID_BASELINE_STATUSES:
+            result.fp_signals.append(
+                f"Dominant owned status {dom_owned} is invalid — "
+                "cannot establish reliable baseline"
+            )
+            return result
+
+        if dom_owned == 404 and dom_test == 404:
+            result.fp_signals.append(
+                "Both owned and tested return 404 — endpoint may not exist"
+            )
+            return result
 
         result.status_owned  = dom_owned
         result.status_tested = dom_test
-
-        if dom_owned == 404 and dom_test == 404:
-            result.fp_signals.append("Both owned and tested return 404 — endpoint may not exist")
-            return result
 
         # Oracle 1: Status
         sig_status = OracleSignal(name="STATUS")
         if dom_owned != dom_test:
             sig_status.triggered = True
-            sig_status.detail = f"Status changed {dom_owned}→{dom_test} when ID changed"
+            sig_status.detail    = f"Status changed {dom_owned}→{dom_test} when ID changed"
             sig_status.confidence_contribution = 25
             if dom_test == 200 and dom_owned in (401, 403):
                 sig_status.confidence_contribution = 45
-                sig_status.detail = f"Access gained: baseline {dom_owned} → tested ID returns {dom_test}"
+                sig_status.detail = (
+                    f"Access gained: baseline {dom_owned} → "
+                    f"tested ID returns {dom_test}"
+                )
         result.signals.append(sig_status)
 
         # Oracle 2: Size
@@ -342,11 +592,13 @@ class BlindIDORScanner:
         sig_size = OracleSignal(name="SIZE")
         if abs(result.size_delta_bytes) >= _SIZE_THRESHOLD:
             sig_size.triggered = True
-            sig_size.detail = (
+            sig_size.detail    = (
                 f"Size changed by {result.size_delta_bytes:+d}B "
                 f"(owned={avg_owned_sz:.0f}B, tested={avg_test_sz:.0f}B)"
             )
-            sig_size.confidence_contribution = 20 if abs(result.size_delta_bytes) < 100 else 30
+            sig_size.confidence_contribution = (
+                20 if abs(result.size_delta_bytes) < 100 else 30
+            )
         result.signals.append(sig_size)
 
         # Oracle 3: Error message
@@ -360,25 +612,26 @@ class BlindIDORScanner:
         test_notfound  = any(p.search(test_body_str)  for p in _RESOURCE_NOTFOUND_PATTERNS)
 
         if owned_exists and test_notfound:
-            sig_error.triggered = True
-            sig_error.detail = (
+            sig_error.triggered  = True
+            sig_error.detail     = (
                 "Server reveals resource existence: "
                 "owned='access denied' vs tested='not found'"
             )
             sig_error.confidence_contribution = 40
             result.error_diff = sig_error.detail
         elif test_exists and owned_notfound:
-            sig_error.triggered = True
-            sig_error.detail = "Inverse: tested ID exists but owned does not"
+            sig_error.triggered  = True
+            sig_error.detail     = "Inverse: tested ID exists but owned does not"
             sig_error.confidence_contribution = 30
             result.error_diff = sig_error.detail
         else:
             owned_msg = _extract_message(owned_body_str)
             test_msg  = _extract_message(test_body_str)
             if owned_msg and test_msg and owned_msg != test_msg:
-                sig_error.triggered = True
-                sig_error.detail = (
-                    f"Different messages: owned='{owned_msg[:40]}' vs tested='{test_msg[:40]}'"
+                sig_error.triggered  = True
+                sig_error.detail     = (
+                    f"Different messages: "
+                    f"owned='{owned_msg[:40]}' vs tested='{test_msg[:40]}'"
                 )
                 sig_error.confidence_contribution = 15
                 result.error_diff = sig_error.detail
@@ -399,11 +652,13 @@ class BlindIDORScanner:
 
                 if abs(result.timing_delta_ms) >= (_TIMING_THRESHOLD * 1000):
                     other_triggered = any(
-                        s.triggered for s in result.signals if s.name != "TIMING"
+                        s.triggered
+                        for s in result.signals
+                        if s.name != "TIMING"
                     )
                     if other_triggered:
                         sig_timing.triggered = True
-                        sig_timing.detail = (
+                        sig_timing.detail    = (
                             f"Response {abs(result.timing_delta_ms):.0f}ms "
                             f"{'slower' if result.timing_delta_ms > 0 else 'faster'} "
                             f"for tested ID (corroborated)"
@@ -411,8 +666,9 @@ class BlindIDORScanner:
                         sig_timing.confidence_contribution = 15
                     else:
                         result.fp_signals.append(
-                            f"Timing delta {result.timing_delta_ms:.0f}ms but no corroborating oracle — "
-                            "skipped to avoid false positive on mobile networks"
+                            f"Timing delta {result.timing_delta_ms:.0f}ms but "
+                            "no corroborating oracle — skipped to avoid FP on "
+                            "mobile networks"
                         )
         result.signals.append(sig_timing)
 
@@ -424,30 +680,38 @@ class BlindIDORScanner:
                 json=test_body if test_body else None,
                 token_override=token_other,
             )
-            if s_cross == 200 and not _is_waf_block(b_cross) and _response_has_data(b_cross):
+            if (
+                s_cross == 200
+                and not _is_waf_block(b_cross)
+                and _response_has_data(b_cross)
+            ):
                 sig_cross.triggered = True
-                sig_cross.detail = (
-                    f"User 2 accessed ID {tested_id} → HTTP {s_cross} ({len(b_cross)}B)"
+                sig_cross.detail    = (
+                    f"User 2 accessed ID {tested_id} → "
+                    f"HTTP {s_cross} ({len(b_cross)}B)"
                 )
                 sig_cross.confidence_contribution = 50
                 result.confirmed = True
         result.signals.append(sig_cross)
 
-        # Aggregate
-        triggered = [s for s in result.signals if s.triggered]
+        # ── Aggregate ─────────────────────────────────────────────────────────
+        triggered          = [s for s in result.signals if s.triggered]
         result.oracles_triggered = [s.detail for s in triggered]
-        result.confidence = min(100, sum(s.confidence_contribution for s in triggered))
+        result.confidence  = min(100, sum(s.confidence_contribution for s in triggered))
 
         non_cross = [s for s in triggered if s.name != "CROSS_USER"]
         result.is_idor = result.confirmed or len(non_cross) >= 2
 
+        # Final FP checks
         if result.is_idor:
             if _is_waf_block(test_body_str):
-                result.is_idor = False
+                result.is_idor  = False
                 result.fp_signals.append("WAF block pattern in response — likely blocked")
-                result.fp_risk = "HIGH"
+                result.fp_risk  = "HIGH"
             elif _is_empty_response(test_body_str) and not result.confirmed:
-                result.fp_signals.append("Tested ID returned empty response — may be valid 'not found'")
+                result.fp_signals.append(
+                    "Tested ID returned empty response — may be valid 'not found'"
+                )
                 result.fp_risk = "MEDIUM"
             else:
                 result.fp_risk = "LOW"
@@ -465,6 +729,10 @@ class BlindIDORScanner:
 
         return result
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Utility functions (unchanged from v3.0)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _adjacent_ids(original: int) -> list[int]:
     candidates = []
@@ -489,7 +757,10 @@ def _test_uuids(original: str) -> list[str]:
 
 def _body_test_values(original) -> list:
     if isinstance(original, int):
-        return [v for v in [original - 1, original + 1, 1, 2, 3] if v > 0 and v != original]
+        return [
+            v for v in [original - 1, original + 1, 1, 2, 3]
+            if v > 0 and v != original
+        ]
     if isinstance(original, str) and original.isdigit():
         v = int(original)
         return [str(x) for x in [v - 1, v + 1, 1, 2] if x > 0 and x != v]
@@ -534,7 +805,9 @@ def _is_waf_block(body: str) -> bool:
 
 def _is_empty_response(body: str) -> bool:
     stripped = body.strip()
-    if not stripped or stripped in ("{}", "[]", "null", '{"data":null}', '{"result":null}'):
+    if not stripped or stripped in (
+        "{}", "[]", "null", '{"data":null}', '{"result":null}'
+    ):
         return True
     try:
         data = json.loads(stripped)
@@ -553,7 +826,9 @@ def _response_has_data(body: str) -> bool:
     try:
         data = json.loads(body.strip())
         if isinstance(data, dict):
-            return len(data) > 0 and any(v not in (None, "", [], {}) for v in data.values())
+            return len(data) > 0 and any(
+                v not in (None, "", [], {}) for v in data.values()
+            )
         if isinstance(data, list):
             return len(data) > 0
     except (json.JSONDecodeError, ValueError):
