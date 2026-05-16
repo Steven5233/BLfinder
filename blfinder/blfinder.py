@@ -1096,6 +1096,51 @@ async def run_deep_discovery(
         except Exception as e:
             print(f"  [L4:version]  error: {e}")
 
+    # ── Layer 5+: Hidden endpoint hunter ────────────────────────────────────
+    # Runs BEFORE dedup so discovered hidden paths are included in dedup pass.
+    # Finds: internal/admin/debug paths, framework-specific endpoints,
+    # mobile API paths, historical HackerOne corpus paths, path mutations,
+    # activation-param triggered endpoints, and HTTP method variants.
+    try:
+        from core.discovery.hidden_endpoint_hunter import run_hidden_hunter
+
+        known_urls = [
+            getattr(ep, "url", ep) if not isinstance(ep, str) else ep
+            for ep in all_endpoints
+        ]
+        hidden_dicts = await run_hidden_hunter(
+            target_url  = args.target,
+            session     = session,
+            auth_token  = args.token,
+            known_paths = known_urls,
+            verbose     = args.verbose,
+            timeout_s   = min(args.timeout, 10),
+            max_workers = 8,
+        )
+
+        # Convert dicts to simple namespace objects so dedup layer handles them
+        class _EP:
+            def __init__(self, d):
+                self.url    = d["url"]
+                self.method = d.get("method", "GET")
+                self.body   = d.get("body",   {})
+                self.params = d.get("params", {})
+                self._meta  = d.get("_meta",  {})
+
+        hidden_eps = [_EP(d) for d in hidden_dicts]
+        all_endpoints.extend(hidden_eps)
+        if hidden_eps:
+            print(f"  [L5+:hunter]  {len(hidden_eps)} hidden endpoints added")
+    except ImportError:
+        if args.verbose:
+            print("  [L5+:hunter]  not available — place hidden_endpoint_hunter.py "
+                  "in core/discovery/")
+    except Exception as e:
+        print(f"  [L5+:hunter]  error: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+
     # ── Layer 5: Normalise + dedup ────────────────────────────────────────────
     try:
         from core.discovery.layer5_dedup.normaliser import dedup_key
@@ -1354,6 +1399,19 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
 
     # ── Outer deep discovery pipeline (if requested) ──────────────────────────
     if config.deep_discovery and outer_disc_cfg is not None:
+        # Patch version_permuter BEFORE running discovery so that individual
+        # probe failures (timeout, SSL error, connection refused) are caught
+        # per-probe and never crash the whole pipeline.
+        try:
+            from core.discovery.version_permuter_patch import (
+                apply_version_permuter_patch,
+            )
+            apply_version_permuter_patch()
+            if args.verbose:
+                print("[*] version_permuter_patch applied")
+        except ImportError:
+            pass  # patch file absent — permuter runs unpatched
+
         try:
             import aiohttp
             disc_connector = aiohttp.TCPConnector(
@@ -1404,17 +1462,29 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 pass
         return 0
 
-    # ── Apply scanner_patch for deep discovery engine integration ─────────────
-    # This monkey-patches BLFScanner.run_all_modules() if the deep discovery
-    # engine is available and not explicitly disabled.
+    # ── Apply patches ─────────────────────────────────────────────────────────
+    # Patch 1: scanner_patch — fixes coroutine leak + soft-404 over-skip
+    #   (core/discovery/scanner_patch.py)
     if not getattr(config, "no_deep_discovery", False):
         try:
             from core.discovery.scanner_patch import apply_patch
             apply_patch()
             if args.verbose:
-                print("[*] Deep discovery scanner patch applied")
+                print("[*] scanner_patch applied (coroutine fix + soft-404 threshold)")
         except ImportError:
             pass  # Engine absent — BLFScanner uses its built-in fallback
+
+    # Patch 2: verifier_patch — fixes over-aggressive re-verification
+    #   Lowers similarity threshold 0.75→0.45, adds majority voting,
+    #   adds leniency for already-confirmed (cross-user) findings.
+    #   (core/verifier_patch.py)
+    try:
+        from core.verifier_patch import apply_verifier_patch
+        patched = apply_verifier_patch()
+        if args.verbose and patched:
+            print("[*] verifier_patch applied (relaxed re-verification thresholds)")
+    except ImportError:
+        pass  # Patch file absent — verifier runs with original thresholds
 
     # ── Run scanner ───────────────────────────────────────────────────────────
     findings = []
