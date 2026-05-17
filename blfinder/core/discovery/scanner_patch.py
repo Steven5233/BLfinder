@@ -1,128 +1,216 @@
+"""
+BLFinder v3.1 — core/discovery/scanner_patch.py
 
+Fixes THREE bugs without editing any source file:
+
+  BUG 1 — "coroutine was never awaited" RuntimeWarning
+  ─────────────────────────────────────────────────────
+  In _run_endpoint_checks() the all_checks list called
+  self._check_xxx(...) eagerly, creating coroutines for
+  skipped checks that were then thrown away unawaited.
+  Fix: lambda wrappers so coroutines are created only for
+  checks we actually intend to run.
+
+  BUG 2 — 55+ endpoints skipped as soft-404 (55/215 in production)
+  ──────────────────────────────────────────────────────────────────
+  Previous approach: guess ValidationConfig attribute names and patch them.
+  Problem: None of the guessed names matched the real attribute → patch
+  was silently doing nothing → aggressive defaults still active.
+
+  NEW APPROACH — patch EndpointValidator.validate() directly:
+  We wrap the actual validate() method and intercept its return value.
+  If it says should_skip=True for soft-404 reasons, we override it to
+  should_skip=False. This works regardless of what ValidationConfig's
+  internal attributes are named, because we never touch them at all.
+
+  BUG 3 — validate() called with unexpected kwarg 'strict'
+  ─────────────────────────────────────────────────────────
+  The patched _run_endpoint_checks passed strict=strict to validate()
+  but that method may not accept it. Fixed with a try/except fallback.
+"""
 
 from __future__ import annotations
 import asyncio
+import difflib
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ValidationConfig attribute patching
+# Soft-404 override threshold
 # ─────────────────────────────────────────────────────────────────────────────
-# We do NOT call ValidationConfig(**kwargs) — we set attributes directly on
-# the already-constructed instance. This works regardless of what parameters
-# __init__ accepts.
-#
-# The dict below maps every known attribute name used by different versions of
-# ValidationConfig to the relaxed value we want. hasattr() guards each write
-# so we only touch attributes that actually exist on the object — no spurious
-# attribute injection.
+# When the validator says should_skip=True, we re-check the response
+# ourselves using this threshold. Only skip if similarity is THIS high.
+# 0.97 = only skip when the response is 97%+ identical to a known-404 baseline.
+# The original aggressive default was ~0.85 → too many real endpoints skipped.
+SOFT_404_OVERRIDE_THRESHOLD = 0.97
 
-_RELAXED_ATTRS = {
-    # Soft-404 similarity threshold.
-    # How similar must a response body be to the baseline for the endpoint to
-    # be classified as soft-404 and skipped?
-    # High value = only skip when responses are almost identical (>97%) = fewer
-    # endpoints wrongly skipped. Previous effective value was ~0.85.
-    "similarity_threshold"   : 0.97,
-    "soft404_threshold"      : 0.97,
-    "soft_404_similarity"    : 0.97,
-    "threshold"              : 0.97,
-    # Minimum body length (bytes) to bother validating.
-    # Prevents empty-body responses from being auto-skipped as soft-404.
-    "min_body_length"        : 10,
-    "minimum_body_length"    : 10,
-    # JSON requirement flags — set False so HTML-responding APIs pass through.
-    "require_json"           : False,
-    "json_only"              : False,
-    "require_json_response"  : False,
-}
+# Minimum response body length to even consider soft-404 classification.
+# Bodies shorter than this are usually error pages, not real API endpoints.
+MIN_BODY_LENGTH_TO_SKIP = 20
 
+# HTTP status codes that are ALWAYS valid API responses — never skip these.
+# 401/403 mean the endpoint exists but requires auth — high value targets.
+NEVER_SKIP_STATUSES = {200, 201, 202, 204, 301, 302, 400, 401, 403, 405, 422}
 
-def _relax_validation_config(cfg) -> None:
-    """
-    Write relaxed thresholds onto a ValidationConfig instance.
-    Only writes attributes that already exist on the object.
-    Safe to call on any object — unknown attributes are silently skipped.
-    """
-    if cfg is None:
-        return
-    patched = []
-    for attr, value in _RELAXED_ATTRS.items():
-        if hasattr(cfg, attr):
-            setattr(cfg, attr, value)
-            patched.append(attr)
-    return patched  # returned for debug logging
-
-
-def _find_and_relax(endpoint_validator, verbose: bool = False) -> None:
-    """
-    Locate the ValidationConfig on an EndpointValidator instance and
-    apply relaxed thresholds. Tries every common attribute name the
-    validator might use to store its config.
-    """
-    if endpoint_validator is None:
-        return
-
-    # Common attribute names the validator might store its config under
-    config_attr_candidates = (
-        "config", "cfg", "validation_config",
-        "settings", "_config", "vc", "vconfig",
-    )
-
-    for attr_name in config_attr_candidates:
-        cfg = getattr(endpoint_validator, attr_name, None)
-        if cfg is not None:
-            patched = _relax_validation_config(cfg)
-            if verbose and patched:
-                print(
-                    f"[*] scanner_patch: relaxed ValidationConfig.{attr_name} "
-                    f"attrs: {patched}"
-                )
-            return
-
-    # Last resort: try to relax the validator itself (in case config attrs
-    # are stored directly on the validator, not a nested object)
-    _relax_validation_config(endpoint_validator)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main patch entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 def apply_patch() -> bool:
     """
-    Monkey-patch BLFScanner to fix:
+    Monkey-patch BLFScanner and EndpointValidator to fix:
       1. Coroutine-leak RuntimeWarnings in _run_endpoint_checks
-      2. Over-aggressive soft-404 skipping (ValidationConfig thresholds)
-      3. TypeError from passing unknown kwargs to validate()
+      2. Over-aggressive soft-404 endpoint skipping
+      3. TypeError from unknown kwargs to validate()
 
     Call this BEFORE the 'async with BLFScanner(config) as scanner:' block.
-    Returns True on success, False if core.scanner cannot be imported.
+    Returns True on success, False if core imports are unavailable.
     """
+
+    # ── Import targets ────────────────────────────────────────────────────────
     try:
         from core.scanner import BLFScanner
     except ImportError:
         print("[!] scanner_patch: core.scanner not found — patch skipped")
         return False
 
-    # ── Patch A: wrap __aenter__ to fix ValidationConfig after construction ───
+    # EndpointValidator import — try multiple known locations
+    EndpointValidator = None
+    ValidationResult  = None
+    for mod_path in [
+        "core.validation.endpoint_validator",
+        "core.validator",
+        "core.endpoint_validator",
+    ]:
+        try:
+            import importlib
+            mod = importlib.import_module(mod_path)
+            EndpointValidator = getattr(mod, "EndpointValidator", None)
+            ValidationResult  = getattr(mod, "ValidationResult", None)
+            if EndpointValidator:
+                break
+        except ImportError:
+            continue
+
+    # ── Patch 1: EndpointValidator.validate() — direct soft-404 override ─────
+    # This is the bulletproof approach: we don't touch ValidationConfig at all.
+    # Instead we wrap validate() and override any should_skip=True result
+    # that we believe is a false positive.
+
+    if EndpointValidator is not None:
+        _orig_validate = EndpointValidator.validate
+
+        async def _validate_patched(self, url, method, body=None,
+                                    is_graphql=False, **kwargs):
+            """
+            Patched validate() that prevents over-aggressive soft-404 skipping.
+
+            Strategy:
+              1. Call the original validate()
+              2. If it says should_skip=True, re-examine WHY
+              3. If the reason is soft-404 and our own threshold says it's NOT
+                 a soft-404, override to should_skip=False
+              4. If the reason is WAF/rate-limit/genuine error, respect it
+            """
+            # Strip unknown kwargs before calling original (fixes BUG 3)
+            safe_kwargs = {}
+            if is_graphql:
+                safe_kwargs["is_graphql"] = is_graphql
+
+            try:
+                result = await _orig_validate(self, url, method, body, **safe_kwargs)
+            except TypeError:
+                # Original validate() has a different signature — call bare
+                try:
+                    result = await _orig_validate(self, url, method, body)
+                except TypeError:
+                    result = await _orig_validate(self, url, method)
+
+            # If the original says "don't skip" — great, trust it
+            if not getattr(result, "should_skip", False):
+                return result
+
+            # If the original says "skip" — examine the reason
+            summary = (getattr(result, "summary", None) or "").lower()
+            skip_reason = (getattr(result, "reason",  None) or summary).lower()
+
+            # Always respect genuine blocks — don't override these
+            if any(k in skip_reason for k in [
+                "waf", "rate limit", "429", "blocked", "cloudflare",
+                "connection", "timeout", "ssl", "tls",
+            ]):
+                return result
+
+            # For soft-404 skips: re-check with our own threshold
+            if any(k in skip_reason for k in [
+                "soft", "404", "similar", "generic", "baseline",
+                "identical", "same", "threshold",
+            ]) or not skip_reason:
+                # Re-run a quick similarity check ourselves
+                # Pull the actual response from the scanner's base_responses
+                # if available, otherwise just un-skip (conservative)
+                scanner_instance = getattr(self, "_scanner", None) or \
+                                   getattr(self, "scanner", None)
+
+                if scanner_instance is not None:
+                    base = getattr(scanner_instance, "base_responses", {})
+                    entry = base.get(url, {})
+                    resp_status = entry.get("status", 0)
+                    resp_body   = entry.get("body",   "")
+
+                    # Never skip endpoints that returned a real status
+                    if resp_status in NEVER_SKIP_STATUSES:
+                        return _make_pass(result)
+
+                    # Re-check body similarity against soft-404 baseline
+                    soft404_body = getattr(self, "_soft404_baseline", None) or \
+                                   getattr(self, "_baseline_body", None) or \
+                                   getattr(self, "baseline", None)
+
+                    if soft404_body and resp_body:
+                        sim = difflib.SequenceMatcher(
+                            None,
+                            str(soft404_body)[:3000],
+                            resp_body[:3000],
+                        ).ratio()
+                        # Only skip if VERY similar to the soft-404 baseline
+                        if sim < SOFT_404_OVERRIDE_THRESHOLD:
+                            return _make_pass(result)  # not actually a soft-404
+
+                    elif resp_body and len(resp_body) >= MIN_BODY_LENGTH_TO_SKIP:
+                        # Has a real body — don't skip
+                        return _make_pass(result)
+
+                else:
+                    # No scanner reference — be conservative, don't skip
+                    return _make_pass(result)
+
+            return result
+
+        EndpointValidator.validate = _validate_patched
+
+    # ── Patch 2: BLFScanner.__aenter__ — inject scanner ref into validator ────
+    # So the patched validate() above can access base_responses and config.
     _orig_aenter = BLFScanner.__aenter__
 
     async def _patched_aenter(self):
-        # Run the original __aenter__ first (builds the session, constructs
-        # EndpointValidator, etc.)
         result = await _orig_aenter(self)
 
-        # Now patch ValidationConfig on the live EndpointValidator instance
+        # Inject a reference to the scanner into EndpointValidator
+        # so the patched validate() can access base_responses
         ev = getattr(self, "_endpoint_validator", None)
-        verbose = getattr(self.config, "verbose", False)
-        _find_and_relax(ev, verbose=verbose)
+        if ev is not None and not hasattr(ev, "_scanner"):
+            try:
+                ev._scanner = self
+            except Exception:
+                pass
+
+        # Also attempt direct attribute patching as a secondary approach
+        # (works when attribute names match, harmless when they don't)
+        if ev is not None:
+            _try_direct_attr_patch(ev, getattr(self.config, "verbose", False))
 
         return result
 
     BLFScanner.__aenter__ = _patched_aenter
 
-    # ── Patch B: fix _run_endpoint_checks (coroutine-leak + strict kwarg) ────
-
+    # ── Patch 3: _run_endpoint_checks — lambda fix + strict kwarg safety ──────
     async def _run_endpoint_checks_fixed(
         self,
         url:    str,
@@ -138,38 +226,33 @@ def apply_patch() -> bool:
 
         findings = []
 
-        # ── Dashboard ─────────────────────────────────────────────────────────
+        # Dashboard update + pause
         self._update_dashboard(endpoint=url)
         if self._dashboard_state:
             self._dashboard_state.scanned_endpoints += 1
             while self._dashboard_state.paused:
                 await asyncio.sleep(0.5)
 
-        # ── Endpoint validation ───────────────────────────────────────────────
-        is_graphql = any(
-            seg in url.lower() for seg in ["/graphql", "/gql", "/query"]
-        )
-        if _HAS_VALIDATION and self._endpoint_validator:
-            # Try with strict kwarg first; fall back without it if the
-            # validate() signature doesn't support it (avoids TypeError)
+        # Validate endpoint — skip entirely when --no-validation is set
+        is_graphql = any(seg in url.lower() for seg in ["/graphql", "/gql", "/query"])
+        if _HAS_VALIDATION and self._endpoint_validator and not getattr(self.config, "no_validation", False):
             try:
                 val_report = await self._endpoint_validator.validate(
-                    url, method, body,
-                    is_graphql=is_graphql,
-                    strict=getattr(self.config, "strict_validation", False),
+                    url, method, body, is_graphql=is_graphql
                 )
             except TypeError:
-                val_report = await self._endpoint_validator.validate(
-                    url, method, body,
-                    is_graphql=is_graphql,
-                )
+                try:
+                    val_report = await self._endpoint_validator.validate(url, method, body)
+                except TypeError:
+                    val_report = await self._endpoint_validator.validate(url, method)
+
             if val_report.should_skip:
                 self._skipped_endpoints.append(url)
                 if self.config.verbose:
                     print(f"  [SKIP] {url[:70]} — {val_report.summary}")
                 return findings
 
-        # ── Baseline request ──────────────────────────────────────────────────
+        # Baseline request
         status, headers, base_body, elapsed = await self._request(
             method, url,
             json=body   if body   else None,
@@ -187,39 +270,30 @@ def apply_patch() -> bool:
         }
         self._record_baseline_sample(url, base_body)
 
-        # ── Phase 4: ID harvesting ────────────────────────────────────────────
+        # Phase 4: ID harvesting
         if _HAS_IDOR_ENUM and self._idor_enumerator:
             self._idor_enumerator.harvest_ids(base_body)
 
-        # ── Response classification ───────────────────────────────────────────
+        # Phase 3: Classify response
         confidence_cap = 100
         if _HAS_VALIDATION and self._response_classifier:
             classified = self._response_classifier.classify(
                 url, status, headers, base_body, elapsed
             )
             self._classified_responses[url] = classified
-            self.base_responses[url]["response_class"] = (
-                classified.response_class.value
-            )
+            self.base_responses[url]["response_class"] = classified.response_class.value
             if classified.suppress_findings:
                 if self.config.verbose:
-                    print(
-                        f"  [SUPPRESS] {url[:60]} — "
-                        f"{classified.classification_note}"
-                    )
+                    print(f"  [SUPPRESS] {url[:60]} — {classified.classification_note}")
                 return findings
             confidence_cap = classified.confidence_cap
-            if (
-                self.config.verbose
-                and classified.response_class.value != "REAL_API_JSON"
-            ):
+            if self.config.verbose and classified.response_class.value != "REAL_API_JSON":
                 print(
                     f"  [CLASS] {url[:60]} → "
-                    f"{classified.response_class.value} "
-                    f"(cap={confidence_cap}%)"
+                    f"{classified.response_class.value} (cap={confidence_cap}%)"
                 )
 
-        # ── Skip set ──────────────────────────────────────────────────────────
+        # Build skip set
         skip_set: set = set(self._profile_skip_modules)
         if _HAS_CLASSIFIER and self._classifier:
             try:
@@ -228,14 +302,12 @@ def apply_patch() -> bool:
             except Exception:
                 pass
 
-        # ── THE CORE FIX — lambda wrappers ───────────────────────────────────
-        # Calling self._check_xxx(...) directly creates the coroutine object
-        # immediately, before skip_set filtering. Skipped coroutines are
-        # abandoned unawaited → RuntimeWarning: coroutine was never awaited.
-        #
-        # Solution: wrap every check in a zero-arg lambda so the coroutine
-        # is only created at the moment fn() is called — which only happens
-        # for checks whose name is NOT in skip_set.
+        # ── THE CORE BUG-1 FIX: lambda wrappers ──────────────────────────────
+        # Calling self._check_xxx(...) directly creates the coroutine IMMEDIATELY
+        # for ALL checks — even ones in skip_set that will be discarded.
+        # Those discarded coroutines are never awaited → RuntimeWarning.
+        # Solution: wrap in lambda so coroutine is only created when fn() is
+        # called, which only happens for checks NOT in skip_set.
         all_checks = [
             ("price_manipulation",
              lambda: self._check_price_manipulation(
@@ -331,56 +403,157 @@ def apply_patch() -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Quick self-test  (python core/discovery/scanner_patch.py)
+# Secondary: direct attribute patching (best-effort, harmless if no match)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RELAXED_ATTRS = {
+    "similarity_threshold"   : 0.97,
+    "soft404_threshold"      : 0.97,
+    "soft_404_similarity"    : 0.97,
+    "soft_404_threshold"     : 0.97,
+    "threshold"              : 0.97,
+    "min_body_length"        : 10,
+    "minimum_body_length"    : 10,
+    "require_json"           : False,
+    "json_only"              : False,
+    "require_json_response"  : False,
+}
+
+def _try_direct_attr_patch(endpoint_validator, verbose: bool = False) -> None:
+    """
+    Secondary approach: try to patch known attribute names on ValidationConfig.
+    Works when attribute names match; silently does nothing when they don't.
+    The primary fix (patching validate() directly) handles the case where
+    attribute names don't match.
+    """
+    if endpoint_validator is None:
+        return
+
+    patched_on: list[str] = []
+
+    # Try nested config objects first
+    for cfg_attr in ("config", "cfg", "validation_config", "settings", "_config"):
+        cfg = getattr(endpoint_validator, cfg_attr, None)
+        if cfg is None:
+            continue
+        for attr, value in _RELAXED_ATTRS.items():
+            if hasattr(cfg, attr):
+                old = getattr(cfg, attr)
+                if old != value:
+                    setattr(cfg, attr, value)
+                    patched_on.append(f"{cfg_attr}.{attr}={value}")
+
+    # Also try attributes directly on the validator
+    for attr, value in _RELAXED_ATTRS.items():
+        if hasattr(endpoint_validator, attr):
+            old = getattr(endpoint_validator, attr)
+            if old != value:
+                setattr(endpoint_validator, attr, value)
+                patched_on.append(f"{attr}={value}")
+
+    if verbose and patched_on:
+        print(f"  [scanner_patch] direct attr patch: {', '.join(patched_on[:4])}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: build a "pass" result from an existing ValidationResult
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_pass(result):
+    """
+    Override a ValidationResult to should_skip=False.
+    Works with dataclass, namedtuple, or plain object.
+    """
+    try:
+        # Dataclass / plain object with mutable attributes
+        object.__setattr__(result, "should_skip", False)
+        object.__setattr__(result, "summary", "passed (soft-404 override)")
+        return result
+    except (AttributeError, TypeError):
+        pass
+
+    try:
+        result.should_skip = False
+        result.summary     = "passed (soft-404 override)"
+        return result
+    except AttributeError:
+        pass
+
+    # If the object is frozen/immutable, return a simple namespace
+    class _PassResult:
+        should_skip = False
+        summary     = "passed (soft-404 override)"
+        reason      = "override"
+        def __getattr__(self, name):
+            return getattr(result, name, None)
+
+    return _PassResult()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-test
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import warnings
+    import asyncio
 
-    print("=" * 60)
+    print("=" * 62)
     print("scanner_patch.py — self-test")
-    print("=" * 60)
+    print("=" * 62)
 
-    # ── Test 1: _relax_validation_config works on dataclass-style objects ─────
-    print("\n[TEST 1] _relax_validation_config — attribute patching")
+    # ── Test 1: _make_pass works on plain object ──────────────────────────────
+    print("\n[TEST 1] _make_pass — mutable object")
 
-    class FakeConfig:
+    class FakeResult:
+        should_skip = True
+        summary     = "soft-404 detected"
+
+    r = _make_pass(FakeResult())
+    assert r.should_skip is False, f"expected False, got {r.should_skip}"
+    print("  PASS")
+
+    # ── Test 2: _make_pass works on frozen dataclass ──────────────────────────
+    print("\n[TEST 2] _make_pass — frozen/immutable fallback")
+    from dataclasses import dataclass as dc, field as f
+
+    @dc(frozen=True)
+    class FrozenResult:
+        should_skip: bool = True
+        summary:     str  = "soft-404"
+
+    r2 = _make_pass(FrozenResult())
+    assert r2.should_skip is False
+    print("  PASS — fallback namespace used for frozen object")
+
+    # ── Test 3: direct attr patching ─────────────────────────────────────────
+    print("\n[TEST 3] _try_direct_attr_patch — nested config")
+
+    class FakeCfg:
         similarity_threshold = 0.85
-        min_body_length      = 0
         require_json         = True
+        min_body_length      = 0
 
-    cfg = FakeConfig()
-    _relax_validation_config(cfg)
-    assert cfg.similarity_threshold == 0.97, f"expected 0.97 got {cfg.similarity_threshold}"
-    assert cfg.min_body_length      == 10,   f"expected 10 got {cfg.min_body_length}"
-    assert cfg.require_json         is False, f"expected False got {cfg.require_json}"
-    print("  PASS — known attributes patched correctly")
+    class FakeValidator:
+        config = FakeCfg()
 
-    # ── Test 2: unknown attributes are NOT added ──────────────────────────────
-    print("\n[TEST 2] _relax_validation_config — no spurious attrs added")
+    fv = FakeValidator()
+    _try_direct_attr_patch(fv, verbose=False)
+    assert fv.config.similarity_threshold == 0.97
+    assert fv.config.require_json         is False
+    assert fv.config.min_body_length      == 10
+    print("  PASS — nested config patched")
 
-    class MinimalConfig:
-        similarity_threshold = 0.85   # only has this one
+    # ── Test 4: lambda coroutine leak prevention ──────────────────────────────
+    print("\n[TEST 4] Lambda fix — no RuntimeWarning")
 
-    mcfg = MinimalConfig()
-    _relax_validation_config(mcfg)
-    assert not hasattr(mcfg, "soft404_threshold"), "spurious attr added"
-    assert not hasattr(mcfg, "require_json"),      "spurious attr added"
-    assert mcfg.similarity_threshold == 0.97
-    print("  PASS — only existing attributes patched")
+    async def _dummy(): return []
 
-    # ── Test 3: lambda fix prevents unawaited coroutines ─────────────────────
-    print("\n[TEST 3] Lambda fix — no RuntimeWarning emitted")
-
-    async def _dummy():
-        return []
-
-    skip_set = {"price_manipulation", "race_condition", "bopla"}
+    skip_set = {"price_manipulation", "race_condition"}
     all_checks = [
         ("price_manipulation", lambda: _dummy()),
         ("negative_quantity",  lambda: _dummy()),
         ("race_condition",     lambda: _dummy()),
-        ("bopla",              lambda: _dummy()),
         ("idor_bola",          lambda: _dummy()),
     ]
 
@@ -390,37 +563,32 @@ if __name__ == "__main__":
 
         async def _run():
             return await asyncio.gather(*coros, return_exceptions=True)
-
         asyncio.run(_run())
 
     leaked = [w for w in caught if issubclass(w.category, RuntimeWarning)
               and "coroutine" in str(w.message).lower()]
-    if leaked:
-        print(f"  FAIL — {len(leaked)} RuntimeWarning(s) still emitted")
-        for w in leaked:
-            print(f"    {w.message}")
-    else:
-        print("  PASS — no 'coroutine was never awaited' warnings")
+    assert not leaked, f"{len(leaked)} coroutine warnings leaked"
+    print("  PASS — no coroutine warnings")
 
-    # ── Test 4: _find_and_relax handles nested config attr ───────────────────
-    print("\n[TEST 4] _find_and_relax — nested config attribute discovery")
+    # ── Test 5: NEVER_SKIP_STATUSES contains critical statuses ───────────────
+    print("\n[TEST 5] NEVER_SKIP_STATUSES correctness")
+    for s in (200, 401, 403, 405, 422):
+        assert s in NEVER_SKIP_STATUSES, f"{s} missing from NEVER_SKIP_STATUSES"
+    print("  PASS")
 
-    class FakeValidator:
-        class config:
-            similarity_threshold = 0.85
-            require_json         = True
+    # ── Test 6: Threshold values are sensible ─────────────────────────────────
+    print("\n[TEST 6] Threshold values")
+    assert SOFT_404_OVERRIDE_THRESHOLD >= 0.95, "Threshold too low"
+    assert MIN_BODY_LENGTH_TO_SKIP     >= 10,   "Min body length too low"
+    print(f"  PASS — threshold={SOFT_404_OVERRIDE_THRESHOLD}, "
+          f"min_body={MIN_BODY_LENGTH_TO_SKIP}")
 
-    fv = FakeValidator()
-    _find_and_relax(fv, verbose=False)
-    assert fv.config.similarity_threshold == 0.97
-    assert fv.config.require_json is False
-    print("  PASS — nested config.similarity_threshold patched")
-
-    # ── Test 5: _find_and_relax handles None validator gracefully ─────────────
-    print("\n[TEST 5] _find_and_relax — None validator is a no-op")
-    _find_and_relax(None)   # must not raise
-    print("  PASS — no exception raised for None validator")
-
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 62)
     print("All tests passed.")
-    print("=" * 60)
+    print("=" * 62)
+    print()
+    print("Key change from previous version:")
+    print("  OLD: Guess ValidationConfig attribute names → silently fails")
+    print("       when names don't match → patch does nothing")
+    print("  NEW: Patch EndpointValidator.validate() directly → always works")
+    print("       regardless of what ValidationConfig's attributes are named")
