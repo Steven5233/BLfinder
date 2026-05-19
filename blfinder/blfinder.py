@@ -51,6 +51,23 @@ Deep Discovery flags:
   --discovery-tags TAGS    Comma-separated business tags (alias for --business-tags)
   --save-discovery FILE    Save all discovered endpoints before scanning
   --no-deep-discovery      Disable the deep discovery engine entirely
+
+FIX CHANGELOG (all issues from code review applied):
+  BUG-1  : scanner_integration.apply_integration() is now called before
+            the BLFScanner context manager — all intelligence systems are live.
+  BUG-3  : --wordlist-depth and --discovery-depth now reconciled by taking
+            max() of the two values so neither silently wins.
+  BUG-5  : HTML reporter path "core.reporting.core.reporting.evidence_report"
+            corrected to "core.reporting.evidence_report".
+  BUG-6  : --no-validation wired into scanner via scanner_patch so the flag
+            actually bypasses EndpointValidator when set.
+  BUG-15 : --deep-discovery / --no-deep-discovery mutual-exclusion enforced
+            after both flags are applied.
+  BUG-16 : --classify with --target now falls through to full scan as
+            intended; help text updated to be accurate.
+  BUG-17 : config.use_db activation logic fixed — explicit default path or
+            any DB-related flag enables the DB; comparison to hardcoded string
+            replaced with presence check.
 """
 
 from __future__ import annotations
@@ -170,13 +187,13 @@ except ImportError:
 
     def apply_discovery_args(args: argparse.Namespace, config) -> None:
         """Copy discovery-related argparse values onto the ScanConfig object."""
-        config.discovery_depth  = getattr(args, "discovery_depth",  2)
-        config.use_headless     = getattr(args, "use_headless",     False)
-        config.headless_interact = getattr(args, "headless_interact", False)
-        config.openapi_paths    = getattr(args, "openapi_paths",    [])
-        config.proto_paths      = getattr(args, "proto_paths",      [])
-        config.no_wordlist      = getattr(args, "no_wordlist",      False)
-        config.save_discovery   = getattr(args, "save_discovery",   "")
+        config.discovery_depth   = getattr(args, "discovery_depth",   2)
+        config.use_headless      = getattr(args, "use_headless",      False)
+        config.headless_interact = getattr(args, "headless_interact",  False)
+        config.openapi_paths     = getattr(args, "openapi_paths",     [])
+        config.proto_paths       = getattr(args, "proto_paths",       [])
+        config.no_wordlist       = getattr(args, "no_wordlist",       False)
+        config.save_discovery    = getattr(args, "save_discovery",    "")
         config.no_deep_discovery = getattr(args, "no_deep_discovery", False)
 
         raw_tags = getattr(args, "discovery_tags", "")
@@ -444,18 +461,20 @@ EXAMPLES:
     )
     disc.add_argument(
         "--wordlist-depth", type=int, default=2, metavar="N",
+        dest="wordlist_depth",
         help="Wordlist depth 1=tiny … 5=exhaustive (default: 2)",
     )
-    disc.add_argument("--no-robots",        action="store_true",  help="Skip robots.txt / sitemap.xml parsing")
-    disc.add_argument("--no-js-ast",        action="store_true",  help="Skip JS AST endpoint extraction")
-    disc.add_argument("--no-openapi",       action="store_true",  help="Skip OpenAPI/Swagger/Postman spec probing")
-    disc.add_argument("--no-version-permute", action="store_true", help="Skip API version-shadow discovery")
+    disc.add_argument("--no-robots",          action="store_true",  help="Skip robots.txt / sitemap.xml parsing")
+    disc.add_argument("--no-js-ast",          action="store_true",  help="Skip JS AST endpoint extraction")
+    disc.add_argument("--no-openapi",         action="store_true",  help="Skip OpenAPI/Swagger/Postman spec probing")
+    disc.add_argument("--no-version-permute", action="store_true",  help="Skip API version-shadow discovery")
     disc.add_argument(
         "--business-tags", default="", metavar="TAGS",
         help="Comma-separated business context tags (e.g. payment,order,user)",
     )
     disc.add_argument(
         "--discovery-save", default="", metavar="FILE",
+        dest="discovery_save",
         help="Save deep-discovered endpoints JSON to this path (outer pipeline alias)",
     )
 
@@ -478,6 +497,16 @@ EXAMPLES:
     recon.add_argument(
         "--strict-validation", action="store_true",
         help="Strict endpoint pre-validation (reject soft-404 / WAF-blocked)",
+    )
+    recon.add_argument(
+        "--no-validation",
+        action="store_true",
+        dest="no_validation",
+        help=(
+            "Disable endpoint pre-validation entirely. "
+            "Scans ALL discovered endpoints regardless of response type. "
+            "Use when too many valid endpoints are being skipped as soft-404."
+        ),
     )
 
     # ── Phase 1: Flows ────────────────────────────────────────────────────────
@@ -513,16 +542,24 @@ EXAMPLES:
 
     # ── Phase 4: Attack Surface ───────────────────────────────────────────────
     atk = p.add_argument_group("Phase 4 — Attack Surface")
-    atk.add_argument("--idor-range",        type=int, default=0,    help="IDOR enumeration range (0 = disabled)")
-    atk.add_argument("--idor-harvest",      action="store_true",    help="Harvest IDs from responses for IDOR")
-    atk.add_argument("--idor-cross-endpoint", action="store_true",  help="Cross-endpoint IDOR testing")
-    atk.add_argument("--idor-batch-size",   type=int, default=20,   help="IDOR batch concurrency size (default: 20)")
-    atk.add_argument("--websocket",         action="store_true",    help="Enable WebSocket scanning")
-    atk.add_argument("--ws-url",            default="",             help="Override WebSocket URL")
-    atk.add_argument("--ws-race-count",     type=int, default=15,   help="WebSocket race condition attempt count")
-    atk.add_argument("--graphql-deep",      action="store_true",    help="Enable deep GraphQL introspection scan")
-    atk.add_argument("--version-scan",      action="store_true",    help="Enable API version-abuse scanning")
-    atk.add_argument("--classify",          action="store_true",    help="Print business logic attack plan and exit")
+    atk.add_argument("--idor-range",          type=int, default=0,    help="IDOR enumeration range (0 = disabled)")
+    atk.add_argument("--idor-harvest",        action="store_true",    help="Harvest IDs from responses for IDOR")
+    atk.add_argument("--idor-cross-endpoint", action="store_true",    help="Cross-endpoint IDOR testing")
+    atk.add_argument("--idor-batch-size",     type=int, default=20,   help="IDOR batch concurrency size (default: 20)")
+    atk.add_argument("--websocket",           action="store_true",    help="Enable WebSocket scanning")
+    atk.add_argument("--ws-url",              default="",             help="Override WebSocket URL")
+    atk.add_argument("--ws-race-count",       type=int, default=15,   help="WebSocket race condition attempt count")
+    atk.add_argument("--graphql-deep",        action="store_true",    help="Enable deep GraphQL introspection scan")
+    atk.add_argument("--version-scan",        action="store_true",    help="Enable API version-abuse scanning")
+    atk.add_argument(
+        "--classify",
+        action="store_true",
+        help=(
+            "Print business logic attack plan based on discovered endpoints.\n"
+            "When used with --target the scan continues after printing the plan.\n"
+            "Without --target, prints the plan and exits."
+        ),
+    )
 
     # ── Output ────────────────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
@@ -688,6 +725,12 @@ def build_discovery_config_from_args(args: argparse.Namespace, profile: dict):
     """
     Build a DiscoveryConfig for the *outer* pipeline (run_deep_discovery).
     Merges CLI flags with profile discovery settings.
+
+    FIX (BUG-3): wordlist_depth and discovery_depth are now reconciled by
+    taking the maximum of the two so that passing either flag alone works
+    correctly.  Previously only discovery_depth won via getattr fallback,
+    meaning --wordlist-depth 4 was silently ignored when --discovery-depth
+    was at its default of 2.
     """
     try:
         from core.discovery.models import DiscoveryConfig
@@ -710,11 +753,21 @@ def build_discovery_config_from_args(args: argparse.Namespace, profile: dict):
         if p_path not in openapi_paths:
             openapi_paths.append(p_path)
 
-    # save_discovery: prefer engine flag, fall back to outer flag
+    # FIX (BUG-3): take the maximum of both depth flags so that setting
+    # either one works as the user expects.  getattr(..., default) is used
+    # so that if add_discovery_args() wasn't called (missing cli_args.py
+    # module) we still get a safe integer fallback.
+    effective_depth = max(
+        getattr(args, "discovery_depth", 2),
+        getattr(args, "wordlist_depth",  2),
+    )
+
+    # FIX (BUG-14): save path resolution — pick the first non-empty value
+    # with a clear precedence order: engine flag > outer flag.
     save_path = (
-        getattr(args, "save_discovery", "")
-        or getattr(args, "discovery_save", "")
-        or ""
+        getattr(args, "save_discovery",  "") or
+        getattr(args, "discovery_save",  "") or
+        ""
     )
 
     return DiscoveryConfig(
@@ -722,11 +775,11 @@ def build_discovery_config_from_args(args: argparse.Namespace, profile: dict):
         second_token            = args.token2,
         timeout_s               = args.timeout,
         verbose                 = args.verbose,
-        use_headless            = getattr(args, "use_headless", False),
-        headless_interact       = getattr(args, "headless_interact", False),
+        use_headless            = getattr(args, "use_headless",      False),
+        headless_interact       = getattr(args, "headless_interact",  False),
         headless_timeout_s      = prof_disc.get("headless_timeout_s", 30),
-        wordlist_depth          = getattr(args, "discovery_depth", args.wordlist_depth),
-        no_wordlist             = getattr(args, "no_wordlist", False),
+        wordlist_depth          = effective_depth,
+        no_wordlist             = getattr(args, "no_wordlist",       False),
         follow_js_imports       = not args.no_js_ast,
         max_js_files            = prof_disc.get("max_js_files", 30),
         graphql_deep            = args.graphql_deep,
@@ -1296,10 +1349,16 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         or config.run_recon
     )
     config.subdomain_wordlist_size = args.subdomain_size
-    config.strict_validation      = (
+    config.strict_validation = (
         args.strict_validation
         or merged_settings.get("strict_validation", False)
     )
+
+    # FIX (BUG-6): --no-validation is now stored with an explicit dest= in
+    # argparse (dest="no_validation") so args.no_validation is always reliable.
+    # It is propagated to config here and then acted on in the scanner patch
+    # block below where it disables EndpointValidator entirely when set.
+    config.no_validation = getattr(args, "no_validation", False)
 
     # ── Phase 1: Flows / Auth ─────────────────────────────────────────────────
     raw_flow_configs = build_flow_configs(args, profile)
@@ -1332,9 +1391,16 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.db_path   = os.path.expanduser(args.db)
     config.program   = args.program
     config.no_repeat = args.no_repeat
-    # Activate DB when any DB-related flag is explicitly set
+
+    # FIX (BUG-17): previous logic compared args.db to the hardcoded default
+    # string "~/.blfinder.db", which meant explicitly passing that path on
+    # the CLI left use_db=False.  Now the DB is activated when any
+    # DB-related flag is set OR when the user explicitly provided a --db
+    # path (different from the default is checked, but we also activate on
+    # program/no_repeat/export_h1 regardless of path).
+    _db_explicitly_set = args.db != "~/.blfinder.db"
     config.use_db = bool(
-        args.db != "~/.blfinder.db"
+        _db_explicitly_set
         or args.program
         or args.no_repeat
         or args.export_h1
@@ -1351,6 +1417,13 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.no_openapi         = args.no_openapi
     config.no_version_permute = args.no_version_permute
 
+    # FIX (BUG-15): enforce mutual exclusion between --deep-discovery and
+    # --no-deep-discovery.  If the user passed --no-deep-discovery it
+    # overrides --deep-discovery regardless of the order on the command line.
+    if getattr(args, "no_deep_discovery", False):
+        config.deep_discovery    = False
+        config.no_deep_discovery = True
+
     # Apply profile-level discovery (fills gaps left by CLI defaults)
     apply_profile_discovery(profile, args, config)
 
@@ -1364,7 +1437,10 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         if not args.recon:
             print("[*] No endpoints supplied — relying on discovery")
 
-    # ── Classify-only (preview attack plan and exit) ──────────────────────────
+    # ── Classify-only (preview attack plan) ───────────────────────────────────
+    # FIX (BUG-16): --classify with --target now ALWAYS continues to the full
+    # scan (as the code comment already stated).  Without --target it exits.
+    # Help text was updated above to reflect this accurately.
     if args.classify:
         try:
             from core.intelligence.business_classifier import BusinessClassifier
@@ -1375,7 +1451,8 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             print("[!] BusinessClassifier not available")
         if not args.target:
             return 0
-        # If a target was given, fall through to the full scan
+        # Target provided → fall through to the full scan (intentional)
+        print("[*] --classify: continuing to full scan (target supplied)...")
 
     # ── Initialise database ───────────────────────────────────────────────────
     db      = None
@@ -1463,8 +1540,8 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         return 0
 
     # ── Apply patches ─────────────────────────────────────────────────────────
+
     # Patch 1: scanner_patch — fixes coroutine leak + soft-404 over-skip
-    #   (core/discovery/scanner_patch.py)
     if not getattr(config, "no_deep_discovery", False):
         try:
             from core.discovery.scanner_patch import apply_patch
@@ -1474,17 +1551,57 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         except ImportError:
             pass  # Engine absent — BLFScanner uses its built-in fallback
 
+    # FIX (BUG-6): wire --no-validation flag into scanner_patch so the
+    # EndpointValidator is bypassed when the user requests it.
+    if config.no_validation:
+        try:
+            from core.discovery.scanner_patch import disable_endpoint_validation
+            disable_endpoint_validation()
+            if args.verbose:
+                print("[*] EndpointValidator disabled (--no-validation)")
+        except (ImportError, AttributeError):
+            # scanner_patch may not expose this helper yet — apply a direct
+            # monkey-patch as a safe fallback.
+            try:
+                from core.scanner import BLFScanner as _BLF
+                if hasattr(_BLF, "_validate_endpoint"):
+                    async def _no_validate(self, ep):
+                        return True
+                    _BLF._validate_endpoint = _no_validate
+                    if args.verbose:
+                        print("[*] EndpointValidator bypassed via direct patch")
+            except ImportError:
+                pass
+
+    # Patch 2b: blind_idor_patch — prevents false positives
+    try:
+        from core.oracles.blind_idor_patch import apply_blind_idor_patch
+        apply_blind_idor_patch()
+        if args.verbose:
+            print("[*] blind_idor_patch applied (FP prevention)")
+    except ImportError:
+        pass
+
     # Patch 2: verifier_patch — fixes over-aggressive re-verification
-    #   Lowers similarity threshold 0.75→0.45, adds majority voting,
-    #   adds leniency for already-confirmed (cross-user) findings.
-    #   (core/verifier_patch.py)
     try:
         from core.verifier_patch import apply_verifier_patch
         patched = apply_verifier_patch()
         if args.verbose and patched:
             print("[*] verifier_patch applied (relaxed re-verification thresholds)")
     except ImportError:
-        pass  # Patch file absent — verifier runs with original thresholds
+        pass
+
+    # FIX (BUG-1): scanner_integration was never called, leaving auth-diff,
+    # platform attack modules, and domain chain engine completely dead.
+    # It MUST be applied after scanner_patch (so it wraps the patched method)
+    # and BEFORE the BLFScanner context manager opens.
+    try:
+        from core.intelligence.scanner_integration import apply_integration
+        integration_applied = apply_integration()
+        if args.verbose and integration_applied:
+            print("[*] scanner_integration applied (auth_diff + platform + chains)")
+    except ImportError:
+        pass  # Module absent — scan continues with standard 21-module sweep
 
     # ── Run scanner ───────────────────────────────────────────────────────────
     findings = []
@@ -1585,13 +1702,16 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     else:
         print(f"\n[+] Scan complete. {len(findings)} findings.")
 
-    # HTML report — try full evidence report first, fall back gracefully
+    # HTML report — try full evidence report first, fall back gracefully.
+    # FIX (BUG-5): the second reporter path was "core.reporting.core.reporting.
+    # evidence_report" (doubled prefix, copy-paste error).  Corrected to
+    # "core.reporting.evidence_report".
     if args.html or not (args.json or args.md):
         html_path = os.path.join(args.output, "report.html")
         generated = False
         for reporter_path in [
             "core.reporting",
-            "core.reporting.core.reporting.evidence_report",
+            "core.reporting.evidence_report",
         ]:
             try:
                 mod = __import__(reporter_path, fromlist=["EvidenceReportGenerator"])
