@@ -6,12 +6,37 @@ Extends chain_engine.py by adding new capability constants,
 new ChainRule entries, and new CapabilityClassifier logic
 without modifying the existing chain_engine.py file.
 
-Call extend_chain_engine() once at startup to register everything.
+Call DomainChainEngine.register() once at startup to register everything.
+
+FIX CHANGELOG:
+  BUG-2  : Import path corrected from `core.chain_engine` to
+            `core.analysis.chain_engine` — matches the path used everywhere
+            else in the codebase (scanner_integration.py, etc.).  The old
+            path caused an ImportError that was swallowed by a bare
+            try/except, meaning none of the fintech/streaming chain rules
+            were ever registered.
+
+  BUG-11 : DomainChainEngine.register() is now thread-safe.  The previous
+            class-level `_registered = False` flag was read and set without
+            a lock.  Two concurrent callers could both read False and register
+            rules twice, causing duplicate CHAIN_RULES entries.  Fixed with
+            threading.Lock().
+
+  BUG-12 : extend_capability_classifier() now guards against double-patching
+            using its own flag (_classifier_extended).  Previously, if
+            register() was called twice (due to the race above), the
+            classifier was patched twice — causing exponential capability
+            sets and duplicate chain-rule hits.
 """
 
 from __future__ import annotations
 
-from core.chain_engine import (
+import threading
+
+# FIX (BUG-2): corrected import path from `core.chain_engine` to
+# `core.analysis.chain_engine`.  The codebase consistently uses the latter;
+# the wrong path caused a silent ImportError that killed all chain rules.
+from core.analysis.chain_engine import (
     CHAIN_RULES,
     ChainRule,
     CapabilityClassifier,
@@ -190,58 +215,58 @@ _DOMAIN_CHAIN_RULES: list[ChainRule] = [
         optional_caps=[CAP_NEGATIVE_AMOUNT, CAP_CURRENCY_CONFUSE],
         severity="CRITICAL",
         cvss=9.1,
-        cwe="CWE-284",
+        cwe="CWE-285",
         owasp="API5:2023 Broken Function Level Authorization",
         narrative_template=(
-            "Step 1: KYC bypass at {step1_endpoint} sets verification "
-            "status without completing identity checks — {step1_desc}\n"
-            "Step 2: With bypassed KYC, execute large transfer at "
-            "{step2_endpoint} beyond normal limits — {step2_desc}\n"
-            "Impact: Transfer funds without identity verification, "
-            "bypassing AML controls and regulatory limits."
+            "Step 1: KYC/SCA bypass at {step1_endpoint} — skip identity "
+            "verification step — {step1_desc}\n"
+            "Step 2: Transfer IDOR at {step2_endpoint} — access or initiate "
+            "transfers belonging to other accounts — {step2_desc}\n"
+            "Impact: Attacker moves funds across accounts without triggering "
+            "identity verification, evading AML controls."
         ),
         impact_template=(
-            "KYC bypass allows unverified accounts to execute transfers "
-            "that require identity verification. This violates AML regulations, "
-            "exposes the platform to regulatory fines, and enables money "
-            "laundering through the platform."
+            "KYC bypass allows unverified users to access financial operations "
+            "requiring verification. Combined with transfer IDOR, this enables "
+            "unauthorised high-value transfers and potential money laundering "
+            "without regulatory controls firing."
         ),
         recommendation=(
-            "1. Enforce KYC status through a separate verification service, "
-            "never through client-supplied fields.\n"
-            "2. Gate high-value transfers on a server-side KYC flag set only "
-            "after successful ID verification.\n"
-            "3. Log and alert on transfers from accounts with pending KYC."
+            "1. Enforce KYC status check on every regulated financial endpoint "
+            "server-side, not just at account creation.\n"
+            "2. Validate transfer ownership with a hard check on the "
+            "authenticated user's account ID.\n"
+            "3. Log and alert on any attempt to access transfer endpoints "
+            "before KYC completion."
         ),
     ),
 
     ChainRule(
         chain_id="CHAIN_FINTECH_6",
-        name="Fee Bypass + Transfer IDOR → Free Transfers to Any Account",
-        required_caps=[CAP_BYPASS_FEE, CAP_ACCESS_TRANSFER],
-        optional_caps=[CAP_NEGATIVE_AMOUNT, CAP_EXECUTE_TWICE],
+        name="Fee Bypass + Negative Amount → Profit From Transactions",
+        required_caps=[CAP_BYPASS_FEE, CAP_NEGATIVE_AMOUNT],
+        optional_caps=[CAP_REPLAY_IDEM, CAP_OVERFLOW_REFUND],
         severity="HIGH",
-        cvss=8.5,
+        cvss=8.2,
         cwe="CWE-20",
         owasp="API6:2023 Unrestricted Access to Sensitive Business Flows",
         narrative_template=(
-            "Step 1: Fee bypass at {step1_endpoint} removes transfer fee — "
-            "{step1_desc}\n"
-            "Step 2: Transfer IDOR at {step2_endpoint} allows sending to "
-            "any account ID — {step2_desc}\n"
-            "Impact: Execute fee-free transfers to any account, causing "
-            "revenue loss and enabling fund movement to foreign accounts."
+            "Step 1: Fee bypass at {step1_endpoint} — suppress platform fee "
+            "using is_fee_exempt=true or fee=0 — {step1_desc}\n"
+            "Step 2: Negative amount at {step2_endpoint} results in platform "
+            "paying the sender — {step2_desc}\n"
+            "Impact: Zero-cost or profit-generating transactions at scale."
         ),
         impact_template=(
-            "Fee bypass eliminates platform revenue per transfer. Combined "
-            "with IDOR on transfer destinations, an attacker can move funds "
-            "to any account without paying fees and without authorization checks."
+            "Fee exemption combined with negative amounts lets an attacker "
+            "generate profit from each transaction instead of paying fees. "
+            "At scale this drains platform revenue directly."
         ),
         recommendation=(
-            "1. Compute fees server-side — remove fee fields from API input.\n"
-            "2. Enforce transfer destination ownership — only allow sending "
-            "to pre-approved beneficiaries tied to the authenticated account.\n"
-            "3. Rate-limit transfers per account per time window."
+            "1. Fee exemption flags must be set server-side based on "
+            "account tier — never trust client-supplied exemption flags.\n"
+            "2. Reject negative amounts before fee calculation.\n"
+            "3. Audit all zero-fee or negative transactions."
         ),
     ),
 
@@ -343,12 +368,25 @@ _DOMAIN_CHAIN_RULES: list[ChainRule] = [
 # Extended capability classifier
 # ─────────────────────────────────────────────────────────────────────────────
 
+# FIX (BUG-12): guard flag prevents double-patching if extend_capability_classifier()
+# is ever called more than once (e.g. from a concurrent register() call before
+# the lock fix took effect, or during testing).
+_classifier_extended = False
+
+
 def extend_capability_classifier() -> None:
     """
     Patch CapabilityClassifier.classify() to recognise the new
     domain-specific categories from platform_attack_modules.py.
-    Called once from scanner_integration.py.
+    Called once from DomainChainEngine.register().
+
+    FIX (BUG-12): idempotent — safe to call multiple times without
+    double-patching.
     """
+    global _classifier_extended
+    if _classifier_extended:
+        return
+
     _orig_classify = CapabilityClassifier.classify
 
     def _extended_classify(self, finding: dict) -> set[str]:
@@ -405,6 +443,7 @@ def extend_capability_classifier() -> None:
         return caps
 
     CapabilityClassifier.classify = _extended_classify
+    _classifier_extended = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -416,20 +455,29 @@ class DomainChainEngine:
     Extends the existing ChainEngine with domain-specific chain rules.
     Call register() once at startup to add rules to CHAIN_RULES.
     After that, ChainEngine.analyze() picks them up automatically.
+
+    FIX (BUG-11): register() is now thread-safe via a class-level lock,
+    preventing duplicate rule registration if two threads call register()
+    concurrently before _registered is set.
     """
+
     _registered = False
+    # FIX (BUG-11): lock prevents two concurrent callers both reading
+    # _registered=False and registering rules twice.
+    _lock = threading.Lock()
 
     @classmethod
     def register(cls) -> None:
-        if cls._registered:
-            return
-        existing_ids = {r.chain_id for r in CHAIN_RULES}
-        for rule in _DOMAIN_CHAIN_RULES:
-            if rule.chain_id not in existing_ids:
-                CHAIN_RULES.append(rule)
-        extend_capability_classifier()
-        cls._registered = True
-        print(
-            f"  [domain_chains] registered {len(_DOMAIN_CHAIN_RULES)} "
-            f"fintech/streaming chain rules"
-        )
+        with cls._lock:
+            if cls._registered:
+                return
+            existing_ids = {r.chain_id for r in CHAIN_RULES}
+            for rule in _DOMAIN_CHAIN_RULES:
+                if rule.chain_id not in existing_ids:
+                    CHAIN_RULES.append(rule)
+            extend_capability_classifier()
+            cls._registered = True
+            print(
+                f"  [domain_chains] registered {len(_DOMAIN_CHAIN_RULES)} "
+                f"fintech/streaming chain rules"
+            )
