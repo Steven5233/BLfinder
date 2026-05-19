@@ -1,6 +1,15 @@
 """
 BLFinder v3.1 — core/discovery/scanner_patch.py
 Fixes: coroutine leak, soft-404 over-skipping, missing PoC in reports.
+
+FIX CHANGELOG:
+  BUG-6  : Added disable_endpoint_validation() function.  Previously
+            --no-validation was stored in config but never acted on because
+            no code path in this file or scanner.py read it.  blfinder.py
+            now calls disable_endpoint_validation() when the flag is set,
+            and this function replaces _validate_endpoint on BLFScanner with
+            a no-op that always returns True, bypassing EndpointValidator
+            entirely.
 """
 
 from __future__ import annotations
@@ -50,7 +59,12 @@ def _build_poc(finding, token: str) -> dict:
     evidence = getattr(finding, "evidence",     "See description")
     rec    = getattr(finding, "recommendation", "")
 
-    auth_hdr  = f' -H "Authorization: Bearer {token}"' if token else ""
+    # FIX (BUG-8 from scanner_integration review): use a placeholder instead
+    # of the raw token in stored PoC output so credentials are not persisted
+    # in reports, the database, or HackerOne drafts.  The real token is used
+    # only for live requests, never stored in the PoC dict.
+    token_display = "<YOUR_BEARER_TOKEN>" if token else ""
+    auth_hdr  = f' -H "Authorization: Bearer {token_display}"' if token_display else ""
     body_part = ""
     if body and isinstance(body, dict):
         body_part = f" -d '{json.dumps(body)}'"
@@ -69,9 +83,9 @@ def _build_poc(finding, token: str) -> dict:
         "",
         f'url = "{url}"',
     ]
-    if token:
+    if token_display:
         python_lines += [
-            f'headers = {{"Authorization": "Bearer {token}", '
+            f'headers = {{"Authorization": "Bearer {token_display}", '
             f'"Content-Type": "application/json"}}',
         ]
     else:
@@ -96,7 +110,6 @@ def _build_poc(finding, token: str) -> dict:
     if body and isinstance(body, dict):
         body_str = f"\r\n\r\n{json.dumps(body)}"
 
-    parsed_url = url
     path = "/"
     host = url
     try:
@@ -114,8 +127,8 @@ def _build_poc(finding, token: str) -> dict:
         f"Host: {host}\r\n"
         f"Content-Type: application/json\r\n"
     )
-    if token:
-        burp_raw += f"Authorization: Bearer {token}\r\n"
+    if token_display:
+        burp_raw += f"Authorization: Bearer {token_display}\r\n"
     burp_raw += f"Connection: close{body_str}"
 
     h1_template = (
@@ -126,20 +139,20 @@ def _build_poc(finding, token: str) -> dict:
     )
 
     return {
-        "curl":             curl,
-        "python_script":    python_script,
-        "burp_raw":         burp_raw,
+        "curl":               curl,
+        "python_script":      python_script,
+        "burp_raw":           burp_raw,
         "hackerone_template": h1_template,
-        "steps":            steps,
-        "reproduction":     steps,
-        "method":           method,
-        "url":              url,
-        "headers":          {"Authorization": f"Bearer {token}"} if token else {},
-        "body":             body or {},
-        "vulnerability":    title,
-        "impact":           desc,
-        "affected_endpoint": url,
-        "recommendation":   rec,
+        "steps":              steps,
+        "reproduction":       steps,
+        "method":             method,
+        "url":                url,
+        "headers":            {"Authorization": f"Bearer {token_display}"} if token_display else {},
+        "body":               body or {},
+        "vulnerability":      title,
+        "impact":             desc,
+        "affected_endpoint":  url,
+        "recommendation":     rec,
     }
 
 
@@ -341,6 +354,58 @@ def apply_patch() -> bool:
     return True
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX (BUG-6): disable_endpoint_validation()
+# ─────────────────────────────────────────────────────────────────────────────
+
+def disable_endpoint_validation() -> bool:
+    """
+    Bypass EndpointValidator entirely so that --no-validation scans ALL
+    discovered endpoints regardless of response type.
+
+    blfinder.py calls this after apply_patch() when config.no_validation
+    is True.  Previously --no-validation was stored in config but never
+    acted on — this function is what makes the flag actually work.
+
+    Approach: replace BLFScanner._validate_endpoint with an async no-op
+    that always returns True (i.e. "endpoint is valid, do not skip").
+
+    Returns True if the patch was applied, False if core.scanner is absent.
+    """
+    try:
+        from core.scanner import BLFScanner
+    except ImportError:
+        return False
+
+    # Check whether the scanner exposes a _validate_endpoint hook.
+    # If it does, replace it.  If not, replace the EndpointValidator
+    # attribute in __aenter__ so it never runs validate().
+    if hasattr(BLFScanner, "_validate_endpoint"):
+        async def _always_valid(self, endpoint):
+            return True
+
+        BLFScanner._validate_endpoint = _always_valid
+        return True
+
+    # Fallback: patch __aenter__ to set _endpoint_validator to None after
+    # it is initialised, which causes all conditional checks of the form
+    # `if self._endpoint_validator:` to skip the validation block.
+    _orig_aenter = BLFScanner.__aenter__
+
+    async def _aenter_no_validation(self):
+        result = await _orig_aenter(self)
+        # Null out the validator so every endpoint passes through
+        self._endpoint_validator = None
+        return result
+
+    BLFScanner.__aenter__ = _aenter_no_validation
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-test
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     import warnings
 
@@ -350,17 +415,17 @@ if __name__ == "__main__":
 
     print("\n[TEST 1] _is_real_response")
     cases = [
-        (200, '{"user_id": 1}',                  True,  "200 JSON"),
-        (401, '{"error": "unauthorized"}',        True,  "401 auth required"),
-        (403, "Forbidden",                         True,  "403 exists"),
-        (400, '{"message": "bad request"}',       True,  "400 validation"),
-        (405, "Method Not Allowed",                True,  "405 method"),
-        (422, '{"errors": {"price": "invalid"}}', True,  "422 validation"),
-        (0,   "",                                  False, "0 failed"),
-        (200, "",                                  True,  "200 empty — always scan"),
-        (200, "ok",                                True,  "200 tiny — always scan"),
-        (404, "<html><body>404</body></html>",     False, "404 HTML"),
-        (200, '{"data": [], "total": 0}',          True,  "200 API data key"),
+        (200, '{"user_id": 1}',                   True,  "200 JSON"),
+        (401, '{"error": "unauthorized"}',         True,  "401 auth required"),
+        (403, "Forbidden",                          True,  "403 exists"),
+        (400, '{"message": "bad request"}',        True,  "400 validation"),
+        (405, "Method Not Allowed",                 True,  "405 method"),
+        (422, '{"errors": {"price": "invalid"}}',  True,  "422 validation"),
+        (0,   "",                                   False, "0 failed"),
+        (200, "",                                   True,  "200 empty — always scan"),
+        (200, "ok",                                 True,  "200 tiny — always scan"),
+        (404, "<html><body>404</body></html>",      False, "404 HTML"),
+        (200, '{"data": [], "total": 0}',           True,  "200 API data key"),
     ]
     all_pass = True
     for status, body, expect, label in cases:
@@ -398,19 +463,19 @@ if __name__ == "__main__":
     else:
         print("  PASS")
 
-    print("\n[TEST 3] _build_poc produces all required keys")
+    print("\n[TEST 3] _build_poc produces all required keys with token placeholder")
 
     class FC:
         auth_token = "tok123"
 
     class FF:
-        request     = {"method": "POST", "url": "https://api.x.com/checkout", "body": {"price": 0}}
-        endpoint    = "https://api.x.com/checkout"
-        title       = "Price Manipulation"
-        description = "Price accepted as 0"
-        evidence    = "price=0 returned 200"
+        request        = {"method": "POST", "url": "https://api.x.com/checkout", "body": {"price": 0}}
+        endpoint       = "https://api.x.com/checkout"
+        title          = "Price Manipulation"
+        description    = "Price accepted as 0"
+        evidence       = "price=0 returned 200"
         recommendation = "Validate server-side"
-        poc         = None
+        poc            = None
 
     f = FF()
     _ensure_poc(f, FC())
@@ -420,20 +485,23 @@ if __name__ == "__main__":
         if not ok:
             all_pass = False
         print(f"  [{'PASS' if ok else 'FAIL'}] poc['{k}'] present and non-empty")
-    assert "tok123" in f.poc["curl"],         "token in curl"
-    assert "tok123" in f.poc["python_script"], "token in python"
-    assert "tok123" in f.poc["burp_raw"],     "token in burp"
-    print("  PASS — auth token included in all formats")
+
+    # FIX (BUG-8): token placeholder must appear, not raw token
+    assert "<YOUR_BEARER_TOKEN>" in f.poc["curl"],          "placeholder in curl"
+    assert "<YOUR_BEARER_TOKEN>" in f.poc["python_script"], "placeholder in python"
+    assert "<YOUR_BEARER_TOKEN>" in f.poc["burp_raw"],      "placeholder in burp"
+    assert "tok123" not in f.poc["curl"],                   "raw token NOT in curl"
+    print("  PASS — token placeholder used, raw token not stored")
 
     print("\n[TEST 4] _ensure_poc does not overwrite existing PoC")
 
     class FFExisting:
-        poc         = {"curl": "existing curl", "steps": "existing steps"}
-        request     = {}
-        endpoint    = ""
-        title       = ""
-        description = ""
-        evidence    = ""
+        poc            = {"curl": "existing curl", "steps": "existing steps"}
+        request        = {}
+        endpoint       = ""
+        title          = ""
+        description    = ""
+        evidence       = ""
         recommendation = ""
 
     f2 = FFExisting()
@@ -447,6 +515,14 @@ if __name__ == "__main__":
     assert 0   not in _NEVER_SKIP_STATUSES
     assert 404 not in _NEVER_SKIP_STATUSES
     print(f"  PASS — {len(_NEVER_SKIP_STATUSES)} statuses")
+
+    print("\n[TEST 6] disable_endpoint_validation() is callable")
+    result = disable_endpoint_validation()
+    print(
+        f"  result={result} "
+        f"({'no core.scanner — expected in isolation' if not result else 'patch applied'})"
+    )
+    print("  PASS")
 
     print()
     if all_pass:
