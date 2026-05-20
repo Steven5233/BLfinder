@@ -561,6 +561,39 @@ EXAMPLES:
         ),
     )
 
+    # ── Endpoint Enrichment ───────────────────────────────────────────────────
+    enr = p.add_argument_group(
+        "Endpoint Enrichment",
+        description=(
+            "Automatically infers real body parameters and query params for\n"
+            "bare endpoints (body: {}, params: {}) before scanning.\n"
+            "Uses 4 strategies: HTTP response mirroring, validation error\n"
+            "parsing, JSON schema extraction, and path-pattern dictionary.\n"
+            "Enabled automatically when -T TOKEN is supplied and bare\n"
+            "endpoints are present. Use --no-enrich to disable."
+        ),
+    )
+    enr.add_argument(
+        "--no-enrich",
+        action="store_true", dest="no_enrich",
+        help="Skip automatic body/param enrichment of bare endpoints",
+    )
+    enr.add_argument(
+        "--enrich-save",
+        default="", metavar="FILE", dest="enrich_save",
+        help="Save enriched endpoints JSON to this file before scanning",
+    )
+    enr.add_argument(
+        "--enrich-concurrency",
+        type=int, default=8, metavar="N", dest="enrich_concurrency",
+        help="Max concurrent enrichment probes (default: 8)",
+    )
+    enr.add_argument(
+        "--no-enrich-promote",
+        action="store_true", dest="no_enrich_promote",
+        help="Skip GET→POST method promotion during enrichment",
+    )
+
     # ── Output ────────────────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
     out.add_argument("-o", "--output",  default=".",  help="Output directory (default: current dir)")
@@ -1602,6 +1635,61 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             print("[*] scanner_integration applied (auth_diff + platform + chains)")
     except ImportError:
         pass  # Module absent — scan continues with standard 21-module sweep
+
+    # ── Endpoint enrichment ───────────────────────────────────────────────────
+    # Adds real body parameters and query params to bare endpoints so that
+    # BLFinder's attack modules have concrete fields to manipulate.
+    # Runs automatically unless --no-enrich is passed.
+    # Skipped when all endpoints already have bodies (nothing to infer).
+    _bare_count = sum(
+        1 for ep in endpoints
+        if not ep.get("body") and not ep.get("params")
+    )
+    _should_enrich = (
+        not getattr(args, "no_enrich", False)
+        and _bare_count > 0
+        and args.token  # need auth to probe protected endpoints
+        and not args.no_scan
+    )
+    if _should_enrich:
+        print(
+            f"[*] Enriching {_bare_count}/{len(endpoints)} bare endpoints "
+            f"with real body parameters..."
+        )
+        try:
+            from core.discovery.endpoint_enricher import enrich_endpoints
+            endpoints = await enrich_endpoints(
+                endpoints    = endpoints,
+                target_url   = config.target_url,
+                auth_token   = config.auth_token,
+                second_token = getattr(config, "second_user_token", "") or "",
+                timeout_s    = min(args.timeout, 10),
+                concurrency  = getattr(args, "enrich_concurrency", 8),
+                verbose      = args.verbose,
+                promote_get  = not getattr(args, "no_enrich_promote", False),
+            )
+            # Optionally save enriched endpoints
+            enrich_save = getattr(args, "enrich_save", "")
+            if enrich_save:
+                try:
+                    with open(enrich_save, "w") as _ef:
+                        json.dump(endpoints, _ef, indent=2)
+                    print(f"[+] Enriched endpoints saved → {enrich_save}")
+                except OSError as _e:
+                    print(f"[!] Could not save enriched endpoints: {_e}")
+        except ImportError:
+            print(
+                "[!] endpoint_enricher not found — place "
+                "core/discovery/endpoint_enricher.py in your project.\n"
+                "[!] Continuing with bare endpoints (attack modules may find less)."
+            )
+    elif _bare_count > 0 and not args.token:
+        print(
+            f"[*] {_bare_count} endpoints have no body/params. "
+            f"Pass -T TOKEN to enable automatic enrichment (--enrich)."
+        )
+    elif getattr(args, "no_enrich", False) and _bare_count > 0:
+        print(f"[*] Enrichment skipped (--no-enrich). {_bare_count} endpoints are bare.")
 
     # ── Run scanner ───────────────────────────────────────────────────────────
     findings = []
