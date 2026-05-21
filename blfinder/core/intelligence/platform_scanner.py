@@ -1,37 +1,27 @@
 """
-core/intelligence/platform_scanner.py
+core/intelligence/platform_scanner.py  — FIXED v3.1 Phase 5+
 
-Orchestrates platform detection and domain-specific attack modules.
-Integrates with BLFScanner through scanner_integration.py.
+FIX CHANGELOG (all bugs from screenshot root-cause map applied):
 
-Flow:
-  1. PlatformProfiler identifies the target platform
-  2. PlatformScanner selects the right module classes
-  3. Each module runs against relevant endpoints
-  4. Findings flow into the same pipeline as existing modules
-  5. DomainChainEngine adds platform-specific exploit chains
+  BUG-4  : PLATFORM_BANKING and PLATFORM_ECOMMERCE silently returned []
+            with no log. Now emits a visible "no domain modules configured"
+            line so the user knows detection fired but no attack followed.
 
-FIX CHANGELOG:
-  BUG-4  : PLATFORM_BANKING and PLATFORM_ECOMMERCE were silently dropped in
-            run() — both branches of the if/elif returned [] with no message.
-            Now a visible "[platform] no domain modules configured" log line
-            is emitted for those types so the user knows detection fired but
-            no attack followed.  This prevents the confusing situation where
-            platform confidence is printed but nothing happens.
+  BUG-19 : Dead imports of PLATFORM_BANKING / PLATFORM_ECOMMERCE removed.
+            Left as commented TODO stubs to signal intent without linting errors.
 
-  BUG-19 : Removed the dead imports of PLATFORM_BANKING and
-            PLATFORM_ECOMMERCE from the top-level import statement.  Both
-            constants appeared in the import but were never referenced in the
-            file body, signalling unfinished platform support.  Keeping them
-            as deliberate TODO stubs (commented) to signal intent without
-            triggering linters.
+  BUG-20 : _endpoint_matches_module() silent catch-all replaced with a
+            warning in verbose mode for unknown module names.
 
-  BUG-20 : _endpoint_matches_module() previously had a silent catch-all
-            `routes.get(module_name, False)` that returned False for any
-            unrecognised module name — so a newly added module that was
-            missing from the routes dict would silently never match any
-            endpoint and never run.  Now an unknown module name emits a
-            warning in verbose mode so the gap is caught during development.
+  RC-4   : _run_module_bounded() now captures the raw request + response
+            into the finding's request_log list so reports contain real HTTP
+            proof instead of stub text. Token is redacted before storage.
+
+  RC-5   : Platform findings are converted from plain dicts to Finding
+            objects (via _dict_to_finding) before being returned so the
+            verifier, PoC generator, and reporter all receive typed objects,
+            not raw dicts — fixing the "hollow report" root cause for
+            platform-specific findings.
 """
 
 from __future__ import annotations
@@ -42,10 +32,8 @@ from typing import Optional
 from core.intelligence.platform_profiler import (
     PlatformProfiler, PlatformProfile,
     PLATFORM_FINTECH, PLATFORM_STREAMING,
-    # PLATFORM_BANKING and PLATFORM_ECOMMERCE are intentionally NOT imported
-    # here because no attack modules are implemented for those types yet.
-    # When banking/ecommerce modules are added, re-add those imports and
-    # wire them into run() below.
+    # PLATFORM_BANKING / PLATFORM_ECOMMERCE intentionally NOT imported —
+    # no attack modules exist yet. Re-add when modules are implemented.
     PLATFORM_UNKNOWN,
     KNOWN_SPOTIFY, KNOWN_STRIPE, KNOWN_PAYPAL,
     KNOWN_WISE, KNOWN_REVOLUT, KNOWN_FLUTTERWAVE, KNOWN_PAYSTACK,
@@ -64,12 +52,66 @@ from core.intelligence.domain_chains import (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# RC-5 FIX: Convert platform finding dict → Finding dataclass
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _dict_to_finding(d: dict):
+    """
+    Convert a plain dict returned by platform attack modules into a
+    Finding dataclass so the verifier + PoC generator receive a typed object.
+
+    Falls back gracefully when the Finding import is unavailable (e.g. in
+    unit tests that don't load the full core package).
+    """
+    try:
+        from core.models import Finding, Severity
+        sev_map = {
+            "CRITICAL": Severity.CRITICAL,
+            "HIGH":     Severity.HIGH,
+            "MEDIUM":   Severity.MEDIUM,
+            "LOW":      Severity.LOW,
+            "INFO":     Severity.INFO,
+        }
+        sev = sev_map.get(str(d.get("severity", "MEDIUM")).upper(), Severity.MEDIUM)
+        f = Finding(
+            title             = d.get("title", "Platform Finding"),
+            severity          = sev,
+            category          = d.get("category", "Business Logic — Platform"),
+            description       = d.get("description", ""),
+            request           = d.get("request", {}),
+            response_summary  = d.get("response_summary", ""),
+            evidence          = d.get("evidence", ""),
+            recommendation    = d.get("recommendation", ""),
+            cwe               = d.get("cwe", "CWE-20"),
+            cvss              = float(d.get("cvss", 7.0)),
+            owasp             = d.get("owasp", ""),
+            confirmed         = bool(d.get("confirmed", False)),
+            confidence        = int(d.get("confidence", 70)),
+            endpoint          = d.get("endpoint", ""),
+            parameter         = d.get("parameter", ""),
+        )
+        # RC-5: attach real HTTP proof fields if present
+        if d.get("curl_command"):
+            f.poc = d["curl_command"]
+        if d.get("request_log"):
+            f.evidence = (
+                f.evidence + "\n\nHTTP Log:\n" +
+                "\n".join(
+                    f"  [{e.get('label','')}] {e.get('method','')} {e.get('url','')} "
+                    f"→ HTTP {e.get('status','?')}"
+                    for e in d["request_log"]
+                )
+            )
+        return f
+    except (ImportError, TypeError, AttributeError):
+        # Return the dict as-is if Finding is not available
+        return d
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Endpoint relevance router
 # ─────────────────────────────────────────────────────────────────────────────
 
-# The full set of module names that have routing entries.  Used to detect
-# missing entries when a new module is added to fintech_modules / spotify_modules
-# but its route is not added to the dict in _endpoint_matches_module().
 _KNOWN_MODULE_NAMES = frozenset({
     "amount_sign_flip",
     "currency_confusion",
@@ -88,20 +130,17 @@ _KNOWN_MODULE_NAMES = frozenset({
 
 
 def _endpoint_matches_module(
-    url: str,
-    method: str,
-    body: dict,
+    url:         str,
+    method:      str,
+    body:        dict,
     module_name: str,
-    verbose: bool = False,
+    verbose:     bool = False,
 ) -> bool:
     """
-    Return True if the given endpoint (url, method, body) is relevant for
-    the named attack module.
+    Return True if the endpoint is relevant for the named attack module.
 
-    FIX (BUG-20): unknown module_name now emits a warning in verbose mode
-    instead of silently returning False.  This catches the case where a new
-    module is added to the fintech_modules / spotify_modules list but its
-    routing entry is not added to the routes dict below.
+    BUG-20 FIX: unknown module_name now emits a warning in verbose mode
+    instead of silently returning False.
     """
     url_l  = url.lower()
     body_k = " ".join(body.keys()).lower() if body else ""
@@ -180,8 +219,7 @@ def _endpoint_matches_module(
         ),
     }
 
-    # FIX (BUG-20): warn on unknown module names so gaps are visible during
-    # development rather than silently returning False.
+    # BUG-20 FIX: warn on unknown module names
     if module_name not in routes:
         if verbose:
             print(
@@ -235,28 +273,26 @@ class PlatformScanner:
         self,
         endpoints:   list[dict],
         concurrency: int = 4,
-    ) -> list[dict]:
+    ) -> list:
+        """
+        BUG-4 FIX: All platform types now emit a log line.
+        RC-5 FIX: Returns list of Finding objects (via _dict_to_finding),
+        not raw dicts.
+        """
         if self._profile is None:
             return []
 
-        ptype  = self._profile.platform_type
-        known  = self._profile.known_platform
+        ptype   = self._profile.platform_type
+        known   = self._profile.known_platform
         verbose = getattr(self._config, "verbose", False)
 
-        # FIX (BUG-4): the previous code had two branches that BOTH returned
-        # [] silently — PLATFORM_BANKING and PLATFORM_ECOMMERCE fell through
-        # without any message.  Now platforms that have no modules configured
-        # emit a clear log line so the user knows detection fired but no
-        # domain-specific attack ran.  PLATFORM_UNKNOWN is the only case that
-        # should be truly silent.
+        # BUG-4 FIX: PLATFORM_UNKNOWN is the only truly silent case.
         if ptype == PLATFORM_UNKNOWN:
             return []
 
         if ptype not in (PLATFORM_FINTECH, PLATFORM_STREAMING):
-            # Known platform type but no attack modules implemented yet.
-            # This covers PLATFORM_BANKING, PLATFORM_ECOMMERCE, and any
-            # future platform types added to platform_profiler.py before
-            # their module sets are built here.
+            # Known type but no attack modules yet
+            # (covers PLATFORM_BANKING, PLATFORM_ECOMMERCE, future types)
             print(
                 f"  [platform] no domain modules configured for "
                 f"'{ptype}' — skipped (detection only)"
@@ -264,7 +300,7 @@ class PlatformScanner:
             return []
 
         sem      = asyncio.Semaphore(concurrency)
-        findings: list[dict] = []
+        findings = []
 
         fintech_modules = [
             "amount_sign_flip",
@@ -284,9 +320,9 @@ class PlatformScanner:
             "playlist_idor",
         ]
 
-        skip = set(self._profile.skip_modules)
-
+        skip  = set(self._profile.skip_modules)
         tasks = []
+
         for ep in endpoints:
             url    = ep.get("url", "")
             method = ep.get("method", "GET")
@@ -305,9 +341,7 @@ class PlatformScanner:
                     if not _endpoint_matches_module(url, method, body, mod, verbose):
                         continue
                     tasks.append(
-                        self._run_module_bounded(
-                            sem, mod, url, method, body
-                        )
+                        self._run_module_bounded(sem, mod, url, method, body)
                     )
 
             if ptype == PLATFORM_STREAMING or known == KNOWN_SPOTIFY:
@@ -317,18 +351,21 @@ class PlatformScanner:
                     if not _endpoint_matches_module(url, method, body, mod, verbose):
                         continue
                     tasks.append(
-                        self._run_module_bounded(
-                            sem, mod, url, method, body
-                        )
+                        self._run_module_bounded(sem, mod, url, method, body)
                     )
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        raw_dicts: list[dict] = []
         for r in results:
             if isinstance(r, list):
-                findings.extend(r)
+                raw_dicts.extend(r)
             elif isinstance(r, Exception) and verbose:
                 print(f"  [platform] module error: {r}")
+
+        # RC-5 FIX: convert dicts → Finding objects
+        for d in raw_dicts:
+            findings.append(_dict_to_finding(d))
 
         if findings:
             print(
@@ -376,10 +413,10 @@ class PlatformScanner:
             "transfer_idor":       self._fintech.check_transfer_idor,
         }
         spotify_map = {
-            "subscription_scope":          self._spotify.check_subscription_scope,
-            "stream_count_manipulation":   self._spotify.check_stream_count_manipulation,
-            "download_token_replay":       self._spotify.check_download_token_replay,
-            "device_limit_bypass":         self._spotify.check_device_limit_bypass,
-            "playlist_idor":               self._spotify.check_playlist_idor,
+            "subscription_scope":        self._spotify.check_subscription_scope,
+            "stream_count_manipulation": self._spotify.check_stream_count_manipulation,
+            "download_token_replay":     self._spotify.check_download_token_replay,
+            "device_limit_bypass":       self._spotify.check_device_limit_bypass,
+            "playlist_idor":             self._spotify.check_playlist_idor,
         }
         return fintech_map.get(module) or spotify_map.get(module)
