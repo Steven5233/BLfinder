@@ -1,4 +1,7 @@
 """
+core/scanner.py  — BLFScanner v3.1 Phase 5+ FIXED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 BLFinder v3.1 Phase 5 — core/scanner.py
 Complete scanner with all phases integrated + Deep Discovery Engine.
 
@@ -13,6 +16,7 @@ Phase 5: Live dashboard integration, profile system, DB deduplication,
 Phase 5+: Deep Discovery Engine — JS AST, OpenAPI, smart wordlist,
           version permutation, headless crawl, soft-404 filter,
           priority scoring, schema enrichment
+
 """
 
 from __future__ import annotations
@@ -154,6 +158,180 @@ except ImportError:
     _HAS_DEEP_DISCOVERY = False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WEAK-1 FIX: Extended ID pattern matching for IDOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+_IDOR_ID_PATTERNS: list[re.Pattern] = [
+    re.compile(r'^\d{1,15}$'),                                                              # plain numeric
+    re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I), # UUID v4
+    re.compile(r'^[0-9a-f]{24}$', re.I),                                                    # MongoDB ObjectID
+    re.compile(r'^[a-z]{2,4}_[A-Za-z0-9]{10,}$'),                                          # Stripe-format
+    re.compile(r'^[0-9A-Za-z]{22}$'),                                                       # Spotify/base62
+    re.compile(r'^[0-9a-f]{12,40}$', re.I),                                                 # hex hash
+]
+_NUMERIC_ONLY = re.compile(r'^\d{1,15}$')
+_IDOR_SKIP_WORDS = frozenset({
+    "api", "v1", "v2", "v3", "v4", "internal", "legacy", "beta", "alpha",
+    "admin", "user", "users", "account", "accounts", "payment", "payments",
+    "order", "orders", "product", "products", "me", "profile", "settings",
+    "config", "list", "all", "search", "create", "update", "delete",
+    "get", "post", "put", "patch", "true", "false", "null", "none",
+    "json", "xml", "csv", "graphql", "health", "ping", "status", "docs",
+    "transfer", "transfers",
+})
+
+
+def _is_id_segment(segment: str) -> bool:
+    if not segment or segment.lower() in _IDOR_SKIP_WORDS:
+        return False
+    return any(p.match(segment) for p in _IDOR_ID_PATTERNS)
+
+
+def _generate_id_variants(segment: str) -> list[str]:
+    variants: list[str] = []
+    if _NUMERIC_ONLY.match(segment):
+        orig = int(segment)
+        for delta in (-1, 1, 2):
+            c = orig + delta
+            if c > 0:
+                variants.append(str(c))
+        for fixed in (1, 2, 3):
+            if str(fixed) != segment:
+                variants.append(str(fixed))
+    elif re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-', segment, re.I):
+        parts = segment.split("-")
+        try:
+            last_int = int(parts[-1], 16)
+            for delta in (1, -1):
+                new_last = format((last_int + delta) & 0xFFFFFFFFFFFF, "012x")
+                variants.append("-".join(parts[:-1] + [new_last]))
+        except ValueError:
+            pass
+        variants.append("00000000-0000-0000-0000-000000000000")
+    elif re.match(r'^[0-9a-f]{24}$', segment, re.I):
+        try:
+            base = segment[:-6]
+            tail = int(segment[-6:], 16)
+            for delta in (1, -1):
+                variants.append(base + format((tail + delta) & 0xFFFFFF, "06x"))
+        except ValueError:
+            pass
+    elif re.match(r'^[a-z]{2,4}_[A-Za-z0-9]{10,}$', segment):
+        prefix = segment.split("_")[0] + "_"
+        variants.extend([prefix + "test1234567890", prefix + "0000000000"])
+    else:
+        variants.extend(["1", "2", "9999999"])
+    return list(dict.fromkeys(v for v in variants if v and v != segment))[:5]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WEAK-2 FIX: Dynamic mass assignment field discovery
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PRIVILEGE_PATTERNS = [
+    re.compile(r'^is_', re.I),        re.compile(r'^has_', re.I),
+    re.compile(r'^can_', re.I),       re.compile(r'_level$', re.I),
+    re.compile(r'_tier$', re.I),      re.compile(r'_limit$', re.I),
+    re.compile(r'_override$', re.I),  re.compile(r'_multiplier$', re.I),
+    re.compile(r'^role', re.I),       re.compile(r'verified$', re.I),
+    re.compile(r'exempt$', re.I),     re.compile(r'bypass$', re.I),
+    re.compile(r'admin', re.I),       re.compile(r'status$', re.I),
+]
+
+
+def _looks_privilege_field(name: str, value: Any) -> bool:
+    if any(p.search(name) for p in _PRIVILEGE_PATTERNS):
+        return True
+    if isinstance(value, bool) and value is False:
+        return any(w in name.lower() for w in
+                   ["admin", "vip", "premium", "verified", "approved",
+                    "staff", "exempt", "bypass", "override"])
+    if isinstance(value, (int, float)) and value == 0:
+        return any(w in name.lower() for w in
+                   ["level", "tier", "limit", "multiplier", "credits"])
+    return False
+
+
+def _discover_dynamic_fields(response_body: str) -> list[tuple[str, Any]]:
+    discovered: list[tuple[str, Any]] = []
+    try:
+        data = json.loads(response_body)
+    except Exception:
+        return discovered
+    _STATIC_KEYS = {
+        "is_admin", "admin", "role", "is_premium", "premium", "subscription",
+        "plan", "credits", "balance", "is_staff", "approved", "email_verified",
+        "kyc_verified", "price_override", "tax_exempt", "fee_waiver",
+    }
+
+    def _walk(obj: Any) -> None:
+        if not isinstance(obj, dict):
+            return
+        for k, v in obj.items():
+            if k not in _STATIC_KEYS and _looks_privilege_field(k, v):
+                if isinstance(v, bool):
+                    discovered.append((k, True))
+                elif isinstance(v, (int, float)) and v == 0:
+                    discovered.append((k, 3))
+                elif isinstance(v, str):
+                    for elevated in ("admin", "verified", "vip", "premium", "approved"):
+                        if elevated not in str(v).lower():
+                            discovered.append((k, elevated))
+                            break
+            if isinstance(v, dict):
+                _walk(v)
+
+    _walk(data)
+    return discovered[:10]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WEAK-3 FIX: Extended race condition indicators (gambling/fintech added)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RACE_INDICATORS = frozenset([
+    # Original keywords
+    "redeem", "transfer", "withdraw", "claim", "checkout",
+    "purchase", "buy", "confirm", "coupon", "reward", "spin",
+    # WEAK-3 additions — gambling / fintech
+    "bet", "wager", "stake", "cashout", "cash-out", "cash_out",
+    "bonus", "accrual", "bonus-accrual", "bonus_accrual",
+    "settlement", "settle", "payout", "pay-out", "pay_out",
+    "deposit", "topup", "top-up", "top_up", "fund",
+    "refund", "reversal", "chargeback", "order", "invoice",
+    "charge", "pay", "enroll", "subscribe", "activate",
+])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WEAK-4 FIX: Cloudflare challenge detection helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CF_CHALLENGE_SIGNALS = (
+    "just a moment",
+    "cf-browser-verification",
+    "enable javascript and cookies",
+    "checking your browser",
+    "ddos-guard",
+    "ray id",
+)
+_cf_challenge_count = 0
+_cf_warned          = False
+_CF_WARN_THRESHOLD  = 3
+
+
+def _is_cf_challenge(status: int, headers: dict, body: str) -> bool:
+    if status not in (403, 503):
+        return False
+    if not headers:
+        return False
+    if not any(k.lower() == "cf-ray" for k in headers):
+        return False
+    body_lower = (body or "").lower()
+    return any(sig in body_lower for sig in _CF_CHALLENGE_SIGNALS)
+
+
 # ── User-Agent pool ───────────────────────────────────────────────────────────
 UA_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -173,7 +351,7 @@ UA_POOL = [
 # ── Adaptive Rate Limiter ─────────────────────────────────────────────────────
 class AdaptiveRateLimiter:
     def __init__(self, base_delay: float = 0.3):
-        self.base_delay = base_delay
+        self.base_delay       = base_delay
         self.delays:          dict[str, float] = {}
         self.consecutive_429: dict[str, int]   = defaultdict(int)
         self.consecutive_ok:  dict[str, int]   = defaultdict(int)
@@ -207,12 +385,8 @@ class AdaptiveRateLimiter:
                 self.delays[domain] = max(self.base_delay, current * 0.85)
 
 
-# ── Discovery config builder (internal helper) ────────────────────────────────
+# ── Discovery config builder ──────────────────────────────────────────────────
 def _build_discovery_config(scan_config: "ScanConfig") -> Optional["DiscoveryConfig"]:
-    """
-    Map ScanConfig attributes → DiscoveryConfig for the deep discovery engine.
-    Silently falls back for any attribute that does not exist on ScanConfig.
-    """
     if not _HAS_DEEP_DISCOVERY:
         return None
 
@@ -250,11 +424,6 @@ def _merge_discovered(
     existing:   list[dict],
     discovered: list[dict],
 ) -> tuple[list[dict], int]:
-    """
-    Merge deep-discovered endpoints into the existing list.
-    Deduplicates by (method, url). Enriches existing entries that have
-    no body but a discovered copy does. Returns (merged, count_added).
-    """
     idx_map: dict[str, int] = {}
     for i, ep in enumerate(existing):
         key = f"{ep.get('method','GET').upper()}|{ep.get('url','')}"
@@ -278,7 +447,7 @@ def _merge_discovered(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# BLFScanner — v3.1 Phase 5+ Complete
+# BLFScanner — v3.1 Phase 5+ Complete + Fixed
 # ═════════════════════════════════════════════════════════════════════════════
 class BLFScanner:
 
@@ -323,9 +492,9 @@ class BLFScanner:
         self._attack_plan:     Optional[AttackPlan]          = None
 
         # Phase 5
-        self._dashboard_state:        Optional[DashboardState] = None
-        self._findings_queue:         Optional[asyncio.Queue]  = None
-        self._profile_skip_modules:   set[str]  = set()
+        self._dashboard_state:          Optional[DashboardState] = None
+        self._findings_queue:           Optional[asyncio.Queue]  = None
+        self._profile_skip_modules:     set[str]  = set()
         self._profile_priority_modules: list[str] = []
 
         # Phase 5+: deep discovery
@@ -372,7 +541,7 @@ class BLFScanner:
         # Phase 5
         self._findings_queue = asyncio.Queue()
 
-        # Phase 5+: deep discovery engine instance
+        # Phase 5+: deep discovery engine
         if _HAS_DEEP_DISCOVERY and not getattr(self.config, "no_deep_discovery", False):
             self._discovery_engine = DeepDiscoveryEngine(
                 verbose=self.config.verbose
@@ -458,6 +627,12 @@ class BLFScanner:
         _retry_on_401: bool = True,
         **kwargs,
     ) -> tuple[int, dict, str, float]:
+        """
+        WEAK-4 FIX: Detects Cloudflare challenge pages and warns operator
+        when cf_clearance has expired mid-scan instead of silently failing.
+        """
+        global _cf_challenge_count, _cf_warned
+
         if self._session_mgr and _retry_on_401:
             await self._session_mgr.ensure_valid(
                 lambda: self._request(
@@ -491,17 +666,38 @@ class BLFScanner:
                 proxy=self.config.proxy if self.config.proxy else None,
                 **kwargs,
             ) as resp:
-                elapsed = time.time() - start
-                body    = await resp.text(errors="replace")
+                elapsed   = time.time() - start
+                body      = await resp.text(errors="replace")
+                resp_hdrs = dict(resp.headers)
                 self.rate_limiter.record(url, resp.status, elapsed)
                 self.request_log.append({
-                    "method": method, "url": url,
-                    "status": resp.status,
+                    "method":  method,
+                    "url":     url,
+                    "status":  resp.status,
                     "elapsed": round(elapsed, 3),
                 })
+
+                # WEAK-4 FIX: Cloudflare challenge detection
+                if _is_cf_challenge(resp.status, resp_hdrs, body):
+                    _cf_challenge_count += 1
+                    if _cf_challenge_count >= _CF_WARN_THRESHOLD and not _cf_warned:
+                        _cf_warned = True
+                        print(
+                            "\n"
+                            "  [!] ════════════════════════════════════════════════\n"
+                            "  [!] CLOUDFLARE CHALLENGE — cf_clearance has expired\n"
+                            "  [!] Multiple requests are being blocked.\n"
+                            "  [!] ACTION: Open target in browser → export cookies\n"
+                            "  [!]   → restart blfinder with new cf_clearance value\n"
+                            "  [!] ════════════════════════════════════════════════\n"
+                        )
+                else:
+                    if resp.status not in (403, 503):
+                        _cf_challenge_count = 0
+
                 if self._session_mgr:
                     self._session_mgr.absorb_response(
-                        dict(resp.headers), body, url, resp.status
+                        resp_hdrs, body, url, resp.status
                     )
                 if resp.status == 401 and _retry_on_401 and self._session_mgr:
                     refreshed = await self._session_mgr.handle_401(url)
@@ -512,8 +708,10 @@ class BLFScanner:
                             _retry_on_401=False, **kwargs,
                         )
                 if self.config.verbose:
-                    print(f"  [{resp.status}] {method} {url[:80]} ({elapsed:.2f}s)")
-                return resp.status, dict(resp.headers), body, elapsed
+                    print(
+                        f"  [{resp.status}] {method} {url[:80]} ({elapsed:.2f}s)"
+                    )
+                return resp.status, resp_hdrs, body, elapsed
 
         except asyncio.TimeoutError:
             return 0, {}, "TIMEOUT", time.time() - start
@@ -683,7 +881,7 @@ class BLFScanner:
                     self._baseline_samples[url], endpoint=url
                 )
 
-    # ── Smart Discovery (legacy fallback) ────────────────────────────────────
+    # ── Smart Discovery (legacy fallback) ─────────────────────────────────────
 
     async def smart_discover(self, seed_url: str) -> list[dict]:
         """
@@ -702,10 +900,10 @@ class BLFScanner:
             if status != 200 or not body:
                 return
             api_patterns = [
-                r'''(?:url|endpoint|api|path)\s*[=:]\s*["`']([/][^`'"<>\s]{3,80})["`']''',
-                r'''(?:fetch|axios|get|post|put|patch|delete)\s*\(\s*["`']([/][^`'"<>\s]{3,80})["`']''',
-                r'''/api/v?\d*/[a-z][a-z0-9_/-]{2,50}''',
-                r'''/v\d+/[a-z][a-z0-9_/-]{2,50}''',
+                r'(?:url|endpoint|api|path)\s*[=:]\s*["`\']([/][^`\'"<>\s]{3,80})["`\']',
+                r'(?:fetch|axios|get|post|put|patch|delete)\s*\(\s*["`\']([/][^`\'"<>\s]{3,80})["`\']',
+                r'/api/v?\d*/[a-z][a-z0-9_/-]{2,50}',
+                r'/v\d+/[a-z][a-z0-9_/-]{2,50}',
             ]
             discovered: set[str] = set()
             for pat in api_patterns:
@@ -1062,7 +1260,6 @@ class BLFScanner:
             if not url.startswith("http"):
                 url = urljoin(self.config.target_url, url)
 
-            # Use schema_hint from deep discovery as the starting body
             body   = ep.get("body", {}) or {}
             meta   = ep.get("_meta", {})
             if not body and meta.get("schema_hint"):
@@ -1124,7 +1321,7 @@ class BLFScanner:
                 f"{stats['skipped']} skipped "
                 f"({stats['soft_404']} soft-404, "
                 f"{stats['waf']} WAF, "
-                f"{stats['not_graphql']} not-graphql)"
+                f"{stats.get('not_graphql',0)} not-graphql)"
             )
 
         # Re-verify
@@ -1283,7 +1480,7 @@ class BLFScanner:
         return findings
 
     # ═════════════════════════════════════════════════════════════════════════
-    # MODULES 1–21  (unchanged from original — all 21 detection modules)
+    # MODULES 1–21
     # ═════════════════════════════════════════════════════════════════════════
 
     # MODULE 1 — Price Manipulation
@@ -1385,7 +1582,8 @@ class BLFScanner:
                 cs, _, _, _ = await self._request(method, url, json=canary)
                 if cs in (200, 201):
                     continue
-                pkg = self._build_pkg(ev, title=f"Negative Quantity — {key}={tampered}", endpoint=url, vuln_type="Negative Quantity", confidence=80)
+                pkg = self._build_pkg(ev, title=f"Negative Quantity — {key}={tampered}",
+                                      endpoint=url, vuln_type="Negative Quantity", confidence=80)
                 f = Finding(
                     title=f"Negative Quantity Exploit — `{key}` = {tampered} accepted",
                     severity=Severity.CRITICAL,
@@ -1406,46 +1604,66 @@ class BLFScanner:
                 break
         return findings
 
-    # MODULE 3 — IDOR / BOLA
+    # MODULE 3 — IDOR / BOLA  [WEAK-1 FIX: extended ID patterns]
     async def _check_idor_bola(self, url, method, body, params, base_status, base_body, resp_headers) -> list[Finding]:
         findings: list[Finding] = []
         parsed        = urlparse(url)
         path_segments = parsed.path.split("/")
 
         for seg_idx, segment in enumerate(path_segments):
-            if not segment or not re.match(r'^\d{1,12}$', segment):
+            if not segment:
                 continue
-            original_id = int(segment)
-            for test_id in [original_id - 1, original_id + 1, 1, 2, 3]:
-                if test_id <= 0:
-                    continue
+            # WEAK-1 FIX: use extended _is_id_segment instead of ^\d{1,12}$ only
+            if not _is_id_segment(segment):
+                continue
+            original_id = segment
+            for test_id in _generate_id_variants(segment):
                 new_segs = path_segments[:]
                 new_segs[seg_idx] = str(test_id)
                 test_url = urlunparse(parsed._replace(path="/".join(new_segs)))
                 ev = self._new_evidence()
                 await self._req_ev("baseline", ev, method, url, req_body=body if body else None)
-                status, _, resp_body, _ = await self._req_ev("attack", ev, method, test_url, req_body=body if body else None)
+                status, _, resp_body, _ = await self._req_ev("attack", ev, method, test_url,
+                                                              req_body=body if body else None)
                 if status != 200:
                     continue
                 if not self._responses_differ_significantly(base_body, resp_body):
                     continue
-                if any(t in resp_body.lower() for t in ["not found", "no resource", "does not exist"]):
+                if any(t in resp_body.lower() for t in [
+                    "not found", "no resource", "does not exist"
+                ]):
                     continue
                 confirmed = False
                 if self.config.second_user_token:
-                    s2, _, _, _ = await self._req_ev("cross_user", ev, method, test_url, req_body=body if body else None, token_override=self.config.second_user_token)
+                    s2, _, _, _ = await self._req_ev(
+                        "cross_user", ev, method, test_url,
+                        req_body=body if body else None,
+                        token_override=self.config.second_user_token,
+                    )
                     confirmed = s2 == 200
                 if self.config.no_auth_check:
-                    await self._req_ev("no_auth", ev, method, url, req_body=body if body else None, token_override="")
-                pkg = self._build_pkg(ev, title=f"IDOR — Path ID {original_id}→{test_id}", endpoint=test_url, vuln_type="IDOR/BOLA", confidence=91 if confirmed else 75, confirmed=confirmed)
+                    await self._req_ev("no_auth", ev, method, url,
+                                       req_body=body if body else None, token_override="")
+                pkg = self._build_pkg(
+                    ev, title=f"IDOR — Path ID {original_id}→{test_id}",
+                    endpoint=test_url, vuln_type="IDOR/BOLA",
+                    confidence=91 if confirmed else 75, confirmed=confirmed,
+                )
                 f = Finding(
                     title=f"IDOR/BOLA — Path ID {original_id}→{test_id} returned different resource",
                     severity=Severity.CRITICAL if confirmed else Severity.HIGH,
                     category="Business Logic — IDOR/BOLA",
-                    description=f"Changing path ID {original_id}→{test_id} at `{test_url}` returned different data. {'Cross-user CONFIRMED.' if confirmed else ''}",
+                    description=(
+                        f"Changing path ID {original_id}→{test_id} at `{test_url}` "
+                        f"returned different data. "
+                        f"{'Cross-user CONFIRMED.' if confirmed else ''}"
+                    ),
                     request={"method": method, "url": test_url},
                     response_summary=f"HTTP {status} — {resp_body[:300]}",
-                    evidence=f"ID {original_id}→{test_id}: different response {'[CONFIRMED]' if confirmed else ''}",
+                    evidence=(
+                        f"ID {original_id}→{test_id}: different response "
+                        f"{'[CONFIRMED]' if confirmed else ''}"
+                    ),
                     recommendation="Enforce ownership checks on every request.",
                     cwe="CWE-639", cvss=9.1 if confirmed else 8.1,
                     owasp="API1:2023 Broken Object Level Authorization",
@@ -1461,16 +1679,22 @@ class BLFScanner:
         if self.config.no_auth_check:
             ev_na = self._new_evidence()
             await self._req_ev("baseline", ev_na, method, url, req_body=body if body else None)
-            s_na, _, rb_na, _ = await self._req_ev("attack", ev_na, method, url, req_body=body if body else None, token_override="")
+            s_na, _, rb_na, _ = await self._req_ev("attack", ev_na, method, url,
+                                                    req_body=body if body else None, token_override="")
             if s_na in (200, 201) and self._response_indicates_success(rb_na, s_na):
                 sim = difflib.SequenceMatcher(None, base_body[:2000], rb_na[:2000]).ratio()
                 if sim > 0.7:
-                    pkg_na = self._build_pkg(ev_na, title="Unauthenticated Access", endpoint=url, vuln_type="Missing Authentication", confidence=90, confirmed=True)
+                    pkg_na = self._build_pkg(ev_na, title="Unauthenticated Access",
+                                             endpoint=url, vuln_type="Missing Authentication",
+                                             confidence=90, confirmed=True)
                     f = Finding(
                         title="Unauthenticated Access — resource accessible without token",
                         severity=Severity.CRITICAL,
                         category="Business Logic — Missing Authentication",
-                        description=f"No Authorization header at `{url}` returned HTTP {s_na} with {sim:.0%} similarity.",
+                        description=(
+                            f"No Authorization header at `{url}` returned "
+                            f"HTTP {s_na} with {sim:.0%} similarity."
+                        ),
                         request={"method": method, "url": url, "note": "No Authorization"},
                         response_summary=f"HTTP {s_na} — {rb_na[:300]}",
                         evidence=f"No-auth → HTTP {s_na}, similarity={sim:.0%}",
@@ -1489,12 +1713,23 @@ class BLFScanner:
     async def _check_bopla(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         base_len = len(base_body)
-        for probe in [{"expand": "all"}, {"fields": "*"}, {"include": "all"}, {"verbose": "1"}, {"full": "true"}, {"show_private": "1"}]:
+        for probe in [
+            {"expand": "all"}, {"fields": "*"}, {"include": "all"},
+            {"verbose": "1"}, {"full": "true"}, {"show_private": "1"},
+        ]:
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "GET", url)
-            status, _, resp_body, elapsed = await self._request("GET", url, params={**params, **probe})
+            status, _, resp_body, elapsed = await self._request(
+                "GET", url, params={**params, **probe}
+            )
             if ev:
-                ev.record(label="attack", method="GET", url=url + "?" + "&".join(f"{k}={v}" for k, v in probe.items()), req_headers=self._build_headers(), req_body=None, resp_status=status, resp_headers={}, resp_body=resp_body, elapsed=elapsed)
+                ev.record(
+                    label="attack", method="GET",
+                    url=url + "?" + "&".join(f"{k}={v}" for k, v in probe.items()),
+                    req_headers=self._build_headers(), req_body=None,
+                    resp_status=status, resp_headers={},
+                    resp_body=resp_body, elapsed=elapsed,
+                )
             if status != 200 or len(resp_body) <= base_len * 1.15:
                 continue
             base_data = self._try_parse_json(base_body)
@@ -1502,14 +1737,25 @@ class BLFScanner:
             new_keys: set[str] = set()
             if isinstance(new_data, dict) and isinstance(base_data, dict):
                 new_keys = set(new_data.keys()) - set(base_data.keys())
-            sensitive = ["password", "secret", "token", "private_key", "ssn", "dob", "credit_card", "cvv", "salary", "hash"]
+            sensitive = [
+                "password", "secret", "token", "private_key", "ssn",
+                "dob", "credit_card", "cvv", "salary", "hash",
+            ]
             has_sensitive = any(sf in " ".join(new_keys).lower() for sf in sensitive)
-            pkg = self._build_pkg(ev, title=f"BOPLA — {list(probe.keys())[0]} param", endpoint=url, vuln_type="BOPLA", confidence=70 if has_sensitive else 50)
+            pkg = self._build_pkg(
+                ev, title=f"BOPLA — {list(probe.keys())[0]} param",
+                endpoint=url, vuln_type="BOPLA",
+                confidence=70 if has_sensitive else 50,
+            )
             f = Finding(
                 title=f"BOPLA — `{list(probe.keys())[0]}` exposes hidden fields",
                 severity=Severity.HIGH if has_sensitive else Severity.MEDIUM,
                 category="Business Logic — Object Property Exposure",
-                description=f"Adding `{probe}` at `{url}` returned {len(resp_body) - base_len} extra bytes. New fields: {list(new_keys)[:5]}.",
+                description=(
+                    f"Adding `{probe}` at `{url}` returned "
+                    f"{len(resp_body) - base_len} extra bytes. "
+                    f"New fields: {list(new_keys)[:5]}."
+                ),
                 request={"method": "GET", "url": url, "params": {**params, **probe}},
                 response_summary=f"HTTP {status}, {len(resp_body)} vs {base_len} bytes",
                 evidence=f"+{len(resp_body)-base_len} bytes, new keys: {list(new_keys)[:5]}",
@@ -1537,26 +1783,47 @@ class BLFScanner:
             try:
                 for delta in [2, 3]:
                     next_step = str(int(current) + delta)
-                    new_path  = re.sub(pattern, match.group(0).replace(current, next_step), path, flags=re.IGNORECASE)
+                    new_path  = re.sub(
+                        pattern,
+                        match.group(0).replace(current, next_step),
+                        path, flags=re.IGNORECASE,
+                    )
                     new_url   = urlunparse(parsed._replace(path=new_path))
                     ev = self._new_evidence()
                     await self._req_ev("baseline", ev, method, url, req_body=body)
-                    status, _, resp_body, _ = await self._req_ev("attack", ev, method, new_url, req_body=body)
+                    status, _, resp_body, _ = await self._req_ev(
+                        "attack", ev, method, new_url, req_body=body
+                    )
                     if status not in (200, 201):
                         continue
-                    canary_url = urlunparse(parsed._replace(path=re.sub(pattern, match.group(0).replace(current, "999"), path, flags=re.IGNORECASE)))
+                    canary_url = urlunparse(parsed._replace(
+                        path=re.sub(
+                            pattern,
+                            match.group(0).replace(current, "999"),
+                            path, flags=re.IGNORECASE,
+                        )
+                    ))
                     cs, _, _, _ = await self._request(method, canary_url, json=body)
                     if cs == 200:
                         continue
-                    pkg = self._build_pkg(ev, title=f"Workflow Bypass — {label} {current}→{next_step}", endpoint=new_url, vuln_type="Workflow Bypass", confidence=70)
+                    pkg = self._build_pkg(
+                        ev, title=f"Workflow Bypass — {label} {current}→{next_step}",
+                        endpoint=new_url, vuln_type="Workflow Bypass", confidence=70,
+                    )
                     f = Finding(
                         title=f"Workflow Step Bypass — {label} {current}→{next_step}",
                         severity=Severity.HIGH,
                         category="Business Logic — Workflow Bypass",
-                        description=f"Step {next_step} at `{new_url}` accessible without completing step {current}.",
+                        description=(
+                            f"Step {next_step} at `{new_url}` accessible "
+                            f"without completing step {current}."
+                        ),
                         request={"method": method, "url": new_url, "body": body},
                         response_summary=f"HTTP {status}",
-                        evidence=f"Skip {current}→{next_step}: HTTP {status} (canary step 999 → {cs} ✓)",
+                        evidence=(
+                            f"Skip {current}→{next_step}: HTTP {status} "
+                            f"(canary step 999 → {cs} ✓)"
+                        ),
                         recommendation="Enforce sequential step validation server-side.",
                         cwe="CWE-284", cvss=7.5,
                         owasp="API5:2023 Broken Function Level Authorization",
@@ -1575,9 +1842,14 @@ class BLFScanner:
             test_body = {k: v for k, v in body.items() if k != key}
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, method, url, req_body=body)
-            status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=test_body)
+            status, _, resp_body, _ = await self._req_ev(
+                "attack", ev, method, url, req_body=test_body
+            )
             if status in (200, 201) and self._response_indicates_success(resp_body, status):
-                pkg = self._build_pkg(ev, title=f"MFA/OTP Omission — {key}", endpoint=url, vuln_type="MFA Bypass", confidence=75)
+                pkg = self._build_pkg(
+                    ev, title=f"MFA/OTP Omission — {key}",
+                    endpoint=url, vuln_type="MFA Bypass", confidence=75,
+                )
                 f = Finding(
                     title=f"MFA/OTP Token Omission — `{key}` not validated",
                     severity=Severity.HIGH,
@@ -1597,7 +1869,7 @@ class BLFScanner:
                     findings.append(f)
         return findings
 
-    # MODULE 6 — Mass Assignment
+    # MODULE 6 — Mass Assignment  [WEAK-2 FIX: dynamic field discovery]
     async def _check_mass_assignment(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         privileged_keys = [
@@ -1610,7 +1882,9 @@ class BLFScanner:
             test_body = {**body, key: True}
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, method, url, req_body=body)
-            status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=test_body)
+            status, _, resp_body, _ = await self._req_ev(
+                "attack", ev, method, url, req_body=test_body
+            )
             if status not in (200, 201):
                 continue
             resp_data = self._try_parse_json(resp_body)
@@ -1622,7 +1896,10 @@ class BLFScanner:
             base_data = self._try_parse_json(base_body)
             if isinstance(base_data, dict) and base_data.get(key) == reflected:
                 continue
-            pkg = self._build_pkg(ev, title=f"Mass Assignment — {key}", endpoint=url, vuln_type="Mass Assignment", confidence=90, confirmed=True)
+            pkg = self._build_pkg(
+                ev, title=f"Mass Assignment — {key}",
+                endpoint=url, vuln_type="Mass Assignment", confidence=90, confirmed=True,
+            )
             f = Finding(
                 title=f"Mass Assignment — `{key}` reflected as `{reflected}`",
                 severity=Severity.CRITICAL,
@@ -1630,7 +1907,10 @@ class BLFScanner:
                 description=f"Injecting `{key}: true` at `{url}` reflected as `{reflected}`.",
                 request={"method": method, "url": url, "body": test_body},
                 response_summary=f"HTTP {status}, `{key}`={reflected}",
-                evidence=f"Injected {key}=True → response {key}={reflected} (absent in baseline)",
+                evidence=(
+                    f"Injected {key}=True → response {key}={reflected} "
+                    f"(absent in baseline)"
+                ),
                 recommendation="Use an explicit field allowlist.",
                 cwe="CWE-915", cvss=9.8,
                 owasp="API3:2023 Broken Object Property Level Authorization",
@@ -1640,6 +1920,64 @@ class BLFScanner:
             f = self._finalize_finding(f, base_body, resp_body, base_status, status)
             if f.confidence >= self.config.min_confidence:
                 findings.append(f)
+
+        if findings:
+            return findings
+
+        # WEAK-2 FIX: dynamic field discovery from live 200 response
+        if base_body and base_status in (200, 201):
+            for key, inject_val in _discover_dynamic_fields(base_body):
+                if key in body:
+                    continue
+                test_body = {**body, key: inject_val}
+                try:
+                    status, _, resp_body, _ = await self._request(
+                        method, url, json=test_body
+                    )
+                except Exception:
+                    continue
+                if status not in (200, 201):
+                    continue
+                resp_data = self._try_parse_json(resp_body)
+                if not isinstance(resp_data, dict):
+                    continue
+                reflected = resp_data.get(key)
+                if reflected is None:
+                    continue
+                if str(reflected).lower() != str(inject_val).lower():
+                    continue
+                try:
+                    base_data = self._try_parse_json(base_body)
+                    if isinstance(base_data, dict) and base_data.get(key) == reflected:
+                        continue
+                except Exception:
+                    pass
+                f = Finding(
+                    title=f"Mass Assignment (Dynamic) — `{key}` reflected as `{reflected}`",
+                    severity=Severity.CRITICAL,
+                    category="Business Logic — Mass Assignment (Dynamic Field)",
+                    description=(
+                        f"Injecting `{key}: {inject_val}` at `{url}` was reflected "
+                        f"as `{key}={reflected}`. Field discovered dynamically "
+                        f"from the API response — not in the standard allowlist."
+                    ),
+                    request={"method": method, "url": url, "body": test_body},
+                    response_summary=f"HTTP {status}, `{key}`={reflected}",
+                    evidence=(
+                        f"Injected {key}={inject_val} → response {key}={reflected} "
+                        f"(absent in baseline)"
+                    ),
+                    recommendation=(
+                        "Use an explicit field allowlist in your serialiser. "
+                        "Never reflect client-supplied privilege fields."
+                    ),
+                    cwe="CWE-915", cvss=9.8,
+                    owasp="API3:2023 Broken Object Property Level Authorization",
+                    confirmed=True, confidence=88, endpoint=url, parameter=key,
+                )
+                f = self._finalize_finding(f, base_body, resp_body, base_status, status)
+                if f.confidence >= self.config.min_confidence:
+                    findings.append(f)
         return findings
 
     # MODULE 7 — Privilege Escalation / BFLA
@@ -1656,17 +1994,25 @@ class BLFScanner:
             test_url = f"{base}{admin_path}"
             for token, label in [(self.config.auth_token, "low-priv"), ("", "no-auth")]:
                 ev = self._new_evidence()
-                status, _, resp_body, _ = await self._req_ev("attack", ev, "GET", test_url, token_override=token)
+                status, _, resp_body, _ = await self._req_ev(
+                    "attack", ev, "GET", test_url, token_override=token
+                )
                 if status != 200 or len(resp_body) < 50:
                     continue
                 if not self._response_indicates_success(resp_body, status):
                     continue
-                pkg = self._build_pkg(ev, title=f"BFLA — {admin_path} ({label})", endpoint=test_url, vuln_type="BFLA", confidence=90, confirmed=True)
+                pkg = self._build_pkg(
+                    ev, title=f"BFLA — {admin_path} ({label})",
+                    endpoint=test_url, vuln_type="BFLA", confidence=90, confirmed=True,
+                )
                 f = Finding(
                     title=f"BFLA — `{admin_path}` accessible by {label} user",
                     severity=Severity.CRITICAL,
                     category="Business Logic — Function Level Access Control",
-                    description=f"Admin endpoint `{test_url}` returned HTTP 200 + {len(resp_body)}B with {label} token.",
+                    description=(
+                        f"Admin endpoint `{test_url}` returned HTTP 200 "
+                        f"+ {len(resp_body)}B with {label} token."
+                    ),
                     request={"method": "GET", "url": test_url, "note": f"Token: {label}"},
                     response_summary=f"HTTP {status} — {resp_body[:300]}",
                     evidence=f"GET {test_url} with {label} → {status} + {len(resp_body)}B",
@@ -1691,9 +2037,16 @@ class BLFScanner:
                 continue
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, method, url, req_body=body if body else None)
-            status, _, resp_body, _ = await self._req_ev("attack", ev, test_method, url, req_body=body if body else None, token_override=self.config.second_user_token)
+            status, _, resp_body, _ = await self._req_ev(
+                "attack", ev, test_method, url,
+                req_body=body if body else None,
+                token_override=self.config.second_user_token,
+            )
             if status in (200, 201, 204):
-                pkg = self._build_pkg(ev, title=f"BFLA — User2 can {test_method} User1 resource", endpoint=url, vuln_type="BFLA", confidence=90, confirmed=True)
+                pkg = self._build_pkg(
+                    ev, title=f"BFLA — User2 can {test_method} User1 resource",
+                    endpoint=url, vuln_type="BFLA", confidence=90, confirmed=True,
+                )
                 f = Finding(
                     title=f"BFLA — User 2 can {test_method} User 1's resource",
                     severity=Severity.CRITICAL,
@@ -1722,17 +2075,29 @@ class BLFScanner:
                 continue
             original      = body[key]
             base_discount = self._extract_discount(base_body)
-            for test_body, label in [({**body, key: [original, original]}, "duplicate array"), ({**body, key: [original]}, "single-item array")]:
+            for test_body, label in [
+                ({**body, key: [original, original]}, "duplicate array"),
+                ({**body, key: [original]},           "single-item array"),
+            ]:
                 ev = self._new_evidence()
                 await self._req_ev("baseline", ev, method, url, req_body=body)
-                status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=test_body)
+                status, _, resp_body, _ = await self._req_ev(
+                    "attack", ev, method, url, req_body=test_body
+                )
                 if status not in (200, 201):
                     continue
                 if not self._response_indicates_success(resp_body, status):
                     continue
                 new_discount = self._extract_discount(resp_body)
-                confirmed    = bool(new_discount and base_discount and new_discount > base_discount * 1.4)
-                pkg = self._build_pkg(ev, title=f"Coupon Abuse — {label} for {key}", endpoint=url, vuln_type="Coupon Abuse", confidence=80 if confirmed else 55, confirmed=confirmed)
+                confirmed    = bool(
+                    new_discount and base_discount
+                    and new_discount > base_discount * 1.4
+                )
+                pkg = self._build_pkg(
+                    ev, title=f"Coupon Abuse — {label} for {key}",
+                    endpoint=url, vuln_type="Coupon Abuse",
+                    confidence=80 if confirmed else 55, confirmed=confirmed,
+                )
                 f = Finding(
                     title=f"Coupon Abuse — {label} for `{key}`",
                     severity=Severity.CRITICAL if confirmed else Severity.HIGH,
@@ -1755,7 +2120,10 @@ class BLFScanner:
     # MODULE 9 — Time Logic Bypass
     async def _check_time_logic_bypass(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        time_keys = ["date", "expiry", "expiry_date", "expires_at", "valid_until", "timestamp", "start_date", "end_date", "valid_from"]
+        time_keys = [
+            "date", "expiry", "expiry_date", "expires_at", "valid_until",
+            "timestamp", "start_date", "end_date", "valid_from",
+        ]
         for key in time_keys:
             if key not in body:
                 continue
@@ -1763,14 +2131,26 @@ class BLFScanner:
                 test_body = {**body, key: ts}
                 ev = self._new_evidence()
                 await self._req_ev("baseline", ev, method, url, req_body=body)
-                status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=test_body)
-                if status in (200, 201) and self._response_indicates_success(resp_body, status) and self._hash_response(resp_body) != self._hash_response(base_body):
-                    pkg = self._build_pkg(ev, title=f"Time Bypass — {key} ({label})", endpoint=url, vuln_type="Time Logic Bypass", confidence=65)
+                status, _, resp_body, _ = await self._req_ev(
+                    "attack", ev, method, url, req_body=test_body
+                )
+                if (
+                    status in (200, 201)
+                    and self._response_indicates_success(resp_body, status)
+                    and self._hash_response(resp_body) != self._hash_response(base_body)
+                ):
+                    pkg = self._build_pkg(
+                        ev, title=f"Time Bypass — {key} ({label})",
+                        endpoint=url, vuln_type="Time Logic Bypass", confidence=65,
+                    )
                     f = Finding(
                         title=f"Time Bypass — `{key}` accepts {label} timestamp",
                         severity=Severity.HIGH,
                         category="Business Logic — Time Bypass",
-                        description=f"`{key}` = {ts} ({label}) accepted at `{url}` with different response.",
+                        description=(
+                            f"`{key}` = {ts} ({label}) accepted at `{url}` "
+                            f"with different response."
+                        ),
                         request={"method": method, "url": url, "body": test_body},
                         response_summary=f"HTTP {status}",
                         evidence=f"`{key}` = {ts} → different response from baseline",
@@ -1789,23 +2169,34 @@ class BLFScanner:
     # MODULE 10 — Integer Overflow
     async def _check_integer_overflow(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        numeric_keys = [k for k, v in body.items() if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        numeric_keys = [
+            k for k, v in body.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        ]
         for key in numeric_keys:
             for val in [2**31 - 1, 2**63 - 1, -2**31, 9999999999]:
                 test_body = {**body, key: val}
                 try:
                     ev = self._new_evidence()
                     await self._req_ev("baseline", ev, method, url, req_body=body)
-                    status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=test_body)
+                    status, _, resp_body, _ = await self._req_ev(
+                        "attack", ev, method, url, req_body=test_body
+                    )
                     if status == 500:
-                        pkg = self._build_pkg(ev, title=f"Integer Overflow — {key}={val}", endpoint=url, vuln_type="Integer Overflow", confidence=60)
+                        pkg = self._build_pkg(
+                            ev, title=f"Integer Overflow — {key}={val}",
+                            endpoint=url, vuln_type="Integer Overflow", confidence=60,
+                        )
                         f = Finding(
                             title=f"Integer Overflow — `{key}` = {val} caused 500",
-                            severity=Severity.MEDIUM, category="Business Logic — Integer Overflow",
+                            severity=Severity.MEDIUM,
+                            category="Business Logic — Integer Overflow",
                             description=f"`{key}` = {val} caused HTTP 500 at `{url}`.",
                             request={"method": method, "url": url, "body": test_body},
-                            response_summary="HTTP 500", evidence=f"Input {key}={val} → 500",
-                            recommendation="Validate numeric ranges.", cwe="CWE-190", cvss=6.5,
+                            response_summary="HTTP 500",
+                            evidence=f"Input {key}={val} → 500",
+                            recommendation="Validate numeric ranges.",
+                            cwe="CWE-190", cvss=6.5,
                             owasp="API6:2023 Unrestricted Access to Sensitive Business Flows",
                             endpoint=url, parameter=key,
                         )
@@ -1817,21 +2208,40 @@ class BLFScanner:
                         data = self._try_parse_json(resp_body)
                         if isinstance(data, dict):
                             for rk, rv in data.items():
-                                if isinstance(rv, (int, float)) and not isinstance(rv, bool) and rv < 0:
-                                    pkg = self._build_pkg(ev, title=f"Integer Overflow — {key}={val} → {rk}<0", endpoint=url, vuln_type="Integer Overflow", confidence=80, confirmed=True)
+                                if (
+                                    isinstance(rv, (int, float))
+                                    and not isinstance(rv, bool)
+                                    and rv < 0
+                                ):
+                                    pkg = self._build_pkg(
+                                        ev,
+                                        title=f"Integer Overflow — {key}={val} → {rk}<0",
+                                        endpoint=url, vuln_type="Integer Overflow",
+                                        confidence=80, confirmed=True,
+                                    )
                                     f = Finding(
-                                        title=f"Integer Overflow — `{key}`={val} caused negative `{rk}`",
-                                        severity=Severity.HIGH, category="Business Logic — Integer Overflow",
-                                        description=f"`{key}`={val} → `{rk}`={rv} (negative) at `{url}`.",
+                                        title=(
+                                            f"Integer Overflow — `{key}`={val} "
+                                            f"caused negative `{rk}`"
+                                        ),
+                                        severity=Severity.HIGH,
+                                        category="Business Logic — Integer Overflow",
+                                        description=(
+                                            f"`{key}`={val} → `{rk}`={rv} "
+                                            f"(negative) at `{url}`."
+                                        ),
                                         request={"method": method, "url": url, "body": test_body},
                                         response_summary=f"HTTP {status}, {rk}={rv}",
                                         evidence=f"Input {key}={val} → {rk}={rv}",
-                                        recommendation="Use 64-bit integers.", cwe="CWE-190", cvss=7.8,
+                                        recommendation="Use 64-bit integers.",
+                                        cwe="CWE-190", cvss=7.8,
                                         owasp="API6:2023 Unrestricted Access to Sensitive Business Flows",
                                         confirmed=True, endpoint=url, parameter=key,
                                     )
                                     self._attach(f, pkg)
-                                    f = self._finalize_finding(f, base_body, resp_body, base_status, status)
+                                    f = self._finalize_finding(
+                                        f, base_body, resp_body, base_status, status
+                                    )
                                     if f.confidence >= self.config.min_confidence:
                                         findings.append(f)
                 except Exception:
@@ -1841,13 +2251,24 @@ class BLFScanner:
     # MODULE 11 — Hidden Parameter Disclosure
     async def _check_hidden_parameter_disclosure(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        probes = {"debug": "1", "verbose": "1", "admin": "1", "internal": "1", "full": "1", "include_deleted": "1", "show_all": "1", "_debug": "1"}
+        probes = {
+            "debug": "1", "verbose": "1", "admin": "1", "internal": "1",
+            "full": "1", "include_deleted": "1", "show_all": "1", "_debug": "1",
+        }
         for param, val in probes.items():
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "GET", url)
-            status, _, resp_body, elapsed = await self._request("GET", url, params={**params, param: val})
+            status, _, resp_body, elapsed = await self._request(
+                "GET", url, params={**params, param: val}
+            )
             if ev:
-                ev.record(label="attack", method="GET", url=f"{url}?{param}={val}", req_headers=self._build_headers(), req_body=None, resp_status=status, resp_headers={}, resp_body=resp_body, elapsed=elapsed)
+                ev.record(
+                    label="attack", method="GET",
+                    url=f"{url}?{param}={val}",
+                    req_headers=self._build_headers(), req_body=None,
+                    resp_status=status, resp_headers={},
+                    resp_body=resp_body, elapsed=elapsed,
+                )
             base_len = len(base_body)
             new_len  = len(resp_body)
             if status != 200 or new_len <= base_len * 1.2 or new_len - base_len < 100:
@@ -1859,15 +2280,24 @@ class BLFScanner:
                 new_keys = set(new_data.keys()) - set(base_data.keys())
             if not new_keys and new_len < base_len * 1.5:
                 continue
-            pkg = self._build_pkg(ev, title=f"Hidden Param — {param}", endpoint=url, vuln_type="Information Disclosure", confidence=65)
+            pkg = self._build_pkg(
+                ev, title=f"Hidden Param — {param}",
+                endpoint=url, vuln_type="Information Disclosure", confidence=65,
+            )
             f = Finding(
                 title=f"Hidden Parameter — `{param}` discloses extra data",
                 severity=Severity.HIGH if new_len > base_len * 2 else Severity.MEDIUM,
                 category="Business Logic — Information Disclosure",
-                description=f"`{param}={val}` at `{url}` returned {new_len - base_len} extra bytes.",
+                description=(
+                    f"`{param}={val}` at `{url}` returned "
+                    f"{new_len - base_len} extra bytes."
+                ),
                 request={"method": "GET", "url": url, "params": {**params, param: val}},
                 response_summary=f"HTTP {status}, {new_len} vs {base_len} bytes",
-                evidence=f"baseline={base_len}B → with param={new_len}B, new keys: {list(new_keys)[:5]}",
+                evidence=(
+                    f"baseline={base_len}B → with param={new_len}B, "
+                    f"new keys: {list(new_keys)[:5]}"
+                ),
                 recommendation="Remove debug params from production.",
                 cwe="CWE-200", cvss=6.5,
                 owasp="API3:2023 Broken Object Property Level Authorization",
@@ -1883,11 +2313,11 @@ class BLFScanner:
     async def _check_state_machine_abuse(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         state_map = {
-            "status": ["completed", "approved", "paid", "shipped"],
-            "order_status": ["completed", "delivered", "paid"],
-            "payment_status": ["paid", "completed", "cleared"],
+            "status":              ["completed", "approved", "paid", "shipped"],
+            "order_status":        ["completed", "delivered", "paid"],
+            "payment_status":      ["paid", "completed", "cleared"],
             "verification_status": ["verified", "approved"],
-            "kyc_status": ["verified", "approved"],
+            "kyc_status":          ["verified", "approved"],
         }
         for key, targets in state_map.items():
             if key not in body:
@@ -1898,20 +2328,33 @@ class BLFScanner:
                 test_body = {**body, key: state}
                 ev = self._new_evidence()
                 await self._req_ev("baseline", ev, method, url, req_body=body)
-                status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=test_body)
+                status, _, resp_body, _ = await self._req_ev(
+                    "attack", ev, method, url, req_body=test_body
+                )
                 if status not in (200, 201):
                     continue
                 data = self._try_parse_json(resp_body)
                 if not isinstance(data, dict) or data.get(key) != state:
                     continue
-                pkg = self._build_pkg(ev, title=f"State Machine Abuse — {key}→{state}", endpoint=url, vuln_type="State Machine Abuse", confidence=90, confirmed=True)
+                pkg = self._build_pkg(
+                    ev, title=f"State Machine Abuse — {key}→{state}",
+                    endpoint=url, vuln_type="State Machine Abuse",
+                    confidence=90, confirmed=True,
+                )
                 f = Finding(
                     title=f"State Machine Abuse — `{key}` forced to `{state}`",
-                    severity=Severity.CRITICAL, category="Business Logic — State Machine Abuse",
-                    description=f"Forcing `{key}`→`{state}` at `{url}` accepted and confirmed.",
+                    severity=Severity.CRITICAL,
+                    category="Business Logic — State Machine Abuse",
+                    description=(
+                        f"Forcing `{key}`→`{state}` at `{url}` "
+                        f"accepted and confirmed."
+                    ),
                     request={"method": method, "url": url, "body": test_body},
                     response_summary=f"HTTP {status}, {key}={state}",
-                    evidence=f"Forced {key}={state} → confirmed (was: {body.get(key)})",
+                    evidence=(
+                        f"Forced {key}={state} → confirmed "
+                        f"(was: {body.get(key)})"
+                    ),
                     recommendation="Compute state transitions server-side.",
                     cwe="CWE-284", cvss=9.5,
                     owasp="API6:2023 Unrestricted Access to Sensitive Business Flows",
@@ -1924,29 +2367,48 @@ class BLFScanner:
                 break
         return findings
 
-    # MODULE 13 — Race Condition
+    # MODULE 13 — Race Condition  [WEAK-3 FIX: extended indicators]
     async def _check_race_condition(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         if method not in ("POST", "PUT", "PATCH"):
             return findings
-        race_indicators = ["redeem", "transfer", "withdraw", "claim", "checkout", "purchase", "buy", "confirm", "coupon", "reward", "spin"]
-        if not any(ind in url.lower() for ind in race_indicators):
+        # WEAK-3 FIX: use extended _RACE_INDICATORS set
+        if not any(ind in url.lower() for ind in _RACE_INDICATORS):
             return findings
         orig_delay = self.rate_limiter.base_delay
         self.rate_limiter.base_delay = 0
-        responses = await asyncio.gather(*[self._request(method, url, json=body) for _ in range(15)], return_exceptions=True)
+        responses = await asyncio.gather(
+            *[self._request(method, url, json=body) for _ in range(15)],
+            return_exceptions=True,
+        )
         self.rate_limiter.base_delay = orig_delay
-        success_count = sum(1 for r in responses if isinstance(r, tuple) and r[0] in (200, 201) and self._response_indicates_success(r[2], r[0]))
+        success_count = sum(
+            1 for r in responses
+            if isinstance(r, tuple)
+            and r[0] in (200, 201)
+            and self._response_indicates_success(r[2], r[0])
+        )
         if success_count > 1:
             single_status, _, _, _ = await self._request(method, url, json=body)
             f = Finding(
                 title=f"Race Condition — {success_count}/15 concurrent requests succeeded",
-                severity=Severity.CRITICAL, category="Business Logic — Race Condition",
-                description=f"{success_count}/15 simultaneous requests to `{url}` succeeded.",
-                request={"method": method, "url": url, "body": body, "note": "15 concurrent requests"},
+                severity=Severity.CRITICAL,
+                category="Business Logic — Race Condition",
+                description=(
+                    f"{success_count}/15 simultaneous requests to `{url}` succeeded."
+                ),
+                request={
+                    "method": method, "url": url, "body": body,
+                    "note": "15 concurrent requests",
+                },
                 response_summary=f"{success_count}/15 successes",
-                evidence=f"Concurrent: {success_count}/15. Single re-test: HTTP {single_status}",
-                recommendation="Use SELECT FOR UPDATE, Redis SETNX, or idempotency keys.",
+                evidence=(
+                    f"Concurrent: {success_count}/15. "
+                    f"Single re-test: HTTP {single_status}"
+                ),
+                recommendation=(
+                    "Use SELECT FOR UPDATE, Redis SETNX, or idempotency keys."
+                ),
                 cwe="CWE-362", cvss=9.0,
                 owasp="API4:2023 Unrestricted Resource Consumption",
                 confirmed=True, endpoint=url,
@@ -1972,7 +2434,9 @@ class BLFScanner:
                 return {}
 
         def b64e(d):
-            return base64.urlsafe_b64encode(json.dumps(d, separators=(",", ":")).encode()).rstrip(b"=").decode()
+            return base64.urlsafe_b64encode(
+                json.dumps(d, separators=(",", ":")).encode()
+            ).rstrip(b"=").decode()
 
         header  = b64d(parts[0])
         payload = b64d(parts[1])
@@ -1981,19 +2445,35 @@ class BLFScanner:
         forged = f"{b64e({**header, 'alg': 'none'})}.{parts[1]}."
         ev = self._new_evidence()
         await self._req_ev("baseline", ev, method, url, req_body=body if body else None)
-        status, _, resp_body, _ = await self._req_ev("attack", ev, method, url, req_body=body if body else None, token_override=forged)
+        status, _, resp_body, _ = await self._req_ev(
+            "attack", ev, method, url,
+            req_body=body if body else None,
+            token_override=forged,
+        )
         if status in (200, 201) and self._response_indicates_success(resp_body, status):
             random_token = "eyJhbGciOiJub25lIn0.eyJ1c2VyIjoiZmFrZSJ9."
-            ts2, _, _, _ = await self._request(method, url, json=body if body else None, token_override=random_token)
+            ts2, _, _, _ = await self._request(
+                method, url,
+                json=body if body else None,
+                token_override=random_token,
+            )
             if ts2 not in (200, 201):
-                pkg = self._build_pkg(ev, title="JWT alg:none Bypass", endpoint=url, vuln_type="JWT Vulnerability", confidence=95, confirmed=True)
+                pkg = self._build_pkg(
+                    ev, title="JWT alg:none Bypass",
+                    endpoint=url, vuln_type="JWT Vulnerability",
+                    confidence=95, confirmed=True,
+                )
                 f = Finding(
                     title="JWT alg:none Bypass — signature not validated",
-                    severity=Severity.CRITICAL, category="Business Logic — JWT Vulnerability",
+                    severity=Severity.CRITICAL,
+                    category="Business Logic — JWT Vulnerability",
                     description=f"Server at `{url}` accepted JWT with alg:none.",
                     request={"method": method, "url": url, "note": "JWT alg:none"},
                     response_summary=f"HTTP {status}",
-                    evidence=f"alg:none → HTTP {status} (random invalid token → HTTP {ts2})",
+                    evidence=(
+                        f"alg:none → HTTP {status} "
+                        f"(random invalid token → HTTP {ts2})"
+                    ),
                     recommendation="Whitelist allowed algorithms. Reject 'none'.",
                     cwe="CWE-347", cvss=10.0,
                     owasp="API2:2023 Broken Authentication",
@@ -2010,11 +2490,16 @@ class BLFScanner:
         findings: list[Finding] = []
         if method != "POST":
             return findings
-        field = next((k for k in ["email", "username", "login"] if k in body), None)
+        field = next(
+            (k for k in ["email", "username", "login"] if k in body), None
+        )
         if not field:
             return findings
         ev_results = []
-        for test_val in ["nonexistent_zzz_9999@nowhere.invalid", "admin@example.com"]:
+        for test_val in [
+            "nonexistent_zzz_9999@nowhere.invalid",
+            "admin@example.com",
+        ]:
             test_body = {**body, field: test_val}
             s, _, rb, elapsed = await self._request(method, url, json=test_body)
             ev_results.append((test_val, s, rb.lower(), elapsed))
@@ -2023,11 +2508,18 @@ class BLFScanner:
         r1_body, r2_body = ev_results[0][2], ev_results[1][2]
         not_found  = ["not found", "no account", "doesn't exist", "no user"]
         wrong_pass = ["wrong password", "incorrect password", "invalid password"]
-        if ((any(s in r1_body for s in not_found) and any(s in r2_body for s in wrong_pass)) or (any(s in r2_body for s in not_found) and any(s in r1_body for s in wrong_pass))):
+        if (
+            (any(s in r1_body for s in not_found) and any(s in r2_body for s in wrong_pass))
+            or (any(s in r2_body for s in not_found) and any(s in r1_body for s in wrong_pass))
+        ):
             f = Finding(
                 title="Account Enumeration — different error messages reveal valid accounts",
-                severity=Severity.MEDIUM, category="Business Logic — Information Disclosure",
-                description=f"Different error messages for `{field}` at `{url}` enable enumeration.",
+                severity=Severity.MEDIUM,
+                category="Business Logic — Information Disclosure",
+                description=(
+                    f"Different error messages for `{field}` at `{url}` "
+                    f"enable enumeration."
+                ),
                 request={"method": method, "url": url},
                 response_summary="Different messages for valid vs invalid accounts",
                 evidence="'no account' vs 'wrong password' messages differ",
@@ -2036,7 +2528,9 @@ class BLFScanner:
                 owasp="API2:2023 Broken Authentication",
                 confirmed=True, endpoint=url, parameter=field,
             )
-            f = self._finalize_finding(f, base_body, ev_results[0][2], base_status, ev_results[0][1])
+            f = self._finalize_finding(
+                f, base_body, ev_results[0][2], base_status, ev_results[0][1]
+            )
             if f.confidence >= self.config.min_confidence:
                 findings.append(f)
         times        = [r[3] for r in ev_results]
@@ -2044,7 +2538,8 @@ class BLFScanner:
         if timing_delta > 0.20:
             f = Finding(
                 title=f"Account Enumeration — timing oracle ({timing_delta:.2f}s delta)",
-                severity=Severity.LOW, category="Business Logic — Information Disclosure",
+                severity=Severity.LOW,
+                category="Business Logic — Information Disclosure",
                 description=f"Timing delta of {timing_delta:.2f}s at `{url}`.",
                 request={"method": method, "url": url, "note": "Timing oracle"},
                 response_summary=f"Times: {[round(r[3], 3) for r in ev_results]}",
@@ -2054,7 +2549,9 @@ class BLFScanner:
                 owasp="API2:2023 Broken Authentication",
                 endpoint=url, parameter=field,
             )
-            f = self._finalize_finding(f, base_body, ev_results[0][2], base_status, ev_results[0][1])
+            f = self._finalize_finding(
+                f, base_body, ev_results[0][2], base_status, ev_results[0][1]
+            )
             if f.confidence >= self.config.min_confidence:
                 findings.append(f)
         return findings
@@ -2062,12 +2559,23 @@ class BLFScanner:
     # MODULE 16 — Limit / Offset Manipulation
     async def _check_limit_offset_manipulation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        for probe in [{"limit": 99999, "offset": 0}, {"per_page": 99999}, {"size": 99999}]:
+        for probe in [
+            {"limit": 99999, "offset": 0},
+            {"per_page": 99999},
+            {"size": 99999},
+        ]:
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "GET", url)
-            status, _, resp_body, elapsed = await self._request("GET", url, params={**params, **probe})
+            status, _, resp_body, elapsed = await self._request(
+                "GET", url, params={**params, **probe}
+            )
             if ev:
-                ev.record(label="attack", method="GET", url=url, req_headers=self._build_headers(), req_body=None, resp_status=status, resp_headers={}, resp_body=resp_body, elapsed=elapsed)
+                ev.record(
+                    label="attack", method="GET", url=url,
+                    req_headers=self._build_headers(), req_body=None,
+                    resp_status=status, resp_headers={},
+                    resp_body=resp_body, elapsed=elapsed,
+                )
             if status != 200 or len(resp_body) <= len(base_body) * 2:
                 continue
 
@@ -2084,11 +2592,21 @@ class BLFScanner:
             base_count = _count(self._try_parse_json(base_body))
             if count <= base_count * 2:
                 continue
-            pkg = self._build_pkg(ev, title=f"Limit Manipulation — {probe}", endpoint=url, vuln_type="Excessive Data Exposure", confidence=70)
+            pkg = self._build_pkg(
+                ev, title=f"Limit Manipulation — {probe}",
+                endpoint=url, vuln_type="Excessive Data Exposure", confidence=70,
+            )
             f = Finding(
-                title=f"Limit Manipulation — `{probe}` returned {count} vs {base_count} records",
-                severity=Severity.HIGH, category="Business Logic — Excessive Data Exposure",
-                description=f"Pagination `{probe}` at `{url}` → {count} vs {base_count} records.",
+                title=(
+                    f"Limit Manipulation — `{probe}` returned "
+                    f"{count} vs {base_count} records"
+                ),
+                severity=Severity.HIGH,
+                category="Business Logic — Excessive Data Exposure",
+                description=(
+                    f"Pagination `{probe}` at `{url}` → "
+                    f"{count} vs {base_count} records."
+                ),
                 request={"method": "GET", "url": url, "params": {**params, **probe}},
                 response_summary=f"HTTP {status}, {count} records",
                 evidence=f"Baseline: {base_count} → probe: {count} records",
@@ -2106,20 +2624,35 @@ class BLFScanner:
     # MODULE 17 — Soft Delete Bypass
     async def _check_soft_delete_bypass(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        for probe in [{"include_deleted": "true"}, {"show_deleted": "true"}, {"archived": "true"}]:
+        for probe in [
+            {"include_deleted": "true"},
+            {"show_deleted":    "true"},
+            {"archived":        "true"},
+        ]:
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "GET", url)
-            status, _, resp_body, elapsed = await self._request("GET", url, params={**params, **probe})
+            status, _, resp_body, elapsed = await self._request(
+                "GET", url, params={**params, **probe}
+            )
             if ev:
-                ev.record(label="attack", method="GET", url=url, req_headers=self._build_headers(), req_body=None, resp_status=status, resp_headers={}, resp_body=resp_body, elapsed=elapsed)
+                ev.record(
+                    label="attack", method="GET", url=url,
+                    req_headers=self._build_headers(), req_body=None,
+                    resp_status=status, resp_headers={},
+                    resp_body=resp_body, elapsed=elapsed,
+                )
             if status != 200:
                 continue
             if not self._responses_differ_significantly(base_body, resp_body):
                 continue
-            pkg = self._build_pkg(ev, title=f"Soft Delete Bypass — {probe}", endpoint=url, vuln_type="Soft Delete Bypass", confidence=65)
+            pkg = self._build_pkg(
+                ev, title=f"Soft Delete Bypass — {probe}",
+                endpoint=url, vuln_type="Soft Delete Bypass", confidence=65,
+            )
             f = Finding(
                 title=f"Soft Delete Bypass — `{probe}` exposes deleted records",
-                severity=Severity.HIGH, category="Business Logic — Soft Delete Bypass",
+                severity=Severity.HIGH,
+                category="Business Logic — Soft Delete Bypass",
                 description=f"`{probe}` at `{url}` returned a different response.",
                 request={"method": "GET", "url": url, "params": {**params, **probe}},
                 response_summary=f"HTTP {status}, {len(resp_body)} bytes",
@@ -2138,25 +2671,42 @@ class BLFScanner:
     # MODULE 18 — HTTP Method Override
     async def _check_http_method_override(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        for oh in [{"X-HTTP-Method-Override": "DELETE"}, {"X-Method-Override": "DELETE"}, {"_method": "DELETE"}]:
+        for oh in [
+            {"X-HTTP-Method-Override": "DELETE"},
+            {"X-Method-Override":      "DELETE"},
+            {"_method":                "DELETE"},
+        ]:
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "POST", url, req_body=body)
-            status, _, resp_body, _ = await self._req_ev("attack", ev, "POST", url, req_body=body, extra_headers=oh)
+            status, _, resp_body, _ = await self._req_ev(
+                "attack", ev, "POST", url, req_body=body, extra_headers=oh
+            )
             if status in (405, 404, 400, 403, 401, 0):
                 continue
             if status not in (200, 201):
                 continue
             if not self._responses_differ_significantly(base_body, resp_body):
                 continue
-            pkg = self._build_pkg(ev, title=f"HTTP Method Override — {list(oh.keys())[0]}", endpoint=url, vuln_type="Method Override", confidence=55)
+            pkg = self._build_pkg(
+                ev, title=f"HTTP Method Override — {list(oh.keys())[0]}",
+                endpoint=url, vuln_type="Method Override", confidence=55,
+            )
             f = Finding(
-                title=f"HTTP Method Override — `{list(oh.keys())[0]}` caused different response",
-                severity=Severity.MEDIUM, category="Business Logic — Method Override",
-                description=f"Override header `{oh}` at `{url}` produced different response.",
+                title=(
+                    f"HTTP Method Override — `{list(oh.keys())[0]}` "
+                    f"caused different response"
+                ),
+                severity=Severity.MEDIUM,
+                category="Business Logic — Method Override",
+                description=(
+                    f"Override header `{oh}` at `{url}` produced different response."
+                ),
                 request={"method": "POST", "url": url, "headers": oh},
                 response_summary=f"HTTP {status}",
                 evidence=f"Override {oh} → {status} + different body",
-                recommendation="Disable HTTP method override middleware in production.",
+                recommendation=(
+                    "Disable HTTP method override middleware in production."
+                ),
                 cwe="CWE-436", cvss=5.3,
                 owasp="API5:2023 Broken Function Level Authorization",
                 endpoint=url,
@@ -2174,7 +2724,9 @@ class BLFScanner:
             return findings
         for key, val in list(params.items())[:3]:
             parsed   = urlparse(url)
-            test_url = urlunparse(parsed._replace(query=f"{key}={val}&{key}=999999"))
+            test_url = urlunparse(
+                parsed._replace(query=f"{key}={val}&{key}=999999")
+            )
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "GET", url)
             status, _, resp_body, _ = await self._req_ev("attack", ev, "GET", test_url)
@@ -2182,10 +2734,14 @@ class BLFScanner:
                 continue
             if not self._responses_differ_significantly(base_body, resp_body):
                 continue
-            pkg = self._build_pkg(ev, title=f"Parameter Pollution — {key}", endpoint=url, vuln_type="Parameter Pollution", confidence=50)
+            pkg = self._build_pkg(
+                ev, title=f"Parameter Pollution — {key}",
+                endpoint=url, vuln_type="Parameter Pollution", confidence=50,
+            )
             f = Finding(
                 title=f"HTTP Parameter Pollution — duplicate `{key}` changed response",
-                severity=Severity.MEDIUM, category="Business Logic — Parameter Pollution",
+                severity=Severity.MEDIUM,
+                category="Business Logic — Parameter Pollution",
                 description=f"Duplicating `{key}` at `{url}` changed the response.",
                 request={"method": "GET", "url": test_url},
                 response_summary=f"HTTP {status}",
@@ -2206,22 +2762,52 @@ class BLFScanner:
         if not _HAS_BLIND_IDOR or not self._blind_idor:
             return []
         findings: list[Finding] = []
-        path_results = await self._blind_idor.scan_path(url=url, method=method, body=body if body else None, token_owned=self.config.auth_token, token_other=self.config.second_user_token, samples=3)
-        body_results = (await self._blind_idor.scan_body(url=url, method=method, body=body, token_owned=self.config.auth_token, token_other=self.config.second_user_token, samples=3) if body else [])
-        header_results = await self._blind_idor.scan_header_injection(url=url, method=method, body=body if body else None, token_owned=self.config.auth_token)
+        path_results = await self._blind_idor.scan_path(
+            url=url, method=method,
+            body=body if body else None,
+            token_owned=self.config.auth_token,
+            token_other=self.config.second_user_token,
+            samples=3,
+        )
+        body_results = (
+            await self._blind_idor.scan_body(
+                url=url, method=method, body=body,
+                token_owned=self.config.auth_token,
+                token_other=self.config.second_user_token,
+                samples=3,
+            )
+            if body else []
+        )
+        header_results = await self._blind_idor.scan_header_injection(
+            url=url, method=method,
+            body=body if body else None,
+            token_owned=self.config.auth_token,
+        )
         for r in path_results + body_results + header_results:
             if not r.is_idor:
                 continue
             f = Finding(
-                title=r.title or f"Blind IDOR — {r.parameter}: {r.owned_id}→{r.tested_id}",
+                title=r.title or (
+                    f"Blind IDOR — {r.parameter}: "
+                    f"{r.owned_id}→{r.tested_id}"
+                ),
                 severity=Severity.CRITICAL if r.confirmed else Severity.HIGH,
                 category="Business Logic — IDOR/BOLA (Blind)",
-                description=f"Blind IDOR at `{r.tested_url or url}` on `{r.parameter}`. {len(r.oracles_triggered)} oracle(s): {', '.join(r.oracles_triggered[:2])}.",
+                description=(
+                    f"Blind IDOR at `{r.tested_url or url}` on `{r.parameter}`. "
+                    f"{len(r.oracles_triggered)} oracle(s): "
+                    f"{', '.join(r.oracles_triggered[:2])}."
+                ),
                 request={"method": method, "url": r.tested_url or url},
-                response_summary=f"Status: {r.status_owned}→{r.status_tested} | Size delta: {r.size_delta_bytes:+d}B | Timing: {r.timing_delta_ms:+.0f}ms",
+                response_summary=(
+                    f"Status: {r.status_owned}→{r.status_tested} | "
+                    f"Size delta: {r.size_delta_bytes:+d}B | "
+                    f"Timing: {r.timing_delta_ms:+.0f}ms"
+                ),
                 evidence=r.evidence,
                 recommendation=r.recommendation,
-                cwe="CWE-639", cvss=9.1 if r.confirmed else 8.1,
+                cwe="CWE-639",
+                cvss=9.1 if r.confirmed else 8.1,
                 owasp="API1:2023 Broken Object Level Authorization",
                 confirmed=r.confirmed, confidence=r.confidence,
                 false_positive_checks=r.fp_signals,
@@ -2237,24 +2823,52 @@ class BLFScanner:
         parsed = urlparse(self.config.target_url)
         base   = f"{parsed.scheme}://{parsed.netloc}"
 
-        for gql_url in [f"{base}/graphql", f"{base}/api/graphql", f"{base}/query"]:
+        for gql_url in [
+            f"{base}/graphql",
+            f"{base}/api/graphql",
+            f"{base}/query",
+        ]:
             if _HAS_VALIDATION and self._endpoint_validator:
-                val = await self._endpoint_validator.validate(gql_url, "POST", is_graphql=True)
+                val = await self._endpoint_validator.validate(
+                    gql_url, "POST", is_graphql=True
+                )
                 if val.should_skip:
                     if self.config.verbose:
                         print(f"  [SKIP GraphQL] {gql_url} — {val.summary}")
                     continue
 
             ev = self._new_evidence()
-            status, _, resp_body, elapsed = await self._request("POST", gql_url, data='{"query": "{ __schema { types { name } } }"}')
+            status, _, resp_body, elapsed = await self._request(
+                "POST", gql_url,
+                data='{"query": "{ __schema { types { name } } }"}',
+            )
             if ev:
-                ev.record(label="attack", method="POST", url=gql_url, req_headers=self._build_headers(), req_body={"query": "{ __schema { types { name } } }"}, resp_status=status, resp_headers={}, resp_body=resp_body, elapsed=elapsed)
-            if status == 200 and "__schema" in resp_body and ('"data"' in resp_body or '"errors"' in resp_body) and not resp_body.strip().startswith("<"):
-                pkg = self._build_pkg(ev, title="GraphQL Introspection", endpoint=gql_url, vuln_type="GraphQL", confidence=90, confirmed=True)
+                ev.record(
+                    label="attack", method="POST", url=gql_url,
+                    req_headers=self._build_headers(),
+                    req_body={"query": "{ __schema { types { name } } }"},
+                    resp_status=status, resp_headers={},
+                    resp_body=resp_body, elapsed=elapsed,
+                )
+            if (
+                status == 200
+                and "__schema" in resp_body
+                and ('"data"' in resp_body or '"errors"' in resp_body)
+                and not resp_body.strip().startswith("<")
+            ):
+                pkg = self._build_pkg(
+                    ev, title="GraphQL Introspection",
+                    endpoint=gql_url, vuln_type="GraphQL",
+                    confidence=90, confirmed=True,
+                )
                 f = Finding(
                     title="GraphQL Introspection Enabled in Production",
-                    severity=Severity.MEDIUM, category="Business Logic — GraphQL",
-                    description=f"GraphQL introspection at `{gql_url}` exposes the full schema.",
+                    severity=Severity.MEDIUM,
+                    category="Business Logic — GraphQL",
+                    description=(
+                        f"GraphQL introspection at `{gql_url}` "
+                        f"exposes the full schema."
+                    ),
                     request={"method": "POST", "url": gql_url},
                     response_summary=f"HTTP {status}",
                     evidence="__schema returned with JSON GraphQL response",
@@ -2268,21 +2882,49 @@ class BLFScanner:
                 if f.confidence >= self.config.min_confidence:
                     findings.append(f)
 
-            for q in ['{"query": "{ users { id email } }"}', '{"query": "{ me { id email role } }"}']:
+            for q in [
+                '{"query": "{ users { id email } }"}',
+                '{"query": "{ me { id email role } }"}',
+            ]:
                 ev2 = self._new_evidence()
-                status, _, resp_body, elapsed = await self._request("POST", gql_url, data=q, token_override="")
+                status, _, resp_body, elapsed = await self._request(
+                    "POST", gql_url, data=q, token_override=""
+                )
                 if ev2:
-                    ev2.record(label="attack", method="POST", url=gql_url, req_headers=self._build_headers(token=""), req_body=q, resp_status=status, resp_headers={}, resp_body=resp_body, elapsed=elapsed)
-                if status == 200 and '"data"' in resp_body and "errors" not in resp_body and not resp_body.strip().startswith("<"):
-                    pkg2 = self._build_pkg(ev2, title="GraphQL Unauthenticated Access", endpoint=gql_url, vuln_type="GraphQL", confidence=85, confirmed=True)
+                    ev2.record(
+                        label="attack", method="POST", url=gql_url,
+                        req_headers=self._build_headers(token=""),
+                        req_body=q, resp_status=status, resp_headers={},
+                        resp_body=resp_body, elapsed=elapsed,
+                    )
+                if (
+                    status == 200
+                    and '"data"' in resp_body
+                    and "errors" not in resp_body
+                    and not resp_body.strip().startswith("<")
+                ):
+                    pkg2 = self._build_pkg(
+                        ev2, title="GraphQL Unauthenticated Access",
+                        endpoint=gql_url, vuln_type="GraphQL",
+                        confidence=85, confirmed=True,
+                    )
                     f = Finding(
                         title="GraphQL Unauthenticated Data Access",
-                        severity=Severity.HIGH, category="Business Logic — GraphQL",
-                        description=f"GraphQL query at `{gql_url}` returned data without authentication.",
-                        request={"method": "POST", "url": gql_url, "body": q, "note": "No auth"},
+                        severity=Severity.HIGH,
+                        category="Business Logic — GraphQL",
+                        description=(
+                            f"GraphQL query at `{gql_url}` returned "
+                            f"data without authentication."
+                        ),
+                        request={
+                            "method": "POST", "url": gql_url,
+                            "body": q, "note": "No auth",
+                        },
                         response_summary=f"HTTP {status} — {resp_body[:300]}",
                         evidence="Unauthenticated query returned JSON GraphQL data",
-                        recommendation="Require authentication for all non-public queries.",
+                        recommendation=(
+                            "Require authentication for all non-public queries."
+                        ),
                         cwe="CWE-306", cvss=8.5,
                         owasp="API2:2023 Broken Authentication",
                         confirmed=True, endpoint=gql_url,
@@ -2306,11 +2948,21 @@ class BLFScanner:
         for fc in flow_configs:
             try:
                 steps = fc if isinstance(fc, list) else FlowTemplates.from_json(fc)
-                findings.extend(await self._flow_replayer.attack(steps, base_url=base_url))
-                findings.extend(await self._flow_replayer.attack_workflow_bypass(steps, base_url=base_url))
+                findings.extend(
+                    await self._flow_replayer.attack(steps, base_url=base_url)
+                )
+                findings.extend(
+                    await self._flow_replayer.attack_workflow_bypass(
+                        steps, base_url=base_url
+                    )
+                )
                 attack_steps = [s for s in steps if s.attack_here]
                 if attack_steps:
-                    findings.extend(await self._flow_replayer.attack_race_condition(attack_steps[-1], base_url=base_url))
+                    findings.extend(
+                        await self._flow_replayer.attack_race_condition(
+                            attack_steps[-1], base_url=base_url
+                        )
+                    )
             except Exception as e:
                 if self.config.verbose:
                     print(f"  [!] Flow attack error: {e}")
@@ -2328,7 +2980,10 @@ class BLFScanner:
     async def _auto_run_ecommerce_flow(self, findings: list, base_url: str):
         checkout_indicators = ["/cart", "/checkout", "/order", "/payment"]
         has_ecommerce = any(
-            any(ind in ep.get("url", "").lower() for ind in checkout_indicators)
+            any(
+                ind in ep.get("url", "").lower()
+                for ind in checkout_indicators
+            )
             for ep in self.discovered_endpoints
         )
         if not has_ecommerce or not _HAS_FLOWS:
@@ -2340,7 +2995,9 @@ class BLFScanner:
             price=getattr(self.config, "product_price", 99.99),
         )
         try:
-            findings.extend(await self._flow_replayer.attack(steps, base_url=base_url))
+            findings.extend(
+                await self._flow_replayer.attack(steps, base_url=base_url)
+            )
         except Exception as e:
             if self.config.verbose:
                 print(f"  [!] Auto e-commerce flow error: {e}")
@@ -2356,10 +3013,15 @@ class BLFScanner:
             handler = OAuthHandler(oauth_cfg, verbose=self.config.verbose)
             token   = await handler.get_token(self.session)
             if token:
-                print(f"  [+] OAuth2 token acquired (expires in {token.expires_in}s)")
+                print(
+                    f"  [+] OAuth2 token acquired (expires in {token.expires_in}s)"
+                )
                 self.config.auth_token = token.access_token
                 await handler.test_token_endpoint_vulns(self.session)
-            sev_map = {"CRITICAL": Severity.CRITICAL, "HIGH": Severity.HIGH, "MEDIUM": Severity.MEDIUM, "LOW": Severity.LOW}
+            sev_map = {
+                "CRITICAL": Severity.CRITICAL, "HIGH": Severity.HIGH,
+                "MEDIUM":   Severity.MEDIUM,   "LOW":  Severity.LOW,
+            }
             for vuln in handler.findings:
                 f = Finding(
                     title=vuln.title,
