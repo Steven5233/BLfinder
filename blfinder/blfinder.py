@@ -52,7 +52,30 @@ Deep Discovery flags:
   --save-discovery FILE    Save all discovered endpoints before scanning
   --no-deep-discovery      Disable the deep discovery engine entirely
 
-FIX CHANGELOG (all issues from code review applied):
+FIX CHANGELOG v3.1-FIXED (all original + new bugs resolved):
+  BUG-1  : scanner_integration.apply_integration() called before BLFScanner.
+  BUG-3  : wordlist-depth / discovery-depth reconciled via max().
+  BUG-5  : HTML reporter path corrected.
+  BUG-6  : --no-validation wired correctly.
+  BUG-15 : --deep-discovery / --no-deep-discovery mutual-exclusion enforced.
+  BUG-16 : --classify with --target continues to full scan.
+  BUG-17 : config.use_db activation logic fixed.
+  BUG-A  : enrich_endpoints now receives cookies + extra_headers so
+            cookie-authenticated targets (1win.com / cf_clearance) are
+            probed correctly instead of returning 401/403.
+  BUG-B  : ssl= in enricher now driven by config.verify_ssl, not hardcoded.
+  BUG-C  : _meta/schema_hint preserved in run_deep_discovery result_dicts
+            so OpenAPI field schemas reach the scanner attack modules.
+  BUG-D  : --no-scan now honours --save-discovery path instead of always
+            saving to <output>/discovered_endpoints.json.
+  BUG-F  : no_auth_check driven by new --skip-unauth flag (default False).
+  BUG-G  : CI exit-code 1 requires confirmed=True + confidence>=80.
+  BUG-H  : proxy forwarded to enrich_endpoints so Burp interception works.
+  WEAK-3 : Race condition keyword list extended with bet/wager/stake/cashout/
+            bonus/deposit/topup/settlement (gambling/fintech targets).
+  WEAK-6 : --business-tags and --discovery-tags merged so either flag works.
+  WEAK-7 : Global endpoint concurrency semaphore (--max-endpoints, default 5)
+            prevents WAF-triggering request bursts on Cloudflare targets.
   BUG-1  : scanner_integration.apply_integration() is now called before
             the BLFScanner context manager — all intelligence systems are live.
   BUG-3  : --wordlist-depth and --discovery-depth now reconciled by taking
@@ -552,6 +575,20 @@ EXAMPLES:
     atk.add_argument("--graphql-deep",        action="store_true",    help="Enable deep GraphQL introspection scan")
     atk.add_argument("--version-scan",        action="store_true",    help="Enable API version-abuse scanning")
     atk.add_argument(
+        "--skip-unauth", action="store_true", dest="skip_unauth",
+        help=(
+            "Skip unauthenticated access probes on every endpoint. "
+            "Halves request volume — recommended on Cloudflare-protected targets."
+        ),
+    )
+    atk.add_argument(
+        "--max-endpoints", type=int, default=5, metavar="N", dest="max_endpoints",
+        help=(
+            "Max endpoints processed concurrently (default: 5). "
+            "Lower to 2-3 on Cloudflare targets to avoid burst detection."
+        ),
+    )
+    atk.add_argument(
         "--classify",
         action="store_true",
         help=(
@@ -772,9 +809,15 @@ def build_discovery_config_from_args(args: argparse.Namespace, profile: dict):
 
     prof_disc = profile.get("discovery", {})
 
-    # Business tags: CLI wins; fall back to profile
+    # WEAK-6 FIX: merge --business-tags and --discovery-tags; both flags
+    # seed the wordlist. Previously only --business-tags was read here,
+    # so --discovery-tags was silently dropped.
     business_tags: list[str] = []
-    raw_bt = args.business_tags or ""
+    raw_bt = (
+        args.business_tags
+        or getattr(args, "discovery_tags", "")
+        or ""
+    )
     if raw_bt:
         business_tags = [t.strip() for t in raw_bt.split(",") if t.strip()]
     elif prof_disc.get("business_tags"):
@@ -1250,11 +1293,14 @@ async def run_deep_discovery(
     # Convert DiscoveredEndpoint → plain dicts for BLFScanner
     result_dicts: list[dict] = []
     for ep in all_endpoints:
+        # BUG-C FIX: preserve _meta/schema_hint so OpenAPI-sourced field
+        # schemas survive and reach the scanner attack modules.
         result_dicts.append({
             "url":    ep.url,
             "method": getattr(ep, "method", "GET"),
             "body":   getattr(ep, "body",   None) or {},
             "params": getattr(ep, "params", None) or {},
+            "_meta":  getattr(ep, "_meta",  None) or getattr(ep, "meta", None) or {},
         })
 
     print(
@@ -1365,7 +1411,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         fuzz_depth            = merged_settings.get("fuzz_depth", args.fuzz_depth),
         output_dir            = args.output,
         verbose               = args.verbose,
-        no_auth_check         = True,
+        no_auth_check         = not getattr(args, "skip_unauth", False),  # BUG-F FIX
         min_confidence        = merged_settings.get("min_confidence", args.min_confidence),
         confirmation_attempts = merged_settings.get("confirm_attempts", args.confirm_attempts),
     )
@@ -1418,7 +1464,8 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.ws_race_count       = args.ws_race_count
     config.run_graphql_deep    = args.graphql_deep  or prof_settings.get("run_graphql_deep", False)
     config.run_version_scan    = args.version_scan  or prof_settings.get("run_version_scan", False)
-    config.print_attack_plan   = args.classify
+    config.print_attack_plan         = args.classify
+    config.max_endpoint_concurrency   = getattr(args, "max_endpoints", 5)  # WEAK-7 FIX
 
     # ── Phase 5: Database ─────────────────────────────────────────────────────
     config.db_path   = os.path.expanduser(args.db)
@@ -1556,12 +1603,23 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
 
     # ── No-scan mode: discovery only ──────────────────────────────────────────
     if args.no_scan:
-        os.makedirs(args.output, exist_ok=True)
-        out_path = os.path.join(args.output, "discovered_endpoints.json")
+        # BUG-D FIX: honour --save-discovery path; fall back to output dir.
+        _noscan_save = (
+            getattr(args, "save_discovery", "")
+            or getattr(args, "discovery_save", "")
+            or ""
+        )
+        if not _noscan_save:
+            os.makedirs(args.output, exist_ok=True)
+            _noscan_save = os.path.join(args.output, "discovered_endpoints.json")
+        else:
+            _parent = os.path.dirname(os.path.abspath(_noscan_save))
+            if _parent:
+                os.makedirs(_parent, exist_ok=True)
         try:
-            with open(out_path, "w") as fh:
+            with open(_noscan_save, "w") as fh:
                 json.dump(endpoints, fh, indent=2)
-            print(f"[+] {len(endpoints)} endpoints saved → {out_path}")
+            print(f"[+] {len(endpoints)} endpoints saved → {_noscan_save}")
         except OSError as e:
             print(f"[!] Could not save endpoints: {e}")
         if db:
@@ -1636,6 +1694,25 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     except ImportError:
         pass  # Module absent — scan continues with standard 21-module sweep
 
+    # WEAK-7 FIX: global endpoint concurrency cap prevents WAF-triggering bursts.
+    # Wraps _run_endpoint_checks with a semaphore so at most N endpoints are
+    # processed simultaneously (default 5; lower on Cloudflare targets).
+    _max_ep = getattr(config, "max_endpoint_concurrency", 5)
+    try:
+        from core.scanner import BLFScanner as _BLF_cls
+        _orig_ep_checks = _BLF_cls._run_endpoint_checks
+        _global_ep_sem  = asyncio.Semaphore(_max_ep)
+
+        async def _capped_run_endpoint_checks(self, url, method, body, params, meta=None):
+            async with _global_ep_sem:
+                return await _orig_ep_checks(self, url, method, body, params, meta=meta)
+
+        _BLF_cls._run_endpoint_checks = _capped_run_endpoint_checks
+        if args.verbose:
+            print(f"[*] endpoint concurrency cap: max={_max_ep} (--max-endpoints)")
+    except Exception:
+        pass  # Non-fatal
+
     # ── Endpoint enrichment ───────────────────────────────────────────────────
     # Adds real body parameters and query params to bare endpoints so that
     # BLFinder's attack modules have concrete fields to manipulate.
@@ -1658,15 +1735,23 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         )
         try:
             from core.discovery.endpoint_enricher import enrich_endpoints
+            # BUG-A FIX: pass cookies + extra_headers so cookie-authenticated
+            # targets (1win.com: cf_clearance, 1w_token) are probed correctly.
+            # BUG-B FIX: pass verify_ssl so ssl= is not hardcoded False.
+            # BUG-H FIX: pass proxy so Burp interception works during enrichment.
             endpoints = await enrich_endpoints(
-                endpoints    = endpoints,
-                target_url   = config.target_url,
-                auth_token   = config.auth_token,
-                second_token = getattr(config, "second_user_token", "") or "",
-                timeout_s    = min(args.timeout, 10),
-                concurrency  = getattr(args, "enrich_concurrency", 8),
-                verbose      = args.verbose,
-                promote_get  = not getattr(args, "no_enrich_promote", False),
+                endpoints     = endpoints,
+                target_url    = config.target_url,
+                auth_token    = config.auth_token,
+                second_token  = getattr(config, "second_user_token", "") or "",
+                cookies       = dict(getattr(config, "cookies", {}) or {}),
+                extra_headers = dict(getattr(config, "headers", {}) or {}),
+                proxy         = getattr(config, "proxy", "") or "",
+                verify_ssl    = getattr(config, "verify_ssl", True),
+                timeout_s     = min(args.timeout, 10),
+                concurrency   = getattr(args, "enrich_concurrency", 8),
+                verbose       = args.verbose,
+                promote_get   = not getattr(args, "no_enrich_promote", False),
             )
             # Optionally save enriched endpoints
             enrich_save = getattr(args, "enrich_save", "")
@@ -1828,9 +1913,13 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         except Exception as e:
             print(f"[!] Markdown report error: {e}")
 
-    # Exit 1 when any CRITICAL finding confirmed — useful in CI pipelines
+    # BUG-G FIX: exit 1 only on confirmed CRITICAL findings with >=80% confidence.
+    # Unconfirmed / low-confidence CRITICAL findings (e.g. price manipulation FPs)
+    # no longer fail CI pipelines.
     return 1 if any(
         getattr(f.severity, "value", str(f.severity)) == "CRITICAL"
+        and getattr(f, "confirmed", False)
+        and getattr(f, "confidence", 0) >= 80
         for f in findings
     ) else 0
 
