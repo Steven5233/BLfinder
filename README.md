@@ -57,6 +57,7 @@
 - [Project Structure](#-project-structure)
 - [Contributing](#-contributing)
 - [About the Author](#-about-the-author)
+- [Acknowledgements](#-acknowledgements)
 
 ---
 
@@ -157,9 +158,9 @@ BLFinder is structured in five cumulative phases. Each phase builds on the last 
 | 2 | **Negative Quantity** | Submits negative quantities to trigger reverse charges, negative inventory, or credit abuse. Canary-tested to eliminate servers that accept any value indiscriminately. |
 | 3 | **IDOR / BOLA** | Path ID swaps, body ID mutation, UUID permutation, header injection (`X-User-Id`, `X-Admin-User`), and no-auth access — all with optional cross-user confirmation via second token. Full evidence capture on every test. |
 | 4 | **Blind IDOR** | 5-oracle detection (HTTP status, response size, error message, timing, cross-user similarity) for IDORs where the server returns HTTP 200 regardless. Designed for APIs with uniform success responses. |
-| 5 | **Mass Assignment** | Injects privileged fields (`is_admin`, `role`, `kyc_verified`, `price_override`) and confirms reflection via baseline comparison. Eliminates false positives from pre-set fields by comparing against the baseline response. |
+| 5 | **Mass Assignment** | Injects privileged fields (`is_admin`, `role`, `kyc_verified`, `price_override`) and confirms reflection via baseline comparison. Also auto-discovers target-specific privilege fields from live 200 responses. Eliminates false positives from pre-set fields. |
 | 6 | **State Machine Abuse** | Forces objects to privileged states (`paid`, `approved`, `completed`, `verified`) without satisfying transition conditions. Confirmed when the state appears in the response body. |
-| 7 | **Race Conditions** | Fires 15 concurrent requests to detect double-spending, reward duplication, and single-use bypass. Re-verifies with a single sequential request after the burst to establish the ground truth. |
+| 7 | **Race Conditions** | Fires 15 concurrent requests to detect double-spending, reward duplication, and single-use bypass. Extended indicator list covers gambling/fintech keywords: `bet`, `wager`, `stake`, `cashout`, `bonus`, `deposit`, `topup`. Re-verifies with a sequential request after burst to establish ground truth. |
 | 8 | **JWT alg:none Bypass** | Tests signature bypass by replacing the algorithm with `none`. Canary-verified with a fully random invalid token to confirm the server does not accept everything. |
 | 9 | **BFLA / Privilege Escalation** | Probes 12 admin and internal paths with low-privilege and no-auth tokens. Confirms actual content is returned (not a generic landing page) before reporting. |
 
@@ -194,7 +195,7 @@ Activate with dedicated flags. Run after the standard 21-module sweep.
 | **GraphQL Deep Scan** | `--graphql-deep` | Full schema traversal, field-level IDOR, batching abuse, alias DoS |
 | **WebSocket Scanner** | `--websocket` | Auth bypass over WS, message injection, WS IDOR, race conditions |
 | **API Version Abuse** | `--version-scan` | Retired `v1`/`v2` endpoints with weaker controls still accessible |
-| **IDOR Mass Enumeration** | `--idor-range N` | Rapid ID-range enumeration; harvests IDs from baseline responses |
+| **IDOR Mass Enumeration** | `--idor-range N` | Rapid ID-range enumeration; harvests IDs from baseline responses. Supports numeric, UUID, MongoDB ObjectID, Stripe-format, and base62 IDs |
 | **Cross-Endpoint BOLA** | `--idor-cross-endpoint` | Uses IDs harvested from one endpoint to attack others in the same session |
 
 ---
@@ -227,7 +228,7 @@ Optional →  Playwright headless SPA crawl               (--use-headless)
 # Wordlist depth (default: 2)
 --wordlist-depth 3          # ~1500 paths + full sub-resource tree
 
-# Engine-level depth (used by the inner scanner engine)
+# Engine-level depth
 --discovery-depth 3
 
 # Skip individual layers
@@ -253,7 +254,6 @@ Optional →  Playwright headless SPA crawl               (--use-headless)
 
 # Save all discovered endpoints before scanning
 --save-discovery ~/discovered.json
---no-deep-discovery         # Fall back to legacy smart_discover() regex crawl
 
 # Discovery-only — skip all attack modules
 --no-scan
@@ -293,7 +293,7 @@ python blfinder.py \
 
 ### Traffic Import
 
-Stop writing `endpoints.json` by hand. Import real traffic directly from your proxy.
+Stop writing `endpoints.json` by hand. Import real traffic directly from your proxy — this is the **most important workflow improvement** for getting real results. When you import from Burp, blfinder uses your actual session cookies, real request bodies, and real field values.
 
 ```bash
 # Burp Suite XML/JSON export
@@ -321,6 +321,8 @@ python blfinder.py -t https://target.com -T token \
   --import-har session.har \
   --import-filter "/api/v"
 ```
+
+> **Tip:** Always prefer `--import-burp` over the enricher's auto-generated bodies. Burp-imported traffic contains your real email, real IDs, real currency values, and real session context — which makes IDOR detection far more reliable.
 
 ### Scan Profiles
 
@@ -510,18 +512,27 @@ No other mandatory dependencies. Runs on stock Python + aiohttp.
 # 1 — Basic scan, smart discovery finds endpoints automatically
 python blfinder.py -t https://api.target.com
 
-# 2 — With your auth token
+# 2 — With auth token (Bearer injected automatically)
 python blfinder.py -t https://api.target.com \
-  -T "eyJhbGciOiJIUzI1NiJ9..."
+  -T eyJhbGciOiJIUzI1NiJ9...
 
-# 3 — Full IDOR confirmation (two accounts — highest-value flag)
+# 3 — Cookie-authenticated target (e.g. 1win.com)
+python blfinder.py \
+  -t https://target.com \
+  --cookie "session_token=your-token-value" \
+  --cookie "cf_clearance=cloudflare-value" \
+  --skip-unauth \
+  --max-endpoints 3 \
+  --html -o ~/results
+
+# 4 — Full IDOR confirmation (two accounts — highest-value flag)
 python blfinder.py \
   -t https://api.target.com \
-  -T "user1_token" -T2 "user2_token" \
+  -T user1_token -T2 user2_token \
   -e endpoints.json \
   --html --json --md -o ~/results -v
 
-# 4 — Import from Burp, use profile, save to DB
+# 5 — Import from Burp, use profile, save to DB
 python blfinder.py \
   -t https://shop.target.com \
   -T user1_token -T2 user2_token \
@@ -530,7 +541,7 @@ python blfinder.py \
   --db ~/.blfinder.db --program target_h1 \
   --html --md -o ~/results
 
-# 5 — Full Phase 5+ professional scan
+# 6 — Full Phase 5+ professional scan
 python blfinder.py \
   -t https://api.target.com \
   -T user1_token -T2 user2_token \
@@ -542,7 +553,7 @@ python blfinder.py \
   --dashboard \
   --html --json --md -o ~/results
 
-# 6 — Discovery only — review before attacking
+# 7 — Discovery only — review before attacking
 python blfinder.py \
   -t https://api.target.com -T mytoken \
   --deep-discovery --wordlist-depth 2 \
@@ -561,12 +572,12 @@ Open `~/results/report.html` for a full interactive report: 7 tabs per finding i
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-t`, `--target` | required | Target base URL |
-| `-T`, `--token` | — | Auth token — User 1 (primary account) |
+| `-T`, `--token` | — | Auth token — User 1 (primary account). Pass raw token value only, no `Bearer` prefix |
 | `-T2`, `--token2` | — | Auth token — User 2 (enables cross-user IDOR confirmation) |
 | `-T3`, `--token3` | — | Auth token — User 3 (privilege chain testing) |
 | `-e`, `--endpoints` | — | Endpoints JSON file |
 | `-H`, `--header` | — | Extra request header, repeatable: `-H "X-Api-Key: abc"` |
-| `-c`, `--cookie` | — | Extra cookie, repeatable: `-c "session=abc"` |
+| `-c`, `--cookie` | — | Extra cookie, repeatable: `-c "1w_token=abc"` |
 | `--proxy` | — | HTTP proxy URL: `http://127.0.0.1:8080` |
 | `-r`, `--rate` | `0.3` | Base delay between requests (seconds) |
 | `--timeout` | `20` | Per-request timeout (seconds) |
@@ -576,6 +587,8 @@ Open `~/results/report.html` for a full interactive report: 7 tabs per finding i
 | `--min-confidence` | `40` | Drop findings below this confidence % |
 | `--confirm-attempts` | `2` | Re-verification attempts per finding |
 | `--no-scan` | off | Run discovery only, skip all attack modules |
+| `--skip-unauth` | off | Skip unauthenticated access probes (recommended on Cloudflare-protected targets) |
+| `--max-endpoints` | `5` | Max endpoints processed concurrently (lower to 2–3 on Cloudflare targets) |
 
 ### Traffic Import
 
@@ -627,7 +640,6 @@ Open `~/results/report.html` for a full interactive report: 7 tabs per finding i
 | `--use-headless` | off | Enable Playwright headless browser crawl |
 | `--headless-interact` | off | Click buttons/forms during headless crawl |
 | `--no-deep-discovery` | off | Disable engine; fall back to legacy regex crawl |
-| `--discovery-save FILE` | — | Outer-pipeline alias for `--save-discovery` |
 
 ### Recon
 
@@ -681,7 +693,7 @@ Open `~/results/report.html` for a full interactive report: 7 tabs per finding i
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o`, `--output` | `.` | Output directory |
-| `--html` | off | Generate HTML report (default if no format specified) |
+| `--html` | off | Generate HTML report |
 | `--json` | off | Generate JSON report |
 | `--md` | off | Generate Markdown report |
 | `-v`, `--verbose` | off | Print every request in real time |
@@ -713,12 +725,6 @@ Build this with `--import-burp` / `--import-har` + `--import-save`. Manual forma
     "params": {}
   },
   {
-    "url": "/api/v1/orders",
-    "method": "GET",
-    "body": {},
-    "params": {"limit": 10, "offset": 0}
-  },
-  {
     "url": "/api/v1/payments",
     "method": "POST",
     "body": {
@@ -741,6 +747,8 @@ Build this with `--import-burp` / `--import-har` + `--import-save`. Manual forma
   }
 ]
 ```
+
+> **Important:** The placeholder values (`test@example.com`, `amount: 100`) are starting points that the attack modules immediately mutate — they are changed to negative values, zero, overflow integers, etc. The field **names** are what matter. Use `--import-burp` to get your real values automatically from actual intercepted traffic.
 
 All keys are passed directly to the attack modules. Include every field the real application sends — BLFinder uses the body structure to understand which fields to mutate.
 
@@ -844,39 +852,6 @@ Use `{{variable}}` to inject values extracted from earlier steps.
 | **Raw HTTP** | Burp Suite importable format for all captured pairs |
 | **HackerOne** | Complete copy-paste ready submission with real endpoints and evidence |
 
-### JSON Report Structure
-
-```json
-{
-  "meta": {
-    "tool": "BLFinder", "version": "3.1",
-    "target": "https://api.target.com", "scan_date": "2026-05-14T14:32:11"
-  },
-  "summary": {"total": 3, "CRITICAL": 2, "HIGH": 1},
-  "findings": [
-    {
-      "title": "IDOR — Path ID 456→455 returned different resource",
-      "severity": "CRITICAL",
-      "confidence": 91,
-      "confirmed": true,
-      "endpoint": "https://api.target.com/api/v1/orders/455",
-      "cwe": "CWE-639",
-      "cvss": 9.1,
-      "owasp": "API1:2023 Broken Object Level Authorization",
-      "evidence_package": {
-        "confirmed": true,
-        "has_sensitive": true,
-        "sensitive_data": "email, phone, address",
-        "verified_curl": "curl -sk -X GET ...",
-        "diff_summary": "Size +1240B | email (ADDED) | phone (ADDED)",
-        "impact_score": 75,
-        "impact_statement": "Email addresses, phone numbers, and physical addresses exposed..."
-      }
-    }
-  ]
-}
-```
-
 ---
 
 ## 🔎 Understanding Results
@@ -910,20 +885,21 @@ Use `{{variable}}` to inject values extracted from earlier steps.
 
 ## 🏆 Bug Bounty Playbook
 
-### Step 1 — Import real traffic (2 minutes)
+### Step 1 — Import real traffic (most important step)
 
 ```bash
-# Browse the app in Burp, export, import — infinitely better than guessing
+# Browse the app in Burp, export, import
+# This gives you real session cookies, real bodies, real field values
 python blfinder.py -t https://target.com -T token \
   --import-burp session.xml \
   --import-filter "/api/" \
   --import-save endpoints.json
 ```
 
-### Step 2 — Use two accounts (most important flag)
+### Step 2 — Use two accounts (enables confirmed findings)
 
 ```bash
-# CONFIRMED findings pay more than heuristic ones
+# CONFIRMED findings pay significantly more
 python blfinder.py -T "account1_token" -T2 "account2_token" ...
 ```
 
@@ -959,7 +935,7 @@ python blfinder.py --show-history --db ~/.blfinder.db
 
 The HTML report's **HackerOne tab** generates a complete submission — real endpoint URLs, real request/response pairs, real impact. Don't write the report from scratch.
 
-### Step 7 — Re-run without VPN if findings show WAF notes
+### Step 7 — Disable VPN if findings show WAF notes
 
 WAF blocks from VPN exit nodes inflate false positives. Disable VPN, re-run, compare.
 
@@ -987,14 +963,16 @@ WAF blocks from VPN exit nodes inflate false positives. Disable VPN, re-run, com
 | `All timeouts` | `--timeout 30` |
 | `Too many 429s` | `-r 2.0` or `--profile stealth` |
 | `0 findings, 0 endpoints tested` | Add `-e endpoints.json` or `--import-burp`, and `-T token` |
-| `120/128 endpoints skipped (soft-404)` | Apply `scanner_patch.py` — raises soft-404 threshold from 0.85 → 0.97 |
-| `RuntimeWarning: coroutine never awaited` | Apply `scanner_patch.py` — fixes lambda bug in `_run_endpoint_checks` |
+| `120/128 endpoints skipped (soft-404)` | Apply `core/discovery/scanner_patch.py` — raises soft-404 threshold |
+| `RuntimeWarning: coroutine never awaited` | Apply `core/discovery/scanner_patch.py` — fixes lambda bug |
 | `WAF FP notes on all findings` | Disable VPN and re-run |
 | `Profile not found` | Check `profiles/NAME.json` exists; use `~/.blfinder/profiles/` as alternative |
 | `Dashboard blank` | Try `--force-ansi` to switch from curses to ANSI mode |
 | `H1 export fails` | Token format must be `username:api_token`, not just the token |
 | `Database locked` | Only run one instance per `--db` path at a time |
 | `Playwright not found` | `pip install playwright --break-system-packages && playwright install chromium` |
+| `Cloudflare blocking mid-scan` | Refresh `cf_clearance` from browser → restart with new cookie value |
+| `Enricher returns fake values (email: testexample@gmail.com)` | Use `--import-burp` instead — enricher placeholders are correct by design; real values come from imported traffic |
 | `Permission denied` | `chmod +x blfinder.py` |
 | `Termux storage issues` | `termux-setup-storage`, use `~/storage/downloads/` for output |
 
@@ -1032,6 +1010,7 @@ BLfinder/
     │   ├── engine.py                ← DeepDiscoveryEngine orchestrator
     │   ├── models.py                ← DiscoveryConfig, DiscoveredEndpoint
     │   ├── cli_args.py              ← add_discovery_args() / apply_discovery_args()
+    │   ├── endpoint_enricher.py     ← Body parameter inference + method promotion
     │   ├── scanner_patch.py         ← Monkey-patch for coroutine + soft-404 bugs
     │   ├── layer1_surface/
     │   │   └── robots_parser.py     ← robots.txt + sitemap.xml parser
@@ -1106,7 +1085,7 @@ Contributions are welcome. To add a new detection module:
 1. Add your check as `async def _check_yourmodule(...) -> list[Finding]` in `core/scanner.py`
 2. Use `self._new_evidence()` and `self._req_ev()` to capture live HTTP evidence
 3. Call `self._build_pkg()` and `self._attach(f, pkg)` before `_finalize_finding()`
-4. Add the module to the `all_checks` list in `_run_endpoint_checks()` — **as a lambda, not a direct call** (see `core/discovery/scanner_patch.py` for why)
+4. Add the module to the `all_checks` list in `_run_endpoint_checks()`
 5. Add a PoC builder in `core/poc.py` matching your category string
 6. Open a pull request describing what the module detects, with at least one real-world example
 
@@ -1122,12 +1101,28 @@ To add a scan profile, create `profiles/NAME.json` following the schema in the [
 
 ## 👤 About the Author
 
-BLFinder is built by **Adoyi Steven (séç gúy)**, a cybersecurity researcher and penetration tester focused on practical tools for ethical hacking, bug bounty hunting, and enterprise GRC.
+BLFinder is built by **Adoyi Steven (séç gúy)**, a cybersecurity researcher and penetration tester focused on practical tools for ethical hacking, bug bounty hunting, and enterprise security.
 
 - **GitHub:** [Steven5233](https://github.com/Steven5233)
 - **Repository:** [BLFinder](https://github.com/Steven5233/BLfinder)
 
 BLFinder started as a personal tool to automate the business logic checks that manual testers run on every engagement — the checks that generic scanners walk straight past. It evolved into a full platform after consistently finding high-severity bugs that Burp Suite's active scanner missed. Phase 5 adds the professional operational layer for sustained, multi-day bug bounty engagements. Phase 5+ adds a discovery engine that finds the endpoints other tools never even know exist.
+
+---
+
+## 🙏 Acknowledgements
+
+- **[séç gúy Bug Bounty Course](https://wa.me/2349015552392)** — The structured bug bounty methodology, business logic attack mindset, and real-world hunting techniques taught in this course directly shaped BLFinder's detection approach. Many of the attack patterns in the 21 modules trace back to lessons from this programme. If you want to understand the theory behind what this tool does automatically, this course is the place to start. WhatsApp: **09015552392**
+
+- [OWASP API Security Project](https://owasp.org/API-Security) — vulnerability classification framework
+
+- [PortSwigger Web Security Academy](https://portswigger.net/web-security) — research references and attack technique documentation
+
+- [HackerOne Hacktivity](https://hackerone.com/hacktivity) — real-world bug patterns and disclosure reports that informed the module design
+
+- [Intigriti Blog](https://blog.intigriti.com) — business logic research and case studies
+
+- The bug bounty community — for documenting what automated tools miss and sharing techniques that made this tool possible
 
 ---
 
@@ -1144,16 +1139,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 The author is not responsible for any misuse or damage caused by this tool.
 Use only on systems you own or have explicit authorisation to test.
 ```
-
----
-
-## 🙏 Acknowledgements
-
-- [OWASP API Security Project](https://owasp.org/API-Security) — vulnerability classification
-- [PortSwigger Web Security Academy](https://portswigger.net/web-security) — research references
-- [HackerOne Hacktivity](https://hackerone.com/hacktivity) — real-world bug patterns
-- [Intigriti Blog](https://blog.intigriti.com) — business logic research
-- The bug bounty community — for documenting what automated tools miss
 
 ---
 
