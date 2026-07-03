@@ -30,6 +30,21 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
+
+import os as _os
+import sys as _sys
+
+# ── Debug logging for silently-swallowed exceptions ────────────────────────
+# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
+# were hiding (parse failures, timeouts, malformed responses, etc.) instead
+# of endpoints silently disappearing with no trace.
+_BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
+
+
+def _blf_dbg(where: str, err: BaseException) -> None:
+    if _BLF_DEBUG:
+        print(f"[debug] {where}: {type(err).__name__}: {err}", file=_sys.stderr)
+
 try:
     import aiohttp
     _HAS_AIOHTTP = True
@@ -414,7 +429,8 @@ def parse_postman(collection: dict, base_url: str) -> list[DiscoveredEndpoint]:
         if body_obj.get("mode") == "raw":
             try:
                 body_dict = json.loads(body_obj.get("raw", "{}"))
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer2_static/openapi_parser.py#1", e)
                 pass
 
         _, tmpl = normalise_url(full_url)
@@ -460,7 +476,8 @@ def parse_insomnia(export: dict, base_url: str) -> list[DiscoveredEndpoint]:
         if body.get("mimeType") == "application/json":
             try:
                 body_dict = json.loads(body.get("text", "{}"))
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer2_static/openapi_parser.py#2", e)
                 pass
 
         _, tmpl = normalise_url(full_url)
