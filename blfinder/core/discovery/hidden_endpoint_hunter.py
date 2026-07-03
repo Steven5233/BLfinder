@@ -102,6 +102,21 @@ from urllib.parse import urlparse, urljoin, urlencode
 # Data models
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+import os as _os
+import sys as _sys
+
+# ── Debug logging for silently-swallowed exceptions ────────────────────────
+# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
+# were hiding (parse failures, timeouts, malformed responses, etc.) instead
+# of endpoints silently disappearing with no trace.
+_BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
+
+
+def _blf_dbg(where: str, err: BaseException) -> None:
+    if _BLF_DEBUG:
+        print(f"[debug] {where}: {type(err).__name__}: {err}", file=_sys.stderr)
+
 @dataclass
 class HiddenEndpoint:
     url:        str
@@ -817,7 +832,8 @@ class HiddenEndpointHunter:
                             for p in sigs["body_patterns"]
                         ):
                             detected.append(tech)
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#1", e)
                 pass
 
         # Always include graphql as a candidate — it's universal
@@ -855,7 +871,8 @@ class HiddenEndpointHunter:
                         f"{resp.status}{body[:500]}".encode()
                     ).hexdigest()
                     self._soft404_hashes.add(h2)
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#2", e)
                 pass
 
     # ── Phase 2: Path mutation ────────────────────────────────────────────────
@@ -1011,7 +1028,8 @@ class HiddenEndpointHunter:
 
         except asyncio.TimeoutError:
             return None
-        except Exception:
+        except Exception as e:
+            _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#3", e)
             return None
 
     # ── Phase 3: Recursive expansion ─────────────────────────────────────────
@@ -1142,7 +1160,8 @@ class HiddenEndpointHunter:
                                         f"  [hunter:activation] [{resp.status}] "
                                         f"{url_with_param[:65]}"
                                     )
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#4", e)
                     pass
         return new_found
 
@@ -1174,7 +1193,8 @@ class HiddenEndpointHunter:
                             m.strip().upper()
                             for m in allow_hdr.split(",") if m.strip()
                         }
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#5", e)
                 allowed = set()
 
             # Try methods not in original discovery
@@ -1204,7 +1224,8 @@ class HiddenEndpointHunter:
                                     status=resp.status,
                                     body=body[:1000],
                                 ))
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#6", e)
                     pass
         return new_found
 
