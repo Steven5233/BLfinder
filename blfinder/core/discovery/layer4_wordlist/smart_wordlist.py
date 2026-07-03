@@ -31,6 +31,21 @@ import time
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse
 
+
+import os as _os
+import sys as _sys
+
+# ── Debug logging for silently-swallowed exceptions ────────────────────────
+# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
+# were hiding (parse failures, timeouts, malformed responses, etc.) instead
+# of endpoints silently disappearing with no trace.
+_BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
+
+
+def _blf_dbg(where: str, err: BaseException) -> None:
+    if _BLF_DEBUG:
+        print(f"[debug] {where}: {type(err).__name__}: {err}", file=_sys.stderr)
+
 try:
     import aiohttp
     _HAS_AIOHTTP = True
@@ -345,7 +360,8 @@ async def _get_canary_fingerprint(
             if resp.status in (200, 404):
                 body = await resp.text(errors="replace")
                 return hashlib.md5(body[:500].encode()).hexdigest()
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/layer4_wordlist/smart_wordlist.py#1", e)
         pass
     return None
 
@@ -419,7 +435,8 @@ class SmartWordlist:
             ) as resp:
                 if resp.status == 200:
                     page_html = await resp.text(errors="replace")
-        except Exception:
+        except Exception as e:
+            _blf_dbg("blfinder/core/discovery/layer4_wordlist/smart_wordlist.py#2", e)
             pass
 
         # Establish soft-404 fingerprint
@@ -502,7 +519,8 @@ class SmartWordlist:
                         raw_source_evidence=f"wordlist depth={config.wordlist_depth}",
                         normalised_template=tmpl,
                     )
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer4_wordlist/smart_wordlist.py#3", e)
                 return None
 
         # Probe in concurrent batches (Termux-friendly: small batches)
