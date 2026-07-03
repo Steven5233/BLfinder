@@ -17,6 +17,21 @@ import asyncio
 import json
 
 
+
+import os as _os
+import sys as _sys
+
+# ── Debug logging for silently-swallowed exceptions ────────────────────────
+# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
+# were hiding (parse failures, timeouts, malformed responses, etc.) instead
+# of endpoints silently disappearing with no trace.
+_BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
+
+
+def _blf_dbg(where: str, err: BaseException) -> None:
+    if _BLF_DEBUG:
+        print(f"[debug] {where}: {type(err).__name__}: {err}", file=_sys.stderr)
+
 _MIN_BODY = 15
 
 _NEVER_SKIP_STATUSES = frozenset({
@@ -119,7 +134,8 @@ def _build_poc(finding, token: str) -> dict:
         path = p.path or "/"
         if p.query:
             path += "?" + p.query
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/scanner_patch.py#1", e)
         pass
 
     burp_raw = (
@@ -241,7 +257,8 @@ def apply_patch() -> bool:
             try:
                 ep_profile = self._classifier.classify(url, body)
                 skip_set.update(ep_profile.skip_modules)
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/scanner_patch.py#2", e)
                 pass
 
         all_checks = [
