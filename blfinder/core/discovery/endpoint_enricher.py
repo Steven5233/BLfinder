@@ -51,6 +51,21 @@ from urllib.parse import urlparse, parse_qs, urlencode
 # Path-pattern parameter dictionary
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+import os as _os
+import sys as _sys
+
+# ── Debug logging for silently-swallowed exceptions ────────────────────────
+# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
+# were hiding (parse failures, timeouts, malformed responses, etc.) instead
+# of endpoints silently disappearing with no trace.
+_BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
+
+
+def _blf_dbg(where: str, err: BaseException) -> None:
+    if _BLF_DEBUG:
+        print(f"[debug] {where}: {type(err).__name__}: {err}", file=_sys.stderr)
+
 _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
 
     # ── Betting / Gaming ──────────────────────────────────────────────────────
@@ -244,7 +259,8 @@ _PROMOTE_TO_POST = [
 def _url_path_segments(url: str) -> list[str]:
     try:
         path = urlparse(url).path
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/endpoint_enricher.py#1", e)
         path = url
     segments = [s.lower() for s in path.split("/") if s]
     expanded: list[str] = []
@@ -381,7 +397,8 @@ def _extract_query_params(url: str) -> dict:
         parsed = urlparse(url)
         qs = parse_qs(parsed.query, keep_blank_values=True)
         return {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/endpoint_enricher.py#2", e)
         return {}
 
 
@@ -396,7 +413,8 @@ def _clean_url(url: str) -> str:
     try:
         p = urlparse(url)
         return p._replace(query="", fragment="").geturl()
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/endpoint_enricher.py#3", e)
         return url
 
 
@@ -640,7 +658,8 @@ class EndpointEnricher:
                 status = resp.status
                 try:
                     resp_text = await resp.text(errors="replace")
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/endpoint_enricher.py#4", e)
                     resp_text = ""
 
                 if status in (200, 201):
