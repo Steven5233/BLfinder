@@ -68,6 +68,21 @@ from ..layer5_dedup.normaliser import normalise_url, extract_id_params, dedup_ke
 # Playwright availability check
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+import os as _os
+import sys as _sys
+
+# ── Debug logging for silently-swallowed exceptions ────────────────────────
+# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
+# were hiding (parse failures, timeouts, malformed responses, etc.) instead
+# of endpoints silently disappearing with no trace.
+_BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
+
+
+def _blf_dbg(where: str, err: BaseException) -> None:
+    if _BLF_DEBUG:
+        print(f"[debug] {where}: {type(err).__name__}: {err}", file=_sys.stderr)
+
 def _check_playwright() -> tuple[bool, str]:
     """
     Returns (available, message).
@@ -186,14 +201,16 @@ def _parse_intercepted_request(
             body = json.loads(post_data)
             if not isinstance(body, dict):
                 body = {"data": body}
-        except Exception:
+        except Exception as e:
+            _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#1", e)
             # Form-encoded body — parse manually
             try:
                 from urllib.parse import parse_qs
                 parsed_qs = parse_qs(post_data)
                 body = {k: v[0] if len(v) == 1 else v
                         for k, v in parsed_qs.items()}
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#2", e)
                 body = {}
 
     # Strip auth headers from the captured headers (security)
@@ -252,7 +269,8 @@ async def _try_auto_login(page: Any, target_url: str, auth_token: str) -> bool:
         """)
         await page.reload(wait_until="networkidle", timeout=15000)
         return True
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#3", e)
         pass
 
     return False
@@ -272,7 +290,8 @@ async def _extract_links(page: Any, base_url: str) -> list[str]:
                                       && !h.startsWith('mailto:')
                                       && !h.startsWith('tel:'))
         """)
-    except Exception:
+    except Exception as e:
+        _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#4", e)
         return []
 
     links: list[str] = []
@@ -316,9 +335,11 @@ async def _interact_with_page(page: Any) -> None:
                 try:
                     await el.click(timeout=2000)
                     await page.wait_for_load_state("networkidle", timeout=3000)
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#5", e)
                     pass
-        except Exception:
+        except Exception as e:
+            _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#6", e)
             pass
 
 
@@ -408,7 +429,8 @@ class HeadlessCrawler:
                     "post_data": data,
                     "headers":   hdrs,
                 })
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#7", e)
                 pass
 
         endpoints: list[DiscoveredEndpoint] = []
@@ -458,11 +480,13 @@ class HeadlessCrawler:
                     wait_until="networkidle",
                     timeout=timeout_ms,
                 )
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#8", e)
                 try:
                     page.goto(target_url, wait_until="domcontentloaded",
                               timeout=timeout_ms)
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#9", e)
                     browser.close()
                     return []
 
@@ -479,14 +503,16 @@ class HeadlessCrawler:
                         }}
                     """)
                     page.reload(wait_until="networkidle", timeout=timeout_ms)
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#10", e)
                     pass
 
             # Interact with page if requested
             if config.headless_interact:
                 try:
                     _sync_interact(page)
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#11", e)
                     pass
 
             # Follow links (depth 1)
@@ -499,7 +525,8 @@ class HeadlessCrawler:
                                               && !h.startsWith('mailto:'))
                                .slice(0, 20)
                 """)
-            except Exception:
+            except Exception as e:
+                _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#12", e)
                 hrefs = []
 
             target_netloc = urlparse(target_url).netloc
@@ -519,9 +546,11 @@ class HeadlessCrawler:
                     if config.headless_interact:
                         try:
                             _sync_interact(page)
-                        except Exception:
+                        except Exception as e:
+                            _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#13", e)
                             pass
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#14", e)
                     pass
 
             browser.close()
@@ -567,7 +596,9 @@ def _sync_interact(page: Any) -> None:
                 try:
                     el.click(timeout=1500)
                     page.wait_for_load_state("networkidle", timeout=2000)
-                except Exception:
+                except Exception as e:
+                    _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#15", e)
                     pass
-        except Exception:
+        except Exception as e:
+            _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#16", e)
             pass
