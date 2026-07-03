@@ -137,6 +137,24 @@ except ImportError:
     _HAS_VERSION = False
 
 try:
+    from .modules.cors_scanner import CORSScanner
+    _HAS_CORS = True
+except ImportError:
+    _HAS_CORS = False
+
+try:
+    from .modules.security_headers import SecurityHeaderAuditor
+    _HAS_SEC_HEADERS = True
+except ImportError:
+    _HAS_SEC_HEADERS = False
+
+try:
+    from .modules.jwt_alg_confusion import JWTAlgConfusionScanner
+    _HAS_JWT_CONFUSION = True
+except ImportError:
+    _HAS_JWT_CONFUSION = False
+
+try:
     from .intelligence.business_classifier import BusinessClassifier, AttackPlan
     _HAS_CLASSIFIER = True
 except ImportError:
@@ -488,6 +506,9 @@ class BLFScanner:
         self._gql_deep:        Optional[GraphQLDeepScanner] = None
         self._ws_scanner:      Optional[WebSocketScanner]   = None
         self._version_scanner: Optional[APIVersionScanner]  = None
+        self._cors_scanner:    Optional[CORSScanner]         = None
+        self._sec_header_auditor: Optional[SecurityHeaderAuditor] = None
+        self._jwt_scanner:     Optional[JWTAlgConfusionScanner] = None
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
 
@@ -535,6 +556,12 @@ class BLFScanner:
             self._ws_scanner = WebSocketScanner(self)
         if _HAS_VERSION and getattr(self.config, "run_version_scan", False):
             self._version_scanner = APIVersionScanner(self)
+        if _HAS_CORS:
+            self._cors_scanner = CORSScanner(self)
+        if _HAS_SEC_HEADERS:
+            self._sec_header_auditor = SecurityHeaderAuditor(self)
+        if _HAS_JWT_CONFUSION:
+            self._jwt_scanner = JWTAlgConfusionScanner(self)
         if _HAS_CLASSIFIER:
             self._classifier = BusinessClassifier()
 
@@ -1392,6 +1419,18 @@ class BLFScanner:
             "elapsed": elapsed, "headers": headers,
         }
         self._record_baseline_sample(url, base_body)
+
+        # Security misconfiguration audit — cheap, header-only checks using
+        # the response already in hand; deduplicated per-host inside the
+        # modules so this never spams the same finding across endpoints.
+        if _HAS_SEC_HEADERS and self._sec_header_auditor:
+            findings.extend(
+                self._sec_header_auditor.audit(url, method, status, headers, base_body)
+            )
+        if _HAS_CORS and self._cors_scanner:
+            findings.extend(await self._cors_scanner.check(url, method))
+        if _HAS_JWT_CONFUSION and self._jwt_scanner:
+            findings.extend(await self._jwt_scanner.scan(url, method))
 
         # Phase 4: Harvest IDs
         if _HAS_IDOR_ENUM and self._idor_enumerator:
