@@ -1432,15 +1432,22 @@ class BLFScanner:
         # Security misconfiguration audit — cheap, header-only checks using
         # the response already in hand; deduplicated per-host inside the
         # modules so this never spams the same finding across endpoints.
-        if _HAS_SEC_HEADERS and self._sec_header_auditor:
+        # All four gated behind profile skip_modules so --profile stealth
+        # (or a custom profile) can actually disable the noisier ones —
+        # CORS and JWT confusion send abnormal-looking headers (spoofed
+        # Origin, forged/malformed Authorization) that are exactly the
+        # pattern a WAF is tuned to flag, so they're worth being able to
+        # turn off independently of the 21 core business-logic checks.
+        early_skip = self._profile_skip_modules
+        if _HAS_SEC_HEADERS and self._sec_header_auditor and "security_headers" not in early_skip:
             findings.extend(
                 self._sec_header_auditor.audit(url, method, status, headers, base_body)
             )
-        if _HAS_CORS and self._cors_scanner:
+        if _HAS_CORS and self._cors_scanner and "cors" not in early_skip:
             findings.extend(await self._cors_scanner.check(url, method))
-        if _HAS_JWT_CONFUSION and self._jwt_scanner:
+        if _HAS_JWT_CONFUSION and self._jwt_scanner and "jwt_alg_confusion" not in early_skip:
             findings.extend(await self._jwt_scanner.scan(url, method))
-        if _HAS_TENANT_BOLA and self._tenant_bola:
+        if _HAS_TENANT_BOLA and self._tenant_bola and "tenant_bola" not in early_skip:
             findings.extend(await self._tenant_bola.check(url, method, status, base_body))
 
         # Phase 4: Harvest IDs
