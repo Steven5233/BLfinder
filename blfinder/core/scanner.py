@@ -155,6 +155,12 @@ except ImportError:
     _HAS_JWT_CONFUSION = False
 
 try:
+    from .modules.tenant_bola import TenantBOLAScanner
+    _HAS_TENANT_BOLA = True
+except ImportError:
+    _HAS_TENANT_BOLA = False
+
+try:
     from .intelligence.business_classifier import BusinessClassifier, AttackPlan
     _HAS_CLASSIFIER = True
 except ImportError:
@@ -509,6 +515,7 @@ class BLFScanner:
         self._cors_scanner:    Optional[CORSScanner]         = None
         self._sec_header_auditor: Optional[SecurityHeaderAuditor] = None
         self._jwt_scanner:     Optional[JWTAlgConfusionScanner] = None
+        self._tenant_bola:     Optional[TenantBOLAScanner] = None
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
 
@@ -562,6 +569,8 @@ class BLFScanner:
             self._sec_header_auditor = SecurityHeaderAuditor(self)
         if _HAS_JWT_CONFUSION:
             self._jwt_scanner = JWTAlgConfusionScanner(self)
+        if _HAS_TENANT_BOLA:
+            self._tenant_bola = TenantBOLAScanner(self)
         if _HAS_CLASSIFIER:
             self._classifier = BusinessClassifier()
 
@@ -1431,6 +1440,8 @@ class BLFScanner:
             findings.extend(await self._cors_scanner.check(url, method))
         if _HAS_JWT_CONFUSION and self._jwt_scanner:
             findings.extend(await self._jwt_scanner.scan(url, method))
+        if _HAS_TENANT_BOLA and self._tenant_bola:
+            findings.extend(await self._tenant_bola.check(url, method, status, base_body))
 
         # Phase 4: Harvest IDs
         if _HAS_IDOR_ENUM and self._idor_enumerator:
