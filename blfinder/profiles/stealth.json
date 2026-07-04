@@ -30,7 +30,10 @@
     "parameter_pollution",
     "http_method_override",
     "soft_delete_bypass",
-    "blind_idor"
+    "blind_idor",
+    "cors",
+    "jwt_alg_confusion",
+    "tenant_bola"
   ],
-  "notes": "Avoid race condition tests (high noise). Use --no-discover to minimize requests. Disable VPN before running — WAFs block known VPN IPs."
+  "notes": "Avoid race condition tests (high noise). Use --no-discover to minimize requests. Disable VPN before running — WAFs block known VPN IPs. security_headers is left enabled — it reads headers off the request that's already happening and sends nothing extra, so it's free from a WAF-detection standpoint. cors/jwt_alg_confusion/tenant_bola are skipped by default here because they send abnormal-looking headers (spoofed Origin, forged Authorization, swapped org IDs) that are exactly the pattern a WAF's anomaly detection is tuned to catch — remove any of the three from this list if you want them back for a specific stealth run."
 }
