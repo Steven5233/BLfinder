@@ -264,6 +264,35 @@ _PRIVILEGE_PATTERNS = [
 ]
 
 
+# Word-boundary patterns for _response_indicates_success. Replaces naive
+# bare substring checks (e.g. "id" matching inside "paid"/"guide"/"avoid",
+# "true" matching inside prose, "token" matching CSRF-token mentions
+# unrelated to auth outcome) which were producing false success/failure
+# reads on ordinary response bodies.
+_FAILURE_INDICATOR_PATTERNS = [
+    re.compile(r'\berror\b', re.I),        re.compile(r'\binvalid\b', re.I),
+    re.compile(r'\bfailed\b', re.I),       re.compile(r'\bunauthorized\b', re.I),
+    re.compile(r'\bforbidden\b', re.I),    re.compile(r'\bnot\s+found\b', re.I),
+    re.compile(r'\brejected\b', re.I),     re.compile(r'\bdenied\b', re.I),
+    re.compile(r'\bexception\b', re.I),    re.compile(r'\bbad\s+request\b', re.I),
+    re.compile(r'\bvalidation\s+failed\b', re.I),
+    re.compile(r'\brequired\b', re.I),     re.compile(r'\bmissing\b', re.I),
+    re.compile(r'\bstack\s+trace\b', re.I),
+]
+_SUCCESS_INDICATOR_PATTERNS = [
+    re.compile(r'\bsuccess\b', re.I),      re.compile(r'\bcreated\b', re.I),
+    re.compile(r'\bupdated\b', re.I),      re.compile(r'\bconfirmed\b', re.I),
+    re.compile(r'\bprocessed\b', re.I),    re.compile(r'\bcompleted\b', re.I),
+    re.compile(r'\baccepted\b', re.I),     re.compile(r'"?\bok\b"?\s*[,:}]', re.I),
+    re.compile(r'"order_id"', re.I),       re.compile(r'"transaction_id"', re.I),
+    re.compile(r'"payment_id"', re.I),
+    # JSON-shaped id/token/true instead of bare substrings — requires the
+    # actual key or value position, not just the letters appearing anywhere.
+    re.compile(r'"id"\s*:', re.I),         re.compile(r'"token"\s*:', re.I),
+    re.compile(r':\s*true\b', re.I),
+]
+
+
 def _looks_privilege_field(name: str, value: Any) -> bool:
     if any(p.search(name) for p in _PRIVILEGE_PATTERNS):
         return True
@@ -839,26 +868,24 @@ class BLFScanner:
         return sim < (1.0 - self.config.similarity_threshold)
 
     def _response_indicates_success(self, body: str, status: int = 200) -> bool:
+        """
+        Word-boundary / JSON-shaped matching, not bare substrings. The old
+        version matched "id" inside "paid"/"invalid"/"guide", "true" inside
+        arbitrary prose, and "token" on any CSRF-token mention — all of
+        which are load-bearing for JWT bypass and cross-tenant BOLA
+        confirmation upstream, so a promiscuous match there produced real
+        false positives/negatives, not just cosmetic noise.
+        """
         if not body or body.startswith(("TIMEOUT", "ERROR:", "CONNECTION_ERROR:")):
             return False
         if status >= 500:
             return False
         body_lower = body.lower()
-        failure = [
-            "error", "invalid", "failed", "unauthorized", "forbidden",
-            "not found", "rejected", "denied", "exception", "bad request",
-            "validation", "required", "missing", "stack trace",
-        ]
+        has_failure = any(p.search(body_lower) for p in _FAILURE_INDICATOR_PATTERNS)
         if status in (200, 201, 204):
-            return not any(s in body_lower for s in failure)
-        success = [
-            "success", "true", "created", "updated", "confirmed",
-            "processed", "completed", "accepted", "ok",
-            "order_id", "transaction_id", "payment_id", "id", "token",
-        ]
-        return any(s in body_lower for s in success) and not any(
-            s in body_lower for s in failure
-        )
+            return not has_failure
+        has_success = any(p.search(body_lower) for p in _SUCCESS_INDICATOR_PATTERNS)
+        return has_success and not has_failure
 
     def _extract_discount(self, body: str) -> float:
         try:
@@ -1429,33 +1456,16 @@ class BLFScanner:
         }
         self._record_baseline_sample(url, base_body)
 
-        # Security misconfiguration audit — cheap, header-only checks using
-        # the response already in hand; deduplicated per-host inside the
-        # modules so this never spams the same finding across endpoints.
-        # All four gated behind profile skip_modules so --profile stealth
-        # (or a custom profile) can actually disable the noisier ones —
-        # CORS and JWT confusion send abnormal-looking headers (spoofed
-        # Origin, forged/malformed Authorization) that are exactly the
-        # pattern a WAF is tuned to flag, so they're worth being able to
-        # turn off independently of the 21 core business-logic checks.
-        early_skip = self._profile_skip_modules
-        if _HAS_SEC_HEADERS and self._sec_header_auditor and "security_headers" not in early_skip:
-            findings.extend(
-                self._sec_header_auditor.audit(url, method, status, headers, base_body)
-            )
-        if _HAS_CORS and self._cors_scanner and "cors" not in early_skip:
-            findings.extend(await self._cors_scanner.check(url, method))
-        if _HAS_JWT_CONFUSION and self._jwt_scanner and "jwt_alg_confusion" not in early_skip:
-            findings.extend(await self._jwt_scanner.scan(url, method))
-        if _HAS_TENANT_BOLA and self._tenant_bola and "tenant_bola" not in early_skip:
-            findings.extend(await self._tenant_bola.check(url, method, status, base_body))
-
-        # Phase 4: Harvest IDs
-        if _HAS_IDOR_ENUM and self._idor_enumerator:
-            self._idor_enumerator.harvest_ids(base_body)
-
-        # Phase 3: Classify response
+        # Phase 3: Classify response — moved ahead of the early
+        # security-misconfiguration audit below. Previously CORS/JWT/
+        # tenant-BOLA/security-headers findings were appended to `findings`
+        # BEFORE this classification ran, so a WAF block page or soft-404
+        # on this exact endpoint never suppressed or capped them — only the
+        # 21 core checks respected the classifier. Classifying first closes
+        # that gap and also skips the (otherwise wasted) probe requests
+        # those four modules would send against a dead endpoint.
         confidence_cap = 100
+        classified = None
         if _HAS_VALIDATION and self._response_classifier:
             classified = self._response_classifier.classify(
                 url, status, headers, base_body, elapsed
@@ -1481,6 +1491,46 @@ class BLFScanner:
                     f"{classified.response_class.value} "
                     f"(cap={confidence_cap}%)"
                 )
+
+        # Security misconfiguration audit — cheap, header-only checks using
+        # the response already in hand; deduplicated per-host inside the
+        # modules so this never spams the same finding across endpoints.
+        # All four gated behind profile skip_modules so --profile stealth
+        # (or a custom profile) can actually disable the noisier ones —
+        # CORS and JWT confusion send abnormal-looking headers (spoofed
+        # Origin, forged/malformed Authorization) that are exactly the
+        # pattern a WAF is tuned to flag, so they're worth being able to
+        # turn off independently of the 21 core business-logic checks.
+        # Only reached once we know (above) this endpoint wasn't suppressed;
+        # their findings still go through the same confidence_cap as every
+        # other module's output, applied in the loop further down.
+        early_skip = self._profile_skip_modules
+        early_findings: list[Finding] = []
+        if _HAS_SEC_HEADERS and self._sec_header_auditor and "security_headers" not in early_skip:
+            early_findings.extend(
+                self._sec_header_auditor.audit(url, method, status, headers, base_body)
+            )
+        if _HAS_CORS and self._cors_scanner and "cors" not in early_skip:
+            early_findings.extend(await self._cors_scanner.check(url, method))
+        if _HAS_JWT_CONFUSION and self._jwt_scanner and "jwt_alg_confusion" not in early_skip:
+            early_findings.extend(await self._jwt_scanner.scan(url, method))
+        if _HAS_TENANT_BOLA and self._tenant_bola and "tenant_bola" not in early_skip:
+            early_findings.extend(await self._tenant_bola.check(url, method, status, base_body))
+
+        for f in early_findings:
+            if confidence_cap < 100:
+                f.confidence = min(getattr(f, "confidence", 0), confidence_cap)
+            findings.append(f)
+            self._update_dashboard(finding=f)
+            if self._findings_queue:
+                try:
+                    self._findings_queue.put_nowait(f)
+                except asyncio.QueueFull:
+                    pass
+
+        # Phase 4: Harvest IDs
+        if _HAS_IDOR_ENUM and self._idor_enumerator:
+            self._idor_enumerator.harvest_ids(base_body)
 
         # Build skip set from profile + classifier
         skip_set: set[str] = set(self._profile_skip_modules)
