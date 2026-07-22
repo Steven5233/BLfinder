@@ -304,60 +304,274 @@ class FlowReplayer:
         concurrency: int = 15,
     ) -> list:
         """
-        Fire N concurrent copies of a flow step simultaneously.
-        Detects race conditions on single-use operations.
+        Fire N near-simultaneous copies of a flow step. Reuses the scanner's
+        shared burst primitives (see scanner.py) instead of a bare
+        asyncio.gather, which fixes two problems the original version had:
+
+          1. The main aiohttp session caps concurrent connections per host
+             at 5 (limit_per_host=5) — a "15 concurrent" burst was actually
+             serialized into batches of 5, so tight race windows were
+             routinely missed. The burst session has no such cap.
+          2. Success was judged purely on HTTP status. Now every successful
+             response is run through the distinct-identifier / numeric-delta
+             oracle so a repeated-but-idempotent 200 isn't mistaken for a
+             real double-processing bug.
         """
         ctx = dict(context or {})
         resolved_url  = self._resolve_template(target_step.url, ctx, base_url)
         resolved_body = self._resolve_body(target_step.body, ctx)
 
-        # Temporarily suspend rate limiting for the burst
-        orig_delay = self._scanner.rate_limiter.base_delay
-        self._scanner.rate_limiter.base_delay = 0
-
-        tasks = [
-            self._request(
+        waves = [5, 15, 30] if concurrency >= 15 else [concurrency]
+        analysis = None
+        winning_wave = 0
+        for wave in waves:
+            responses = await self._scanner._execute_race_burst(
                 target_step.method, resolved_url,
-                json=resolved_body if resolved_body else None,
+                body=resolved_body if resolved_body else None,
+                concurrency=wave,
             )
-            for _ in range(concurrency)
-        ]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
+            analysis = self._scanner._analyze_race_burst(responses)
+            if analysis["success_count"] > 1:
+                winning_wave = wave
+                break
 
-        self._scanner.rate_limiter.base_delay = orig_delay
+        if not analysis or analysis["success_count"] <= 1:
+            return []
 
-        success_count = sum(
-            1 for r in responses
-            if isinstance(r, tuple)
-            and r[0] in target_step.expected_status
-            and self._scanner._response_indicates_success(r[2], r[0])
-        )
+        success_count = analysis["success_count"]
+        total         = analysis["total"]
+        distinct_ids  = analysis["distinct_ids"]
 
-        if success_count > 1:
-            return [self._make_finding(
-                title=f"Race Condition — '{target_step.id}' accepted {success_count}/{concurrency} concurrent requests",
+        if len(distinct_ids) > 1:
+            oracle_note = (
+                f" {len(distinct_ids)} distinct resource identifiers were created "
+                "across the successful responses, confirming separate mutations "
+                "(not one transaction echoed back)."
+            )
+            confirmed = True
+        elif len(distinct_ids) == 1:
+            oracle_note = (
+                " All successes shared one identifier — may be correctly "
+                "deduplicated via an idempotency key; verify manually."
+            )
+            confirmed = False
+        else:
+            oracle_note = " No identifier field found to independently confirm the double-processing; verify manually."
+            confirmed = False
+
+        return [self._make_finding(
+            title=(
+                f"Race Condition — '{target_step.id}' accepted {success_count}/{total} "
+                f"concurrent requests (window at concurrency={winning_wave})"
+            ),
+            severity="CRITICAL",
+            category="Business Logic — Race Condition",
+            description=(
+                f"{success_count} of {total} simultaneous, connection-warmed requests "
+                f"to step '{target_step.id}' returned success. Single-use operations may be "
+                f"exploitable for double-spending or duplicate redemption.{oracle_note}"
+            ),
+            request={
+                "method": target_step.method, "url": resolved_url,
+                "body": resolved_body, "note": f"{total} concurrent requests, connection-warmed",
+            },
+            response_summary=f"{success_count}/{total} successes",
+            evidence=f"Concurrent success rate: {success_count}/{total} at concurrency={winning_wave}.{oracle_note}",
+            recommendation=(
+                "Use DB-level locks (SELECT FOR UPDATE), Redis SETNX, "
+                "or idempotency keys to prevent race conditions."
+            ),
+            cwe="CWE-362",
+            owasp="API4:2023 Unrestricted Resource Consumption",
+            confirmed=confirmed,
+        )]
+
+    async def attack_state_transitions(
+        self,
+        steps: list[FlowStep],
+        base_url: str = "",
+        context: dict | None = None,
+    ) -> list:
+        """
+        Full pairwise state-transition fuzzer — the actual "state machine
+        abuse" class of bug, not just linear skip-ahead.
+
+        `attack_workflow_bypass` only ever asks "can step N be reached
+        without steps 1..N-1?". Real state-machine bugs are graph problems:
+        can a COMPLETED order be cancelled again, can a REFUNDED order be
+        shipped, can a step be replayed after the flow already moved past
+        it? This method executes the flow once (snapshotting context after
+        every step), then from EVERY position tries EVERY other step —
+        including going backward and repeating a step that should only be
+        reachable once — and flags any transition that succeeds but isn't
+        the one legitimate next step.
+        """
+        findings = []
+        if len(steps) < 2:
+            return findings
+
+        ctx: dict = dict(context or {})
+        snapshots: dict[int, dict] = {}
+        for idx, step in enumerate(steps):
+            if step.skip:
+                snapshots[idx] = dict(ctx)
+                continue
+            result = await self._execute_step(step, base_url, ctx)
+            ctx.update(result.extracted)
+            snapshots[idx] = dict(ctx)
+
+        for i, snap_ctx in snapshots.items():
+            for j, target_step in enumerate(steps):
+                if j == i + 1 or target_step.skip:
+                    continue  # i+1 is the one legitimate next transition
+
+                resolved_url  = self._resolve_template(target_step.url, snap_ctx, base_url)
+                resolved_body = self._resolve_body(target_step.body, snap_ctx)
+
+                status, _, resp_body, _ = await self._request(
+                    target_step.method, resolved_url,
+                    json=resolved_body if resolved_body else None,
+                    params=self._resolve_body(target_step.params, snap_ctx) or None,
+                )
+                if status not in target_step.expected_status:
+                    continue
+
+                # FP guard: server that 200s everything isn't meaningful
+                canary_status, _, _, _ = await self._request(
+                    target_step.method, resolved_url,
+                    json={"__canary_invalid__": True},
+                )
+                if canary_status in target_step.expected_status:
+                    continue
+
+                direction = "backward/replay" if j <= i else "forward-skip"
+                findings.append(self._make_finding(
+                    title=(
+                        f"State Machine Abuse — step '{target_step.id}' reachable "
+                        f"({direction}) from the state after '{steps[i].id}'"
+                    ),
+                    severity="HIGH",
+                    category="Business Logic — State Machine Abuse",
+                    description=(
+                        f"After completing step '{steps[i].id}' (position {i}), the "
+                        f"server still allowed invoking step '{target_step.id}' "
+                        f"(position {j}) — a {direction} transition the intended "
+                        f"flow does not permit at that point. Server returned HTTP {status}."
+                    ),
+                    request={"method": target_step.method, "url": resolved_url, "body": resolved_body},
+                    response_summary=f"HTTP {status} — {resp_body[:300]}",
+                    evidence=(
+                        f"State after '{steps[i].id}' → invoked '{target_step.id}' "
+                        f"({direction}). HTTP {status}. Canary control → {canary_status}."
+                    ),
+                    recommendation=(
+                        "Model the workflow as an explicit server-side state machine "
+                        "and reject any transition not defined for the current state — "
+                        "including backward transitions and repeat invocations of "
+                        "single-use/terminal actions."
+                    ),
+                    cwe="CWE-841",
+                    owasp="API5:2023 Broken Function Level Authorization",
+                ))
+
+        return findings
+
+    async def attack_cross_instance_confusion(
+        self,
+        steps: list[FlowStep],
+        base_url: str = "",
+        context: dict | None = None,
+        second_token: str | None = None,
+    ) -> list:
+        """
+        Runs the flow twice — a second independent instance, optionally
+        under a different account if `second_token` is provided — and at
+        each step swaps the values extracted so far between the two
+        instances before continuing. This catches servers that don't
+        verify a referenced object (cart, order, coupon, session state)
+        actually belongs to the identity/flow that's currently executing —
+        i.e. object-level authorization bugs that only manifest *inside*
+        a multi-step workflow, not on any single endpoint in isolation.
+        """
+        findings = []
+        if len(steps) < 2:
+            return findings
+
+        ctx_a: dict = dict(context or {})
+        ctx_b: dict = dict(context or {})
+
+        for idx, step in enumerate(steps):
+            if step.skip:
+                continue
+
+            result_a = await self._execute_step(step, base_url, ctx_a)
+            ctx_a.update(result_a.extracted)
+            result_b = await self._execute_step(step, base_url, ctx_b, token_override=second_token)
+            ctx_b.update(result_b.extracted)
+
+            if not step.extract or idx + 1 >= len(steps):
+                continue
+
+            mixed_ctx = dict(ctx_a)
+            swapped_fields = []
+            for key in step.extract:
+                if key in ctx_b and ctx_b[key] != ctx_a.get(key):
+                    mixed_ctx[key] = ctx_b[key]
+                    swapped_fields.append(key)
+            if not swapped_fields:
+                continue
+
+            next_step = steps[idx + 1]
+            resolved_url  = self._resolve_template(next_step.url, mixed_ctx, base_url)
+            resolved_body = self._resolve_body(next_step.body, mixed_ctx)
+
+            status, _, resp_body, _ = await self._request(
+                next_step.method, resolved_url,
+                json=resolved_body if resolved_body else None,
+                params=self._resolve_body(next_step.params, mixed_ctx) or None,
+            )
+            if status not in next_step.expected_status:
+                continue
+            canary_status, _, _, _ = await self._request(
+                next_step.method, resolved_url,
+                json={"__canary_invalid__": True},
+            )
+            if canary_status in next_step.expected_status:
+                continue
+
+            account_note = " (different account)" if second_token else ""
+            findings.append(self._make_finding(
+                title=(
+                    f"Cross-Object State Confusion — '{next_step.id}' accepted "
+                    f"identifiers from a separate flow instance{account_note}"
+                ),
                 severity="CRITICAL",
-                category="Business Logic — Race Condition",
+                category="Business Logic — Cross-Object State Confusion",
                 description=(
-                    f"{success_count} of {concurrency} simultaneous requests to step "
-                    f"'{target_step.id}' returned success. Single-use operations may be "
-                    "exploitable for double-spending or duplicate redemption."
+                    f"At step '{step.id}', identifier field(s) {swapped_fields} from a "
+                    f"SEPARATE, independently-run flow instance{account_note} were "
+                    f"substituted into this flow's context. Step '{next_step.id}' still "
+                    f"succeeded (HTTP {status}) — the server did not verify these "
+                    "identifiers belonged to the flow currently executing."
                 ),
-                request={
-                    "method": target_step.method, "url": resolved_url,
-                    "body": resolved_body, "note": f"{concurrency} concurrent requests",
-                },
-                response_summary=f"{success_count}/{concurrency} successes",
-                evidence=f"Concurrent success rate: {success_count}/{concurrency}",
+                request={"method": next_step.method, "url": resolved_url, "body": resolved_body},
+                response_summary=f"HTTP {status} — {resp_body[:300]}",
+                evidence=(
+                    f"Swapped field(s) {swapped_fields} from instance B into instance A at "
+                    f"step '{step.id}', continued to '{next_step.id}' → HTTP {status}. "
+                    f"Canary control → {canary_status}."
+                ),
                 recommendation=(
-                    "Use DB-level locks (SELECT FOR UPDATE), Redis SETNX, "
-                    "or idempotency keys to prevent race conditions."
+                    "Bind every extracted identifier (cart id, order id, coupon id, "
+                    "session token, etc.) to the account/session that created it, and "
+                    "re-validate that binding on every subsequent step of the flow — "
+                    "not only at the point of creation."
                 ),
-                cwe="CWE-362",
-                owasp="API4:2023 Unrestricted Resource Consumption",
-                confirmed=True,
-            )]
-        return []
+                cwe="CWE-639",
+                owasp="API1:2023 Broken Object Level Authorization",
+            ))
+
+        return findings
 
     # ── Step Execution ────────────────────────────────────────────────────────
 
@@ -366,6 +580,7 @@ class FlowReplayer:
         step: FlowStep,
         base_url: str,
         context: dict,
+        token_override: str | None = None,
     ) -> FlowStepResult:
         """Execute a single step and extract values from the response."""
         url    = self._resolve_template(step.url, context, base_url)
@@ -389,6 +604,7 @@ class FlowReplayer:
                 json=body if body else None,
                 params=params if params else None,
                 headers=step.headers if step.headers else None,
+                token_override=token_override,
             )
             result.status  = status
             result.body    = resp_body
