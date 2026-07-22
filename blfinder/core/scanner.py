@@ -356,6 +356,126 @@ _RACE_INDICATORS = frozenset([
     "charge", "pay", "enroll", "subscribe", "activate",
 ])
 
+# RACE-FIX: URL-keyword gating alone misses everything that isn't REST-shaped —
+# GraphQL, single RPC endpoints, and actions encoded as a body field instead of
+# a path segment (e.g. POST /api/action with {"action": "redeem"}). These are
+# checked against the JSON body (keys AND string values) and against GraphQL
+# mutation/operation names so a single "/graphql" endpoint isn't skipped just
+# because the URL itself looks generic.
+_RACE_BODY_KEY_HINTS = frozenset([
+    "action", "op", "operation", "type", "event", "intent", "command",
+])
+_GRAPHQL_MUTATION_HINTS = frozenset([
+    "mutation", "redeem", "transfer", "withdraw", "claim", "checkout",
+    "purchase", "confirm", "applycoupon", "cashout", "payout", "deposit",
+    "refund", "settle", "activate", "subscribe",
+])
+
+# Keys whose values are treated as a resource/transaction identifier for the
+# distinct-identifier oracle: if a race burst produces N "successful" HTTP
+# responses but only ONE distinct id among them, that's most likely the same
+# transaction echoed back (idempotent handling, or a cache) — not proof of a
+# race. If it produces multiple *distinct* ids, that's direct proof multiple
+# separate mutations were actually created server-side.
+_IDENTIFIER_KEY_HINTS = (
+    "id", "uuid", "transaction_id", "txn_id", "order_id", "orderid",
+    "redemption_id", "receipt_id", "ticket_id", "coupon_id", "booking_id",
+    "reference", "ref", "confirmation_id", "payment_id", "charge_id",
+)
+
+# Keys whose numeric values are worth diffing before/after a burst as a
+# secondary side-effect oracle (e.g. wallet balance actually dropping by
+# 3x the unit price proves 3 withdrawals posted, regardless of what the
+# HTTP status codes said).
+_NUMERIC_SIGNAL_KEY_HINTS = (
+    "balance", "credits", "remaining", "stock", "quantity", "qty",
+    "points", "wallet", "available", "inventory", "uses_left",
+)
+
+
+def _looks_like_mutating_action(url: str, body: Any, params: Any = None) -> bool:
+    """
+    Broader trigger for the race-condition checks: matches on the URL
+    (original behaviour) OR on body keys/values OR on GraphQL mutation
+    naming, so single-endpoint GraphQL/RPC APIs aren't silently skipped.
+    """
+    if any(ind in url.lower() for ind in _RACE_INDICATORS):
+        return True
+
+    def _scan(obj: Any, depth: int = 0) -> bool:
+        if depth > 4 or obj is None:
+            return False
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).lower()
+                if kl in _RACE_BODY_KEY_HINTS and isinstance(v, str):
+                    if any(ind in v.lower() for ind in _RACE_INDICATORS):
+                        return True
+                if kl in ("query", "operationname", "mutation") and isinstance(v, str):
+                    vl = v.lower()
+                    if any(h in vl for h in _GRAPHQL_MUTATION_HINTS):
+                        return True
+                if any(ind in kl for ind in _RACE_INDICATORS):
+                    return True
+                if _scan(v, depth + 1):
+                    return True
+        elif isinstance(obj, list):
+            for item in obj:
+                if _scan(item, depth + 1):
+                    return True
+        elif isinstance(obj, str):
+            if any(h in obj.lower() for h in _GRAPHQL_MUTATION_HINTS):
+                return True
+        return False
+
+    return _scan(body) or _scan(params)
+
+
+def _find_identifier_values(body: str) -> set:
+    """Extract candidate resource/transaction identifiers from a response body."""
+    found: set = set()
+    try:
+        data = json.loads(body)
+    except Exception:
+        return found
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k).lower() in _IDENTIFIER_KEY_HINTS and isinstance(v, (str, int)):
+                    found.add(str(v))
+                if isinstance(v, (dict, list)):
+                    _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
+    _walk(data)
+    return found
+
+
+def _find_numeric_signals(body: str) -> dict:
+    """Extract balance/quantity/stock-like numeric fields for a delta check."""
+    signals: dict = {}
+    try:
+        data = json.loads(body)
+    except Exception:
+        return signals
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if str(k).lower() in _NUMERIC_SIGNAL_KEY_HINTS and isinstance(v, (int, float)):
+                    signals[str(k).lower()] = v
+                if isinstance(v, (dict, list)):
+                    _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
+    _walk(data)
+    return signals
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WEAK-4 FIX: Cloudflare challenge detection helpers
@@ -508,6 +628,7 @@ class BLFScanner:
         self.config   = config
         self.findings: list[Finding] = []
         self.session:  Optional[aiohttp.ClientSession] = None
+        self._burst_session: Optional[aiohttp.ClientSession] = None
         self.request_log: list[dict] = []
         self.base_responses: dict = {}
         self.rate_limiter = AdaptiveRateLimiter(config.rate_limit)
@@ -567,6 +688,21 @@ class BLFScanner:
         self.session   = aiohttp.ClientSession(connector=connector, timeout=timeout)
         self._verifier = FindingVerifier(self, self.config)
 
+        # RACE-FIX: the main session caps concurrent connections to a single
+        # host at 5 (limit_per_host=5). That's fine for normal scanning
+        # (don't hammer the target) but it silently *serializes* any race
+        # condition burst above 5 requests into sequential batches — the
+        # scanner would ask for 15/20/30 "concurrent" requests and the
+        # connector would queue most of them, defeating the entire point of
+        # the test. Race bursts get their own connector with no per-host
+        # ceiling, used only for the short-lived barrage itself.
+        burst_connector = aiohttp.TCPConnector(
+            ssl=self.config.verify_ssl, limit=0, limit_per_host=0
+        )
+        self._burst_session = aiohttp.ClientSession(
+            connector=burst_connector, timeout=timeout
+        )
+
         # Phase 1
         if _HAS_BLIND_IDOR:
             self._blind_idor = BlindIDORScanner(self)
@@ -617,6 +753,8 @@ class BLFScanner:
     async def __aexit__(self, *args):
         if self.session:
             await self.session.close()
+        if getattr(self, "_burst_session", None):
+            await self._burst_session.close()
 
     # ── Phase 5: Profile + Dashboard ─────────────────────────────────────────
 
@@ -2475,54 +2613,258 @@ class BLFScanner:
         return findings
 
     # MODULE 13 — Race Condition  [WEAK-3 FIX: extended indicators]
+    # ── Race-condition primitives (shared with FlowReplayer) ──────────────────
+
+    async def _burst_request(
+        self, method: str, url: str, json_body=None, params=None,
+        token_override: str = None,
+    ) -> tuple[int, dict, str, float]:
+        """
+        Low-level request used only for race-condition bursts. Bypasses the
+        rate limiter and uses the dedicated high-concurrency burst session
+        (see __aenter__) instead of the main rate-limited session, so a
+        20-way burst actually reaches the server as 20 near-simultaneous
+        requests instead of being serialized by limit_per_host=5.
+        """
+        req_headers = self._build_headers(None)
+        if token_override is not None:
+            if token_override == "":
+                req_headers.pop("Authorization", None)
+            else:
+                req_headers["Authorization"] = f"Bearer {token_override}"
+        cookies = dict(self.config.cookies)
+        if self._session_mgr:
+            cookies.update(self._session_mgr.get_cookies())
+        start = time.time()
+        try:
+            async with self._burst_session.request(
+                method, url, headers=req_headers, cookies=cookies,
+                json=json_body, params=params, allow_redirects=True,
+                proxy=self.config.proxy if self.config.proxy else None,
+            ) as resp:
+                elapsed = time.time() - start
+                body = await resp.text(errors="replace")
+                return resp.status, dict(resp.headers), body, elapsed
+        except asyncio.TimeoutError:
+            return 0, {}, "TIMEOUT", time.time() - start
+        except aiohttp.ClientConnectorError as e:
+            return 0, {}, f"CONNECTION_ERROR: {str(e)[:100]}", time.time() - start
+        except Exception as e:
+            return 0, {}, f"ERROR: {str(e)[:100]}", time.time() - start
+
+    async def _warm_connections(self, url: str, count: int):
+        """
+        Connection warming: pays the TCP + TLS handshake cost for `count`
+        connections to the target host *before* the timed burst, using a
+        side-effect-free OPTIONS request. When the real burst fires
+        immediately after, aiohttp's keep-alive pool can reuse these
+        already-established connections instead of negotiating a fresh
+        handshake per request — removing the single biggest source of
+        client-side jitter (handshake latency routinely dwarfs the actual
+        race window). This is NOT a true single-packet/last-byte-sync
+        attack (that needs raw HTTP/2 frame control to land writes in the
+        same server-side tick) — it's a cheap, honest partial mitigation
+        that meaningfully tightens the burst without new dependencies.
+        """
+        try:
+            await asyncio.gather(
+                *[self._burst_request("OPTIONS", url) for _ in range(count)],
+                return_exceptions=True,
+            )
+        except Exception:
+            pass
+
+    async def _execute_race_burst(
+        self, method: str, url: str, body=None, params=None,
+        concurrency: int = 15, token_override: str = None, warm: bool = True,
+    ) -> list:
+        """Fire `concurrency` near-simultaneous requests, warmed beforehand."""
+        if warm:
+            await self._warm_connections(url, min(concurrency, 20))
+        tasks = [
+            self._burst_request(method, url, json_body=body, params=params,
+                                 token_override=token_override)
+            for _ in range(concurrency)
+        ]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _analyze_race_burst(self, responses: list) -> dict:
+        """
+        Side-effect oracle: don't just count HTTP 200s. Extract resource
+        identifiers from each "successful" body and count DISTINCT ones —
+        that's proof of N separate mutations, not just N repeated echoes
+        of one transaction (idempotency key hit, cache, etc). Also surface
+        numeric signals (balance/stock/etc) from each successful body so a
+        delta can be reasoned about even without a dedicated read endpoint.
+        """
+        successes = [
+            r for r in responses
+            if isinstance(r, tuple) and r[0] in (200, 201)
+            and self._response_indicates_success(r[2], r[0])
+        ]
+        distinct_ids: set = set()
+        numeric_samples: list = []
+        for r in successes:
+            distinct_ids |= _find_identifier_values(r[2])
+            nums = _find_numeric_signals(r[2])
+            if nums:
+                numeric_samples.append(nums)
+        return {
+            "total": len(responses),
+            "success_count": len(successes),
+            "distinct_ids": distinct_ids,
+            "numeric_samples": numeric_samples,
+            "sample_body": successes[0][2][:300] if successes else "",
+        }
+
     async def _check_race_condition(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         if method not in ("POST", "PUT", "PATCH"):
             return findings
-        # WEAK-3 FIX: use extended _RACE_INDICATORS set
-        if not any(ind in url.lower() for ind in _RACE_INDICATORS):
+        # RACE-FIX: body/GraphQL-aware trigger, not just a URL substring match
+        if not _looks_like_mutating_action(url, body, params):
             return findings
-        orig_delay = self.rate_limiter.base_delay
-        self.rate_limiter.base_delay = 0
-        responses = await asyncio.gather(
-            *[self._request(method, url, json=body) for _ in range(15)],
-            return_exceptions=True,
-        )
-        self.rate_limiter.base_delay = orig_delay
-        success_count = sum(
-            1 for r in responses
-            if isinstance(r, tuple)
-            and r[0] in (200, 201)
-            and self._response_indicates_success(r[2], r[0])
-        )
-        if success_count > 1:
-            single_status, _, _, _ = await self._request(method, url, json=body)
-            f = Finding(
-                title=f"Race Condition — {success_count}/15 concurrent requests succeeded",
-                severity=Severity.CRITICAL,
-                category="Business Logic — Race Condition",
-                description=(
-                    f"{success_count}/15 simultaneous requests to `{url}` succeeded."
-                ),
-                request={
-                    "method": method, "url": url, "body": body,
-                    "note": "15 concurrent requests",
-                },
-                response_summary=f"{success_count}/15 successes",
-                evidence=(
-                    f"Concurrent: {success_count}/15. "
-                    f"Single re-test: HTTP {single_status}"
-                ),
-                recommendation=(
-                    "Use SELECT FOR UPDATE, Redis SETNX, or idempotency keys."
-                ),
-                cwe="CWE-362", cvss=9.0,
-                owasp="API4:2023 Unrestricted Resource Consumption",
-                confirmed=True, endpoint=url,
+
+        # Progressive concurrency sweep: start small so lightweight targets
+        # aren't unnecessarily hammered, escalate only if the smaller wave
+        # didn't already prove a race. Each wave's timing also gives us a
+        # rough sense of the race window for the evidence writeup.
+        waves = [5, 15, 30]
+        analysis = None
+        winning_wave = 0
+        for wave in waves:
+            responses = await self._execute_race_burst(
+                method, url, body=body, params=params, concurrency=wave,
             )
-            f = self._finalize_finding(f, base_body, "", base_status, 200)
-            if f.confidence >= self.config.min_confidence:
-                findings.append(f)
+            analysis = self._analyze_race_burst(responses)
+            if analysis["success_count"] > 1:
+                winning_wave = wave
+                break
+
+        if not analysis or analysis["success_count"] <= 1:
+            return findings
+
+        success_count  = analysis["success_count"]
+        total          = analysis["total"]
+        distinct_ids   = analysis["distinct_ids"]
+        numeric_samples = analysis["numeric_samples"]
+
+        # Oracle-based confidence tiering:
+        #  - multiple DISTINCT identifiers among successes = confirmed
+        #    double-processing (strongest possible evidence)
+        #  - no identifiers to compare but numeric signals diverge across
+        #    successful responses = corroborating evidence of real state change
+        #  - otherwise (same id repeated, e.g. idempotency key working as
+        #    intended) = still worth flagging, but at lower confidence
+        if len(distinct_ids) > 1:
+            oracle_note = (
+                f"{len(distinct_ids)} DISTINCT resource identifiers were returned "
+                f"across successful responses ({', '.join(list(distinct_ids)[:5])}) — "
+                "this proves separate mutations were actually committed server-side, "
+                "not a repeated/cached response to one transaction."
+            )
+            oracle_confirmed = True
+        elif len(distinct_ids) == 1:
+            oracle_note = (
+                "All successful responses referenced the SAME resource identifier "
+                f"('{next(iter(distinct_ids))}'). This may indicate the server "
+                "correctly deduplicated via an idempotency key — treat as lower "
+                "confidence unless a balance/stock delta below confirms otherwise."
+            )
+            oracle_confirmed = False
+        elif numeric_samples and len({tuple(sorted(n.items())) for n in numeric_samples}) > 1:
+            oracle_note = (
+                f"No identifier field was found, but numeric state fields differed "
+                f"across successful responses (samples: {numeric_samples[:3]}), "
+                "indicating the underlying resource actually changed more than once."
+            )
+            oracle_confirmed = True
+        else:
+            oracle_note = (
+                "No identifier or numeric field was available to independently "
+                "confirm distinct state changes — flagged on HTTP-level evidence "
+                "alone. Manually verify actual double-processing before reporting."
+            )
+            oracle_confirmed = False
+
+        single_status, _, _, _ = await self._request(method, url, json=body)
+
+        # Optional second wave from a different authenticated account, if
+        # configured — catches locks that are scoped per-session/per-token
+        # rather than globally per-resource (e.g. a coupon capped "once per
+        # account" in code, but the cap is checked against the caller's own
+        # session state instead of a shared counter).
+        cross_account_note = ""
+        second_token = getattr(self.config, "second_user_token", "") or ""
+        if second_token:
+            cross_responses = await self._execute_race_burst(
+                method, url, body=body, params=params,
+                concurrency=min(winning_wave, 10), token_override=second_token,
+                warm=False,
+            )
+            cross_analysis = self._analyze_race_burst(cross_responses)
+            if cross_analysis["success_count"] > 1:
+                cross_account_note = (
+                    f" A second account also achieved "
+                    f"{cross_analysis['success_count']}/{len(cross_responses)} "
+                    "concurrent successes, suggesting the lock (if any) is not "
+                    "even scoped correctly per-account."
+                )
+
+        f = Finding(
+            title=(
+                f"Race Condition — {success_count}/{total} concurrent requests "
+                f"succeeded (window found at concurrency={winning_wave})"
+            ),
+            severity=Severity.CRITICAL,
+            category="Business Logic — Race Condition",
+            description=(
+                f"{success_count}/{total} simultaneous requests to `{url}` "
+                f"succeeded during a connection-warmed burst.{cross_account_note}"
+            ),
+            request={
+                "method": method, "url": url, "body": body,
+                "note": f"{total} concurrent requests, connection-warmed",
+            },
+            response_summary=f"{success_count}/{total} successes",
+            evidence=(
+                f"Concurrent: {success_count}/{total} at concurrency={winning_wave}. "
+                f"Single re-test: HTTP {single_status}. {oracle_note}{cross_account_note}"
+            ),
+            recommendation=(
+                "Use SELECT FOR UPDATE, Redis SETNX, or idempotency keys. "
+                "Ensure any limit/lock is scoped to the resource globally, "
+                "not just to the caller's session or token."
+            ),
+            cwe="CWE-362", cvss=9.0 if oracle_confirmed else 7.5,
+            owasp="API4:2023 Unrestricted Resource Consumption",
+            confirmed=oracle_confirmed, endpoint=url,
+        )
+        # RACE-FIX: `_finalize_finding` routes through the generic
+        # ConfidenceEngine, which is a diff-based scorer built for comparing
+        # a baseline response against a tampered one. It isn't meaningful
+        # evidence for a burst/race finding — there's no single "tampered
+        # body" — and feeding it two empty strings was actively harmful:
+        # SequenceMatcher("", "").ratio() == 1.0, which the engine reads as
+        # "responses nearly identical" and applies a -15 penalty, while the
+        # empty tampered body also produces zero success-token hits. Those
+        # two effects alone were enough to sink most race findings below
+        # min_confidence and silently drop them before they ever reached a
+        # report — this bug pre-dates this rewrite too. Race findings now
+        # get their confidence directly from the oracle instead.
+        if len(distinct_ids) > 1:
+            f.confidence = 90
+        elif numeric_samples and len({tuple(sorted(n.items())) for n in numeric_samples}) > 1:
+            f.confidence = 80
+        elif len(distinct_ids) == 1:
+            f.confidence = 45
+        else:
+            f.confidence = 55
+        f.confidence_reasons = [oracle_note.strip()]
+        f = severity_from_confidence(f)
+        f.poc = self.poc_generator.generate(f)
+        if f.confidence >= self.config.min_confidence:
+            findings.append(f)
         return findings
 
     # MODULE 14 — JWT Manipulation
@@ -3061,6 +3403,22 @@ class BLFScanner:
                 findings.extend(
                     await self._flow_replayer.attack_workflow_bypass(
                         steps, base_url=base_url
+                    )
+                )
+                # State-machine class of bugs: full pairwise transition
+                # fuzzing (forward skips AND backward/replay transitions),
+                # not just the linear skip-ahead above.
+                findings.extend(
+                    await self._flow_replayer.attack_state_transitions(
+                        steps, base_url=base_url
+                    )
+                )
+                # Cross-object/cross-account state confusion: run two flow
+                # instances and swap extracted identifiers between them.
+                second_token = getattr(self.config, "second_user_token", "") or None
+                findings.extend(
+                    await self._flow_replayer.attack_cross_instance_confusion(
+                        steps, base_url=base_url, second_token=second_token
                     )
                 )
                 attack_steps = [s for s in steps if s.attack_here]
