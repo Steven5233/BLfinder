@@ -421,6 +421,23 @@ EXAMPLES:
         help="Run discovery only, skip all attack modules",
     )
 
+    # ── Resume / Checkpointing ─────────────────────────────────────────────────
+    resume_grp = p.add_argument_group("Resume / Checkpointing")
+    resume_grp.add_argument(
+        "--resume", action="store_true",
+        help="Resume a previously interrupted scan of this target — skips "
+             "endpoints already checked and merges in their findings",
+    )
+    resume_grp.add_argument(
+        "--checkpoint", default="", metavar="FILE",
+        help="Path to the checkpoint file (default: auto-derived from "
+             "target + output dir)",
+    )
+    resume_grp.add_argument(
+        "--no-checkpoint", action="store_true",
+        help="Disable incremental checkpointing entirely for this run",
+    )
+
     # ── Profile ───────────────────────────────────────────────────────────────
     prof = p.add_argument_group("Profile")
     prof.add_argument(
@@ -1414,7 +1431,41 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         no_auth_check         = not getattr(args, "skip_unauth", False),  # BUG-F FIX
         min_confidence        = merged_settings.get("min_confidence", args.min_confidence),
         confirmation_attempts = merged_settings.get("confirm_attempts", args.confirm_attempts),
+        resume                = args.resume,
     )
+
+    # ── Resume / Checkpointing ────────────────────────────────────────────────
+    # Set up the checkpoint path before anything else touches the scanner, so
+    # incremental per-endpoint progress is captured from the very first
+    # endpoint even if the scan is interrupted a few seconds in.
+    if not args.no_checkpoint:
+        os.makedirs(args.output, exist_ok=True)
+        from core.checkpoint import ScanCheckpoint, checkpoint_path_for
+        config.checkpoint_path = (
+            args.checkpoint or checkpoint_path_for(config.target_url, args.output)
+        )
+        if args.resume:
+            if os.path.exists(config.checkpoint_path):
+                _ckpt_preview = ScanCheckpoint.load_or_create(
+                    config.checkpoint_path, config.target_url
+                )
+                print(f"[*] Resume checkpoint found: {_ckpt_preview.summary()}")
+            else:
+                print(
+                    "[*] --resume requested but no checkpoint file found for "
+                    "this target — starting a fresh scan"
+                )
+        else:
+            # Not resuming: any leftover checkpoint from a prior interrupted
+            # run of this same target is stale relative to this run's intent
+            # (fresh scan), so start clean rather than silently reusing it.
+            if os.path.exists(config.checkpoint_path):
+                try:
+                    os.remove(config.checkpoint_path)
+                except OSError:
+                    pass
+    else:
+        config.checkpoint_path = ""
 
     # ── Apply discovery args (engine-level flags → ScanConfig) ────────────────
     apply_discovery_args(args, config)
@@ -1805,8 +1856,30 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             except Exception as e:
                 print(f"[!] Dashboard init error: {e}")
 
+        interrupted = False
         try:
             findings = await scanner.run_all_modules(endpoints)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            # RESUME-FIX: previously this propagated all the way up
+            # uncaught (KeyboardInterrupt/CancelledError aren't Exception
+            # subclasses) and crashed with a raw traceback — and even if it
+            # hadn't, `findings` here would still be empty since
+            # run_all_modules never got to return it. Checkpointing has
+            # already been saving progress incrementally per-endpoint
+            # throughout the scan, so the data itself is safe on disk;
+            # this just gives the person a clean message instead of a
+            # crash, and tells them how to pick back up.
+            interrupted = True
+            ckpt = getattr(scanner, "_checkpoint", None)
+            print("\n[!] Scan interrupted.")
+            if ckpt:
+                print(f"[*] Progress saved: {ckpt.summary()}")
+                print(f"[*] Resume with: --resume --checkpoint {ckpt.path}")
+            else:
+                print(
+                    "[!] No checkpoint was active for this run "
+                    "(pass without --no-checkpoint to enable resume support)."
+                )
         except Exception as e:
             scanner_error = e
             print(f"[!] Scanner error: {e}")
@@ -1825,6 +1898,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                     await dash_task
                 except asyncio.CancelledError:
                     pass
+
+    if interrupted:
+        return 130  # conventional SIGINT exit code
 
     if scanner_error and not findings:
         if db:
