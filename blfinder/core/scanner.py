@@ -39,6 +39,7 @@ from .models import Finding, ScanConfig, Severity
 from .confidence import ConfidenceEngine, severity_from_confidence
 from .poc import PoCGenerator
 from .verifier import FindingVerifier
+from .checkpoint import ScanCheckpoint
 
 # ── Phase 1 imports ───────────────────────────────────────────────────────────
 try:
@@ -640,6 +641,18 @@ class BLFScanner:
         self.confidence_engine = ConfidenceEngine()
         self.poc_generator     = PoCGenerator(config)
         self._verifier: Optional[FindingVerifier] = None
+
+        # Resume / checkpointing — only active when the CLI sets a path.
+        # See core/checkpoint.py: persists per-endpoint progress + findings
+        # to disk as each endpoint finishes, so an interrupted scan can
+        # resume with --resume instead of restarting from endpoint #1.
+        self._checkpoint: Optional[ScanCheckpoint] = None
+        if getattr(config, "checkpoint_path", ""):
+            self._checkpoint = ScanCheckpoint.load_or_create(
+                config.checkpoint_path, config.target_url
+            )
+            if getattr(config, "resume", False) and self._checkpoint.completed:
+                print(f"[*] Resuming: {self._checkpoint.summary()}")
 
         # Phase 1
         self._session_mgr:   Optional[SessionManager]   = None
@@ -1448,13 +1461,54 @@ class BLFScanner:
         ):
             flow_findings = await self._run_flow_attacks()
             print(f"  [*] Flow attacks: {len(flow_findings)} findings\n")
+            if self._checkpoint:
+                self._checkpoint.add_findings(flow_findings)
 
         # ── Phase 1: OAuth tests ──────────────────────────────────────────────
         oauth_findings: list[Finding] = []
         if _HAS_OAUTH and getattr(self.config, "oauth_config", None):
             oauth_findings = await self._run_oauth_tests()
+            if self._checkpoint:
+                self._checkpoint.add_findings(oauth_findings)
 
         # ── Standard endpoint scan ────────────────────────────────────────────
+        # RESUME: skip endpoints already completed in a prior (interrupted)
+        # run of this same checkpoint, when --resume is set.
+        skipped_resumed = 0
+        if self._checkpoint and getattr(self.config, "resume", False):
+            filtered = []
+            for ep in endpoints:
+                url = ep.get("url", "")
+                if not url.startswith("http"):
+                    url = urljoin(self.config.target_url, url)
+                method = ep.get("method", "GET").upper()
+                if self._checkpoint.is_done(url, method):
+                    skipped_resumed += 1
+                else:
+                    filtered.append(ep)
+            endpoints = filtered
+            if skipped_resumed:
+                print(
+                    f"  [*] Resume: skipping {skipped_resumed} already-checked "
+                    f"endpoint(s), {len(endpoints)} remaining\n"
+                )
+
+        async def _run_and_checkpoint(url, method, body, params, meta):
+            # CHECKPOINT-FIX: previously all endpoint tasks were fired via a
+            # single asyncio.gather() and only assembled into `raw` after
+            # every task finished — if the scan was interrupted partway
+            # through (Ctrl+C, dropped connection, killed process), nothing
+            # completed so far was ever persisted. Each task now checkpoints
+            # itself the moment IT finishes, independent of its siblings —
+            # asyncio.gather still runs them concurrently, but this callback
+            # fires as soon as this specific endpoint's checks return, so
+            # partial progress survives an interruption anywhere else in
+            # the batch.
+            ep_findings = await self._run_endpoint_checks(url, method, body, params, meta=meta)
+            if self._checkpoint:
+                self._checkpoint.mark_done(url, method, ep_findings)
+            return ep_findings
+
         tasks = []
         for ep in endpoints:
             url = ep.get("url", "")
@@ -1465,19 +1519,18 @@ class BLFScanner:
             meta   = ep.get("_meta", {})
             if not body and meta.get("schema_hint"):
                 body = meta["schema_hint"]
+            method = ep.get("method", "GET").upper()
 
             tasks.append(
-                self._run_endpoint_checks(
-                    url,
-                    ep.get("method", "GET").upper(),
-                    body,
-                    ep.get("params", {}),
-                    meta=meta,
-                )
+                _run_and_checkpoint(url, method, body, ep.get("params", {}), meta)
             )
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         raw: list[Finding] = list(flow_findings) + list(oauth_findings)
+        # RESUME: merge in findings carried over from already-completed
+        # endpoints (this run's skipped ones, or a prior interrupted run's).
+        if self._checkpoint:
+            raw.extend(self._checkpoint.findings)
         for r in results:
             if isinstance(r, list):
                 raw.extend(r)
@@ -1544,6 +1597,12 @@ class BLFScanner:
         for f in self.findings:
             if self._findings_queue:
                 await self._findings_queue.put(f)
+
+        # CHECKPOINT-FIX: scan reached the end normally — clear the resume
+        # file so the next run of this target starts fresh instead of
+        # carrying over stale completed/finding state.
+        if self._checkpoint:
+            self._checkpoint.clear()
 
         return self.findings
 
@@ -2985,22 +3044,67 @@ class BLFScanner:
         times        = [r[3] for r in ev_results]
         timing_delta = max(times) - min(times)
         if timing_delta > 0.20:
+            # CONFIDENCE-FIX: same architectural bug as the race-condition
+            # finding — this evidence is a TIMING delta, not a body/status
+            # diff, but it was being scored by the same diff-based engine.
+            # Proven empirically: feeding it the realistic case (identical
+            # generic error bodies, which is *why* timing is the only
+            # remaining oracle) scores confidence=0, because the engine
+            # reads "responses nearly identical" as a penalty — punishing
+            # this finding for the exact condition it exists to detect.
+            # Confidence now comes from the timing signal itself: repeat
+            # the measurement a couple more times and check the SAME input
+            # is reliably slower each time (direction-consistent), not just
+            # a one-off scheduling/network jitter blip on this one sample.
+            confirm_deltas = [timing_delta]
+            consistent = True
+            first_slower_was_val0 = times[0] > times[1]
+            for _ in range(2):
+                rerun_times = []
+                for test_val in [
+                    "nonexistent_zzz_9999@nowhere.invalid", "admin@example.com",
+                ]:
+                    test_body = {**body, field: test_val}
+                    _, _, _, elapsed = await self._request(method, url, json=test_body)
+                    rerun_times.append(elapsed)
+                confirm_deltas.append(max(rerun_times) - min(rerun_times))
+                if (rerun_times[0] > rerun_times[1]) != first_slower_was_val0:
+                    consistent = False
+
+            avg_delta = sum(confirm_deltas) / len(confirm_deltas)
+            if consistent and avg_delta >= 0.5:
+                confidence = 85
+            elif consistent and avg_delta >= 0.35:
+                confidence = 70
+            elif consistent:
+                confidence = 55
+            else:
+                confidence = 30  # direction flips between runs — likely just jitter
+
             f = Finding(
-                title=f"Account Enumeration — timing oracle ({timing_delta:.2f}s delta)",
+                title=f"Account Enumeration — timing oracle ({avg_delta:.2f}s avg delta)",
                 severity=Severity.LOW,
                 category="Business Logic — Information Disclosure",
-                description=f"Timing delta of {timing_delta:.2f}s at `{url}`.",
+                description=f"Consistent timing delta of ~{avg_delta:.2f}s at `{url}`.",
                 request={"method": method, "url": url, "note": "Timing oracle"},
-                response_summary=f"Times: {[round(r[3], 3) for r in ev_results]}",
-                evidence=f"Delta: {timing_delta:.3f}s",
-                recommendation="Use constant-time comparisons.",
-                cwe="CWE-203", cvss=3.7,
+                response_summary=f"Delta samples (s): {[round(d, 3) for d in confirm_deltas]}",
+                evidence=(
+                    f"Delta samples across {len(confirm_deltas)} measurements: "
+                    f"{[round(d, 3) for d in confirm_deltas]}s (avg {avg_delta:.3f}s). "
+                    f"Direction-consistent across repeats: {consistent}."
+                ),
+                recommendation="Use constant-time comparisons for credential validation.",
+                cwe="CWE-203", cvss=3.7 if consistent else 2.0,
                 owasp="API2:2023 Broken Authentication",
                 endpoint=url, parameter=field,
             )
-            f = self._finalize_finding(
-                f, base_body, ev_results[0][2], base_status, ev_results[0][1]
-            )
+            f.confidence = confidence
+            f.confidence_reasons = [
+                f"{len(confirm_deltas)} timing samples, avg {avg_delta:.3f}s, "
+                f"direction-consistent={consistent}"
+            ]
+            f = severity_from_confidence(f)
+            f.poc = self.poc_generator.generate(f)
             if f.confidence >= self.config.min_confidence:
                 findings.append(f)
         return findings
