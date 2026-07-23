@@ -1,0 +1,32 @@
+# BLFinder — Python dependencies
+# Verified against actual imports across the codebase (not just guessed).
+# Target: Python 3.10+ (the code uses PEP 604/585 type hints like `str | None`
+# and `list[Finding]` directly in signatures — confirmed working on 3.12,
+# should be fine on any 3.10+ build, including current Termux python packages).
+
+# ── Core (required) ──────────────────────────────────────────────────────────
+# Async HTTP engine — every request the scanner makes goes through this.
+aiohttp>=3.9
+
+# ── Database / persistence (required for --use-db, --no-repeat, --export-h1,
+#    HackerOne dedup tracking; core/storage/scan_database.py). Soft-imported
+#    with a clear error message if missing, but needed for those features.
+aiosqlite>=0.19
+
+# ── Optional: Layer 3 dynamic discovery (headless browser crawling) ─────────
+# Only needed if you use --headless / dynamic JS-rendered endpoint discovery.
+# Also requires a one-time browser download after pip install:
+#   playwright install chromium
+# playwright>=1.40
+
+# ── Optional: OpenAPI/Swagger YAML spec parsing ──────────────────────────────
+# Only needed if a target exposes /swagger.yaml, /openapi.yaml, etc. — JSON
+# specs work without this. Safe to skip if you only ever hit JSON specs.
+# PyYAML>=6.0
+
+# ── Not a BLFinder dependency, but needed separately ─────────────────────────
+# Generated PoC scripts (finding.poc.python_script) are meant to run in
+# YOUR OWN environment when reproducing a finding — they import `requests`,
+# which is not used by BLFinder itself. Install it wherever you actually
+# run the generated PoC scripts:
+#   pip install requests --break-system-packages
