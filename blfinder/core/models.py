@@ -71,6 +71,9 @@ class ScanConfig:
     respect_robots: bool = False
     verbose: bool = False
     output_dir: str = "."
+    # Resume / checkpointing
+    checkpoint_path: str = ""        # Set by CLI; empty disables checkpointing
+    resume: bool = False             # If True, skip endpoints already in the checkpoint
     # FP reduction settings
     confirmation_attempts: int = 2   # Re-verify N times before reporting
     similarity_threshold: float = 0.15  # Min response diff to flag IDOR
