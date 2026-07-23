@@ -322,42 +322,80 @@ class EvidenceReportGenerator:
 """
 
     def _tab_reproduce(self, f: Finding, pkg: EvidencePackage | None) -> str:
-        if pkg and pkg.verified_curl:
-            curl_cmd = pkg.verified_curl
-            note = "✓ This curl command was verified during the scan."
-        elif f.request:
-            from ..evidence.http_recorder import HTTPRecorder
-            from ..evidence.capture import RequestRecord
-            url  = f.request.get("url", "")
-            meth = f.request.get("method", "GET")
-            body = f.request.get("body")
-            hdrs = f.request.get("headers", {})
-            rec  = RequestRecord(method=meth, url=url, headers=hdrs, body=body)
-            curl_cmd = rec.to_curl()
-            note = "⚠ Generated from finding data — verify manually."
-        else:
-            return "<p class='muted'>No reproduction steps available.</p>"
+        # REPORT-FIX: this tab used to always rebuild its own bare curl
+        # command from pkg.verified_curl / f.request and never looked at
+        # f.poc at all — so the category-specific PoC (threading race
+        # script, Burp Turbo Intruder config, state-transition sequence,
+        # manual steps, expected result) generated for every finding was
+        # silently discarded before it ever reached the report. Render it
+        # when present; fall back to the old bare-curl behavior only for
+        # findings that somehow have no attached PoC.
+        poc = getattr(f, "poc", None)
 
-        steps_html = ""
-        if pkg and pkg.baseline and pkg.attack:
-            steps_html = f"""
-<div class="section-label">Step 1 — Baseline (Normal Behavior)</div>
-<pre class="code-block">{_esc(pkg.baseline.request.to_curl())}</pre>
-<div class="section-label">Step 2 — Attack (Exploit)</div>
+        verified_html = ""
+        if pkg and pkg.verified_curl:
+            verified_html = f"""
+<div class="section-label">✓ Curl Verified During Scan</div>
+<pre class="code-block reproduce-cmd">{_esc(pkg.verified_curl)}</pre>
 """
 
-        return f"""
-{steps_html}
-<div class="section-label">Verified Exploit Command</div>
-<p class="muted">{_esc(note)}</p>
+        if not poc:
+            if f.request:
+                from ..evidence.http_recorder import HTTPRecorder
+                from ..evidence.capture import RequestRecord
+                url  = f.request.get("url", "")
+                meth = f.request.get("method", "GET")
+                body = f.request.get("body")
+                hdrs = f.request.get("headers", {})
+                rec  = RequestRecord(method=meth, url=url, headers=hdrs, body=body)
+                curl_cmd = rec.to_curl()
+                return f"""
+{verified_html}
+<div class="section-label">Generated Curl Command</div>
+<p class="muted">⚠ No PoC was generated for this finding — showing a bare request derived from the finding data. Verify manually.</p>
 <pre class="code-block reproduce-cmd">{_esc(curl_cmd)}</pre>
-<div class="section-label">Manual Steps</div>
-<ol class="steps-list">
-  <li>Register/log in as a regular user and copy your auth token</li>
-  <li>Run the exploit command above</li>
-  <li>Compare the response to the baseline — observe the difference</li>
-  {"<li>Repeat with a second user account to confirm cross-user access</li>" if f.confirmed else ""}
-</ol>
+"""
+            return verified_html or "<p class='muted'>No reproduction steps available.</p>"
+
+        steps_html = ""
+        if poc.steps:
+            steps_items = "".join(f"<li>{_esc(s)}</li>" for s in poc.steps)
+            steps_html = f'<div class="section-label">Reproduction Steps</div><ol class="steps-list">{steps_items}</ol>'
+
+        expected_html = (
+            f'<div class="section-label">Expected Result</div><p class="impact-statement">{_esc(poc.expected_result)}</p>'
+            if poc.expected_result else ""
+        )
+
+        curl_html = (
+            f'<div class="section-label">Curl Command</div><pre class="code-block reproduce-cmd">{_esc(poc.curl_command)}</pre>'
+            if poc.curl_command else ""
+        )
+
+        python_html = (
+            f'<div class="section-label">Standalone Python PoC</div><pre class="code-block reproduce-cmd">{_esc(poc.python_script)}</pre>'
+            if poc.python_script else ""
+        )
+
+        burp_html = (
+            f'<div class="section-label">Raw HTTP (Burp Repeater)</div><pre class="code-block reproduce-cmd">{_esc(poc.burp_request)}</pre>'
+            if poc.burp_request else ""
+        )
+
+        video_html = (
+            f'<div class="section-label">Recording Notes</div><p class="muted">{_esc(poc.video_note)}</p>'
+            if poc.video_note else ""
+        )
+
+        return f"""
+<p class="impact-statement">{_esc(poc.summary)}</p>
+{verified_html}
+{curl_html}
+{steps_html}
+{expected_html}
+{python_html}
+{burp_html}
+{video_html}
 """
 
     def _tab_raw_http(self, f: Finding, pkg: EvidencePackage | None) -> str:
