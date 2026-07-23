@@ -206,6 +206,24 @@ def _finding_to_dict(f: Finding) -> dict:
     d["endpoint"]    = getattr(f, "endpoint", "")
     d["parameter"]   = getattr(f, "parameter", "")
 
+    # REPORT-FIX: the generated PoC (curl command, standalone Python repro
+    # script, Burp Repeater request, manual steps, expected result) was
+    # never being written out anywhere — only `poc.summary` ever reached
+    # the terminal printout. It's the single most useful artifact for
+    # actually reproducing/reporting a finding, so it belongs in the
+    # persisted report, not just in memory during the scan.
+    poc = getattr(f, "poc", None)
+    if poc:
+        d["poc"] = {
+            "summary":         poc.summary,
+            "curl_command":    poc.curl_command,
+            "python_script":   poc.python_script,
+            "burp_request":    poc.burp_request,
+            "expected_result": poc.expected_result,
+            "steps":           poc.steps,
+            "video_note":      poc.video_note,
+        }
+
     # Include evidence package summary if available
     pkg = getattr(f, "evidence_package", None)
     if pkg:
@@ -222,6 +240,7 @@ def _finding_to_dict(f: Finding) -> dict:
         }
 
     return d
+
 
 
 def _basic_html_report(findings: list[Finding], config: dict, output_path: str) -> str:
