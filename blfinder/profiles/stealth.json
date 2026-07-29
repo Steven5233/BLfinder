@@ -33,7 +33,9 @@
     "blind_idor",
     "cors",
     "jwt_alg_confusion",
-    "tenant_bola"
+    "tenant_bola",
+    "ssrf",
+    "csrf"
   ],
-  "notes": "Avoid race condition tests (high noise). Use --no-discover to minimize requests. Disable VPN before running — WAFs block known VPN IPs. security_headers is left enabled — it reads headers off the request that's already happening and sends nothing extra, so it's free from a WAF-detection standpoint. cors/jwt_alg_confusion/tenant_bola are skipped by default here because they send abnormal-looking headers (spoofed Origin, forged Authorization, swapped org IDs) that are exactly the pattern a WAF's anomaly detection is tuned to catch — remove any of the three from this list if you want them back for a specific stealth run."
+  "notes": "Avoid race condition tests (high noise). Use --no-discover to minimize requests. Disable VPN before running \u2014 WAFs block known VPN IPs. security_headers is left enabled \u2014 it reads headers off the request that's already happening and sends nothing extra, so it's free from a WAF-detection standpoint. cors/jwt_alg_confusion/tenant_bola are skipped by default here because they send abnormal-looking headers (spoofed Origin, forged Authorization, swapped org IDs) that are exactly the pattern a WAF's anomaly detection is tuned to catch \u2014 remove any of the three from this list if you want them back for a specific stealth run. ssrf and csrf are also skipped by default: ssrf sends internal-network/metadata payloads and csrf active-replay sends forged-Origin requests, both high-signal WAF anomalies; ssrf additionally requires --ssrf and csrf active replay requires --csrf, so both are opt-in even outside this profile."
 }
