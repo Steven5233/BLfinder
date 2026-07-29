@@ -162,6 +162,18 @@ except ImportError:
     _HAS_TENANT_BOLA = False
 
 try:
+    from .modules.ssrf_scanner import SSRFScanner
+    _HAS_SSRF = True
+except ImportError:
+    _HAS_SSRF = False
+
+try:
+    from .modules.csrf_scanner import CSRFScanner
+    _HAS_CSRF = True
+except ImportError:
+    _HAS_CSRF = False
+
+try:
     from .intelligence.business_classifier import BusinessClassifier, AttackPlan
     _HAS_CLASSIFIER = True
 except ImportError:
@@ -679,6 +691,8 @@ class BLFScanner:
         self._sec_header_auditor: Optional[SecurityHeaderAuditor] = None
         self._jwt_scanner:     Optional[JWTAlgConfusionScanner] = None
         self._tenant_bola:     Optional[TenantBOLAScanner] = None
+        self._ssrf_scanner:    Optional[SSRFScanner] = None
+        self._csrf_scanner:    Optional[CSRFScanner] = None
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
 
@@ -749,6 +763,13 @@ class BLFScanner:
             self._jwt_scanner = JWTAlgConfusionScanner(self)
         if _HAS_TENANT_BOLA:
             self._tenant_bola = TenantBOLAScanner(self)
+        if _HAS_SSRF and getattr(self.config, "run_ssrf", False):
+            self._ssrf_scanner = SSRFScanner(self)
+        if _HAS_CSRF:
+            # Always instantiated: CSRFScanner internally gates its own
+            # active-replay behavior behind config.run_csrf and otherwise
+            # only performs passive, read-only hardening-gap detection.
+            self._csrf_scanner = CSRFScanner(self)
         if _HAS_CLASSIFIER:
             self._classifier = BusinessClassifier()
 
@@ -1713,6 +1734,14 @@ class BLFScanner:
             early_findings.extend(await self._jwt_scanner.scan(url, method))
         if _HAS_TENANT_BOLA and self._tenant_bola and "tenant_bola" not in early_skip:
             early_findings.extend(await self._tenant_bola.check(url, method, status, base_body))
+        if _HAS_SSRF and self._ssrf_scanner and "ssrf" not in early_skip:
+            early_findings.extend(
+                await self._ssrf_scanner.check(url, method, params, body, headers, base_body)
+            )
+        if _HAS_CSRF and self._csrf_scanner and "csrf" not in early_skip:
+            early_findings.extend(
+                await self._csrf_scanner.check(url, method, params, body, headers, status, base_body)
+            )
 
         for f in early_findings:
             if confidence_cap < 100:
