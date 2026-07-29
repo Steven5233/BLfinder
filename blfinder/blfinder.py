@@ -317,6 +317,8 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
         ("run_graphql_deep",  "graphql_deep"),
         ("run_websocket",     "websocket"),
         ("run_version_scan",  "version_scan"),
+        ("run_ssrf",          "ssrf"),
+        ("run_csrf",          "csrf"),
         ("run_recon",         "recon"),
         ("run_js_extract",    "js_secrets"),
         ("deep_discovery",    "deep_discovery"),
@@ -591,6 +593,26 @@ EXAMPLES:
     atk.add_argument("--ws-race-count",       type=int, default=15,   help="WebSocket race condition attempt count")
     atk.add_argument("--graphql-deep",        action="store_true",    help="Enable deep GraphQL introspection scan")
     atk.add_argument("--version-scan",        action="store_true",    help="Enable API version-abuse scanning")
+    atk.add_argument("--ssrf",                action="store_true",    help="Enable SSRF scanning module")
+    atk.add_argument(
+        "--ssrf-oob-domain", default="", dest="ssrf_oob_domain",
+        help=(
+            "Collaborator/interactsh domain for blind SSRF out-of-band "
+            "confirmation (e.g. abc123.oast.fun). Leave empty to skip Tier 3 "
+            "OOB probing and rely on in-band metadata + timing leads only."
+        ),
+    )
+    atk.add_argument(
+        "--csrf", action="store_true",
+        help=(
+            "Enable CSRF scanning with ACTIVE cross-site replay of "
+            "state-changing requests. This resends real POST/PUT/PATCH/DELETE "
+            "requests with forged Origin/Referer to prove exploitability — "
+            "only use against targets you're authorized to test. Without "
+            "this flag, CSRF checks are limited to passive hardening-gap "
+            "detection (no extra requests)."
+        ),
+    )
     atk.add_argument(
         "--skip-unauth", action="store_true", dest="skip_unauth",
         help=(
@@ -1515,6 +1537,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.ws_race_count       = args.ws_race_count
     config.run_graphql_deep    = args.graphql_deep  or prof_settings.get("run_graphql_deep", False)
     config.run_version_scan    = args.version_scan  or prof_settings.get("run_version_scan", False)
+    config.run_ssrf             = args.ssrf         or prof_settings.get("run_ssrf", False)
+    config.ssrf_oob_domain      = getattr(args, "ssrf_oob_domain", "") or prof_settings.get("ssrf_oob_domain", "")
+    config.run_csrf             = args.csrf         or prof_settings.get("run_csrf", False)
     config.print_attack_plan         = args.classify
     config.max_endpoint_concurrency   = getattr(args, "max_endpoints", 5)  # WEAK-7 FIX
 
