@@ -319,6 +319,7 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
         ("run_version_scan",  "version_scan"),
         ("run_ssrf",          "ssrf"),
         ("run_csrf",          "csrf"),
+        ("run_source_scan",   "source_scan"),
         ("run_recon",         "recon"),
         ("run_js_extract",    "js_secrets"),
         ("deep_discovery",    "deep_discovery"),
@@ -531,6 +532,18 @@ EXAMPLES:
     recon = p.add_argument_group("Recon")
     recon.add_argument("--recon",       action="store_true", help="Enable subdomain + JS recon phase")
     recon.add_argument("--recon-only",  action="store_true", help="Run recon and exit (no attack modules)")
+    recon.add_argument(
+        "--source-only", action="store_true",
+        help=(
+            "Run ONLY the source code exposure + static bug-pattern scanner "
+            "against -t/--target, then exit. Skips discovery and every other "
+            "module (IDOR, BOLA, CORS, JWT, SSRF, CSRF, business-logic, ...) "
+            "entirely — fastest, lowest-noise way to just check a URL's "
+            "exposed .git/.env/backup files and any reachable JS source maps. "
+            "No --cookie or -T/--token required unless you want authenticated "
+            "pages included."
+        ),
+    )
     recon.add_argument("--js-secrets",  action="store_true", help="Enable JS secret extraction")
     recon.add_argument(
         "--subdomain-size", type=int, default=50,
@@ -600,6 +613,29 @@ EXAMPLES:
             "Collaborator/interactsh domain for blind SSRF out-of-band "
             "confirmation (e.g. abc123.oast.fun). Leave empty to skip Tier 3 "
             "OOB probing and rely on in-band metadata + timing leads only."
+        ),
+    )
+    atk.add_argument(
+        "--js-url", action="append", default=[], metavar="URL",
+        help=(
+            "Explicit JS file URL to feed into the source code scanner's "
+            "Phase B (source map reconstruction + static bug scan). "
+            "Repeatable. Used automatically by --source-only in addition "
+            "to any <script src> tags found on the target page; also usable "
+            "in a normal full scan run alongside --source-scan."
+        ),
+    )
+    atk.add_argument(
+        "--source-scan", action="store_true",
+        help=(
+            "Enable source code exposure + static bug-pattern scanning: "
+            "probes for exposed .git/.env/backup/credential files, and "
+            "reconstructs+scans original source via exposed JS source maps "
+            "for dangerous patterns (eval, disabled TLS verify, DOM XSS "
+            "sinks, unsafe postMessage handlers, hardcoded internal hosts). "
+            "Opt-in because Phase A sweeps ~18 extra paths per host and "
+            "Phase B downloads .map files, which adds bandwidth/time — "
+            "worth budgeting for on slower/metered connections."
         ),
     )
     atk.add_argument(
@@ -1125,6 +1161,166 @@ async def run_recon_only(args: argparse.Namespace) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Source-only fast path — SourceCodeScanner ONLY, nothing else
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def run_source_only(args: argparse.Namespace) -> int:
+    """
+    Run ONLY the source code exposure + static bug-pattern scanner against a
+    single target, entirely bypassing endpoint discovery and every other
+    scanning module (IDOR, BOLA, CORS, JWT, SSRF, CSRF, business-logic,
+    etc). Triggered by --source-only.
+
+    This does not call `scanner.run_all_modules()` at all — it drives
+    `SourceCodeScanner` directly with the scanner's already-configured HTTP
+    client (respecting --cookie/--header/--proxy/--rate/--timeout), so the
+    only network traffic generated is:
+      1. one request to the target URL,
+      2. Phase A's ~18 source-exposure probes against that host,
+      3. one request per discovered/explicit JS file for Phase B.
+    No cookie or token is required — pass them only if you specifically
+    want authenticated pages included in the scan.
+    """
+    if not args.target:
+        print("[!] --source-only requires -t/--target")
+        return 1
+
+    try:
+        from core.models          import ScanConfig
+        from core.scanner         import BLFScanner
+        from core.modules.source_code_scanner import SourceCodeScanner
+        from core.reporter        import (
+            print_terminal_summary,
+            generate_html_report,
+            generate_json_report,
+            generate_markdown_report,
+        )
+    except ImportError as e:
+        print(f"[!] Critical import error: {e}")
+        return 1
+
+    target = args.target.rstrip("/")
+    print(f"[*] BLFinder — Source Code Scanner Only: {target}\n")
+
+    config = ScanConfig(
+        target_url  = target,
+        auth_token  = args.token,
+        headers     = parse_headers(args.header),
+        cookies     = parse_cookies(args.cookie),
+        proxy       = args.proxy,
+        rate_limit  = args.rate,
+        timeout     = args.timeout,
+        verbose     = args.verbose,
+    )
+    # Force-enable regardless of --source-scan/profile — this mode's whole
+    # point is running this module and only this module.
+    config.run_source_scan = True
+
+    findings = []
+    scanner_error = None
+
+    async with BLFScanner(config) as scanner:
+        # __aenter__ only instantiates SourceCodeScanner when
+        # config.run_source_scan is truthy, which we just forced above —
+        # but belt-and-braces in case that gating ever changes.
+        if not getattr(scanner, "_source_scanner", None):
+            scanner._source_scanner = SourceCodeScanner(scanner)
+
+        js_targets: list[str] = []
+        for js_url in (args.js_url or []):
+            js_targets.append(
+                js_url if js_url.startswith("http") else f"{target}/{js_url.lstrip('/')}"
+            )
+
+        try:
+            status, headers, body, elapsed = await scanner._request("GET", target)
+            findings.extend(
+                await scanner._source_scanner.check(target, "GET", status, headers, body)
+            )
+
+            # Lightweight <script src="..."> extraction so Phase B (source
+            # map reconstruction) runs automatically without needing the
+            # full discovery/crawl engine — just one regex pass over the
+            # page we already fetched, no extra requests yet.
+            import re as _re
+            from urllib.parse import urljoin as _urljoin
+            for m in _re.finditer(
+                r'<script[^>]+src=["\']([^"\']+?\.m?js[^"\']*)["\']',
+                body or "", _re.IGNORECASE,
+            ):
+                script_url = _urljoin(target + "/", m.group(1))
+                if script_url not in js_targets:
+                    js_targets.append(script_url)
+
+            if args.verbose and js_targets:
+                print(f"[*] Scanning {len(js_targets)} JS file(s) for Phase B...")
+
+            for js_url in js_targets:
+                try:
+                    status, headers, body, elapsed = await scanner._request("GET", js_url)
+                    findings.extend(
+                        await scanner._source_scanner.check(js_url, "GET", status, headers, body)
+                    )
+                except Exception as e:
+                    if args.verbose:
+                        print(f"[!] Error fetching {js_url}: {e}")
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            print("\n[!] Source scan interrupted.")
+            return 130
+        except Exception as e:
+            scanner_error = e
+            print(f"[!] Error fetching target: {e}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+
+    if scanner_error and not findings:
+        return 1
+
+    os.makedirs(args.output, exist_ok=True)
+    cfg_dict = {"target_url": target}
+
+    if not args.no_color:
+        try:
+            print_terminal_summary(findings, cfg_dict)
+        except Exception as e:
+            print(f"\n[+] Source scan complete. {len(findings)} findings. (summary error: {e})")
+    else:
+        print(f"\n[+] Source scan complete. {len(findings)} findings.")
+
+    if args.html or not (args.json or args.md):
+        html_path = os.path.join(args.output, "report.html")
+        try:
+            generate_html_report(findings, cfg_dict, html_path)
+            print(f"[*] HTML report: {html_path}")
+        except Exception as e:
+            print(f"[!] HTML report error: {e}")
+
+    if args.json:
+        json_path = os.path.join(args.output, "report.json")
+        try:
+            generate_json_report(findings, cfg_dict, json_path)
+            print(f"[*] JSON report: {json_path}")
+        except Exception as e:
+            print(f"[!] JSON report error: {e}")
+
+    if args.md:
+        md_path = os.path.join(args.output, "report.md")
+        try:
+            generate_markdown_report(findings, cfg_dict, md_path)
+            print(f"[*] Markdown report: {md_path}")
+        except Exception as e:
+            print(f"[!] Markdown report error: {e}")
+
+    return 1 if any(
+        getattr(f.severity, "value", str(f.severity)) == "CRITICAL"
+        and getattr(f, "confirmed", False)
+        and getattr(f, "confidence", 0) >= 80
+        for f in findings
+    ) else 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Deep Discovery pipeline (outer)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1394,6 +1590,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         await run_recon_only(args)
         return 0
 
+    if args.source_only:
+        return await run_source_only(args)
+
     # ── Require target for scanning ───────────────────────────────────────────
     if not args.target:
         print("[!] --target is required for scanning")
@@ -1540,6 +1739,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.run_ssrf             = args.ssrf         or prof_settings.get("run_ssrf", False)
     config.ssrf_oob_domain      = getattr(args, "ssrf_oob_domain", "") or prof_settings.get("ssrf_oob_domain", "")
     config.run_csrf             = args.csrf         or prof_settings.get("run_csrf", False)
+    config.run_source_scan      = args.source_scan  or prof_settings.get("run_source_scan", False)
     config.print_attack_plan         = args.classify
     config.max_endpoint_concurrency   = getattr(args, "max_endpoints", 5)  # WEAK-7 FIX
 
