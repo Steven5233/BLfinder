@@ -6,13 +6,25 @@ Missing or bypassable rate limiting on an OTP verification endpoint is one
 of the most consistently in-scope, consistently paid bug classes across
 bug bounty programs — but it's also easy to test sloppily (fire N requests,
 see none get blocked, call it done) or to overstep into an actual
-account-takeover attempt. This module is scoped deliberately narrowly:
+account-takeover attempt against an account that isn't yours. This module
+is scoped deliberately:
 
-  It measures whether the OTP *verification* endpoint enforces a lockout
-  after repeated wrong guesses, and if it does, whether that lockout can be
-  bypassed — it does NOT attempt to brute-force the real OTP value itself.
-  Attempt counts are bounded (hard-capped regardless of what's requested)
-  and every guess is a random code, never a sweep of the full keyspace.
+  Without `--otp-real-value`, it measures whether the OTP *verification*
+  endpoint enforces a lockout after repeated wrong guesses, and if it does,
+  whether that lockout can be bypassed — it does not attempt to brute-force
+  an unknown real OTP value, and every decoy guess is random, never a sweep
+  of the full keyspace.
+
+  With `--otp-real-value`, the operator supplies the actual, currently-valid
+  OTP code for THEIR OWN bug-bounty test account (e.g. read from the SMS/
+  email they just received after triggering their own account's OTP flow).
+  This turns the test from "is a block signal absent" (a strong lead) into
+  "does an attacker's excess-attempt barrage still end in a successful,
+  real authentication" (definitive, screenshot-grade proof) — while never
+  touching any account other than the tester's own. This is the standard,
+  ethical way bug bounty hunters demonstrate real impact for this bug
+  class: prove it end-to-end against an account you're authorized to test,
+  never against a stranger's.
 
   This intentionally only targets the *verification* endpoint the operator
   points it at. It never touches an OTP *send/resend* endpoint on its own
@@ -20,7 +32,7 @@ account-takeover attempt. This module is scoped deliberately narrowly:
   target real money (SMS) or trip carrier abuse flags — that's a distinct,
   separately-scoped test the operator would run by hand if in scope.
 
-Three independent tests, run in sequence:
+Four tests, run in sequence:
 
   Test 1 — Sequential lockout-threshold detection
       Sends random wrong-length-correct OTP guesses one at a time (small
@@ -30,7 +42,9 @@ Three independent tests, run in sequence:
       such signal appears within the (capped) sample budget, that's strong
       evidence of missing rate limiting, and the module estimates real-world
       brute-force feasibility using the *actually measured* request rate
-      against this specific target — not a generic assumption.
+      against this specific target — not a generic assumption. These same
+      decoy attempts double as the "test more attempts than the app should
+      allow" volume for Test 4 below.
 
   Test 2 — Concurrent burst race-condition check
       Fires a burst of simultaneous requests (true asyncio.gather
@@ -48,11 +62,22 @@ Three independent tests, run in sequence:
       appearing, the rate limit is keyed off a client-supplied header
       instead of the authenticated session/account — trivially bypassable.
 
-A built-in safety valve: if any guess's response ever matches the
-operator-supplied `success_marker` (indicating we accidentally landed on a
-real, currently-valid OTP), the scan stops immediately and reports that
-fact instead of continuing — this tool tests rate-limiting robustness, it
-does not try to ride a lucky guess into an authenticated session.
+  Test 4 — Real-value confirmation beyond the allowed attempt budget
+      Opt-in via `--otp-real-value`. Runs immediately after Test 1's decoy
+      barrage (whether Test 1 found a lockout or not), submitting the
+      operator's real OTP as the very next attempt — i.e. after already
+      exceeding either the empirically-observed lockout threshold, or an
+      operator-stated `--otp-expected-limit`, or (with neither) simply a
+      generous decoy count. Acceptance of the real code at this point is
+      reported as a CRITICAL, `confirmed=True` finding: definitive proof
+      that a real login can be completed after sending far more attempts
+      than any reasonable — or the application's own — policy should allow.
+
+A built-in safety valve applies throughout: if any decoy guess's response
+ever matches the success marker (indicating a random guess landed on a
+real, currently-valid OTP on its own, with no `--otp-real-value` involved),
+the scan stops immediately and reports it as a confirmed brute-force
+compromise rather than continuing to hammer the endpoint further.
 """
 
 from __future__ import annotations
@@ -89,6 +114,10 @@ class OTPScanResult:
     header_bypass_succeeded: bool = False
     accidental_match: bool = False
     accidental_match_code: str = ""
+    real_value_tested: bool = False
+    real_value_accepted: bool | None = None
+    real_value_attempt_number: int = 0
+    expected_limit: int | None = None
     raw_log: list[dict] = dc_field(default_factory=list)
 
 
@@ -106,6 +135,8 @@ class OTPRateLimitScanner:
             samples=20,
             concurrency=10,
             success_marker="\"verified\":true",
+            real_value="482913",       # optional: your own test account's real OTP
+            expected_limit=5,          # optional: app's documented/assumed attempt limit
         )
     """
 
@@ -128,6 +159,8 @@ class OTPRateLimitScanner:
         concurrency: int = 10,
         success_marker: str = "",
         sequential_delay: float = _DEFAULT_SEQUENTIAL_DELAY,
+        real_value: str = "",
+        expected_limit: int | None = None,
         verbose: bool = False,
     ) -> tuple[OTPScanResult, list[Finding]]:
         digits = max(1, min(digits, 12))
@@ -135,8 +168,16 @@ class OTPRateLimitScanner:
         concurrency = max(1, min(concurrency, _HARD_MAX_CONCURRENCY))
         extra_body = extra_body or {}
 
-        result = OTPScanResult(otp_url=otp_url, digits=digits)
+        result = OTPScanResult(otp_url=otp_url, digits=digits, expected_limit=expected_limit)
         findings: list[Finding] = []
+
+        if real_value and len(real_value) != digits:
+            if verbose:
+                print(
+                    f"  [otp] WARNING: --otp-real-value length ({len(real_value)}) does not "
+                    f"match --otp-digits ({digits}) — ignoring --otp-real-value for this run"
+                )
+            real_value = ""
 
         # ── Test 1: sequential lockout-threshold detection ──────────────────
         used_codes: set[str] = set()
@@ -157,7 +198,7 @@ class OTPRateLimitScanner:
             if success_marker and success_marker in (body or ""):
                 result.accidental_match = True
                 result.accidental_match_code = code
-                findings.append(self._build_accidental_match_finding(otp_url, code, i + 1))
+                findings.append(self._build_brute_force_confirmed_finding(result, code, i + 1))
                 return result, findings  # stop immediately — do not continue probing
 
             if self._looks_blocked(status, headers, body):
@@ -176,6 +217,18 @@ class OTPRateLimitScanner:
 
         if result.lockout_attempt_index is None:
             findings.append(self._build_no_rate_limit_finding(result))
+
+        # ── Test 4: real-value confirmation beyond the allowed attempt budget ──
+        # Runs immediately after the decoy barrage above, using the operator's
+        # own test-account OTP as the very next attempt. Deliberately placed
+        # here (not at the end) so the real code is submitted as soon as
+        # possible after the decoys, minimizing the risk of it expiring
+        # before we get to use it.
+        if real_value and not result.accidental_match:
+            await self._real_value_confirmation_test(
+                otp_url, method, field, extra_body, in_query,
+                real_value, success_marker, expected_limit, result, findings, verbose,
+            )
 
         # ── Test 2: concurrent burst race-condition check ───────────────────
         if not result.accidental_match:
@@ -521,37 +574,207 @@ class OTPRateLimitScanner:
         )
         return finding
 
-    def _build_accidental_match_finding(self, otp_url: str, code: str, attempt_index: int) -> Finding:
+    def _build_brute_force_confirmed_finding(self, result: OTPScanResult, code: str, attempt_index: int) -> Finding:
+        space = 10 ** result.digits
         finding = Finding(
-            title="Random OTP Guess Matched a Currently-Valid Code",
-            severity=Severity.INFO,
+            title=f"OTP Brute-Forced Successfully via Random Guessing (Attempt {attempt_index})",
+            severity=Severity.CRITICAL,
             category="OTP Rate Limiting",
             description=(
-                f"A random {len(code)}-digit guess (`{code}`) matched the "
-                f"operator-supplied success marker on attempt {attempt_index}. The "
-                f"scan was stopped immediately rather than proceeding, since "
-                f"continuing would mean actively exploiting a real authentication "
-                f"bypass rather than testing rate-limiting robustness. This is "
-                f"either an extraordinary coincidence, a test/demo account with a "
-                f"predictable or static code, or a very small effective keyspace — "
-                f"investigate manually before drawing conclusions."
+                f"A random {result.digits}-digit guess (`{code}`) matched the "
+                f"operator-supplied success marker on attempt {attempt_index} of "
+                f"{space:,} possible codes, with no lockout signal observed at "
+                f"any point before it. This is not a lead — it is a completed, "
+                f"real authentication achieved purely through unthrottled "
+                f"guessing, and is definitive proof that the OTP verification "
+                f"endpoint can be brute-forced in practice. The scan was stopped "
+                f"immediately upon this match rather than continuing."
             ),
-            request={"method": "POST", "url": otp_url},
-            response_summary="Success marker matched",
-            evidence=f"Matched on attempt {attempt_index} with code {code}",
+            request={"method": "POST", "url": result.otp_url},
+            response_summary="Success marker matched — real authentication completed",
+            evidence=f"Matched on attempt {attempt_index}/{space:,} with code {code}",
             recommendation=(
-                "If this is a test/demo account, exclude it from testing. If it "
-                "occurred on a real account, investigate whether the OTP "
-                "generation is predictable or the effective keyspace is much "
-                "smaller than the stated digit count suggests."
+                "Enforce a hard lockout after a small number of failed attempts "
+                "(e.g. 5) tied to the server-side session/account, add "
+                "exponential backoff, and invalidate the current OTP after the "
+                "limit is reached so a fresh one must be issued. Treat this as "
+                "an immediate priority — this was not a simulated risk, it was "
+                "an actual successful authentication."
             ),
-            cwe="CWE-330",
-            cvss=0.0,
+            cwe="CWE-307",
+            cvss=9.8,
             owasp="OWASP Top 10 A07:2021 Identification and Authentication Failures",
-            confirmed=False,
-            confidence=20,
-            endpoint=otp_url,
+            confirmed=True,
+            confidence=98,
+            confidence_reasons=[
+                f"Response matched the operator-supplied success marker on attempt {attempt_index}",
+                "No block signal was observed at any prior attempt",
+            ],
+            endpoint=result.otp_url,
             parameter="",
+        )
+        finding.poc = ProofOfConcept(
+            summary=f"Real authentication achieved via unthrottled random guessing (attempt {attempt_index})",
+            curl_command=(
+                f'curl -sk -X POST "{result.otp_url}" -H "Content-Type: application/json" '
+                f'-d \'{{"otp": "{code}"}}\' -i'
+            ),
+            python_script=(
+                "import requests\n\n"
+                f'url = "{result.otp_url}"\n'
+                f'r = requests.post(url, json={{"otp": "{code}"}})\n'
+                "print(r.status_code)\nprint(r.text[:500])\n"
+            ),
+            burp_request="",
+            expected_result="The request authenticates successfully.",
+            steps=[f"Submit `{code}` to `{result.otp_url}` and observe the success response."],
+        )
+        return finding
+
+    # ── Test 4 implementation ───────────────────────────────────────────────
+
+    async def _real_value_confirmation_test(
+        self, otp_url, method, field, extra_body, in_query,
+        real_value, success_marker, expected_limit, result, findings, verbose,
+    ) -> None:
+        """
+        Submits the operator's own, currently-valid OTP as the attempt
+        immediately following Test 1's decoy barrage — i.e. after already
+        exceeding either the observed lockout threshold, an operator-stated
+        --otp-expected-limit, or simply a generous decoy count. Acceptance
+        here is definitive, screenshot-grade proof, not a lead.
+        """
+        try:
+            status, headers, body, elapsed = await self._send_guess(
+                otp_url, method, field, real_value, extra_body, in_query,
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  [otp] real-value confirmation request error: {e}")
+            return
+
+        result.real_value_tested = True
+        result.real_value_attempt_number = result.attempts_made + 1
+        accepted = self._looks_like_success(status, headers, body, success_marker)
+        result.real_value_accepted = accepted
+
+        if verbose:
+            outcome = "ACCEPTED" if accepted else "rejected"
+            print(
+                f"  [otp] real value submitted as attempt {result.real_value_attempt_number}: "
+                f"{status} -> {outcome}"
+            )
+
+        if accepted:
+            findings.append(self._build_real_value_finding(result, expected_limit))
+        elif verbose:
+            if result.lockout_attempt_index is not None:
+                print("  [otp] real value correctly rejected while locked out (rate limiting appears effective)")
+            else:
+                print(
+                    "  [otp] real value was not accepted — it may have expired during the decoy "
+                    "barrage, or this endpoint requires --otp-success-marker for reliable detection"
+                )
+
+    def _looks_like_success(self, status: int, headers: dict, body: str, success_marker: str) -> bool:
+        if success_marker:
+            return success_marker in (body or "")
+        # Fallback heuristic when no explicit marker is supplied: a 2xx that
+        # isn't itself a block signal is the best-effort signal available.
+        # --otp-success-marker is strongly recommended for reliable detection.
+        if self._looks_blocked(status, headers, body):
+            return False
+        return 200 <= status < 300
+
+    def _build_real_value_finding(self, result: OTPScanResult, expected_limit: int | None) -> Finding:
+        attempt_n = result.real_value_attempt_number
+
+        if result.lockout_attempt_index is not None:
+            context = (
+                f"A lockout signal was already observed at attempt "
+                f"{result.lockout_attempt_index}, yet the correct OTP — submitted as "
+                f"attempt {attempt_n}, after the application's own lockout should "
+                f"already have blocked further attempts — was still accepted."
+            )
+        elif expected_limit is not None and result.attempts_made >= expected_limit:
+            excess = result.attempts_made - expected_limit + 1
+            context = (
+                f"The application is expected to allow at most {expected_limit} "
+                f"attempt(s), but {result.attempts_made} decoy wrong-guess attempts "
+                f"were sent with no block signal, and the correct OTP — submitted as "
+                f"attempt {attempt_n} — was still accepted: {excess} attempt(s) beyond "
+                f"the intended limit."
+            )
+        else:
+            context = (
+                f"{result.attempts_made} decoy wrong-guess attempts were sent with no "
+                f"block signal at any point, and the correct OTP — submitted as "
+                f"attempt {attempt_n} — was still accepted, confirming end-to-end that "
+                f"the missing rate limit is fully exploitable, not just theoretically "
+                f"absent."
+            )
+
+        finding = Finding(
+            title="Real OTP Accepted After Exceeding the Allowed Attempt Budget",
+            severity=Severity.CRITICAL,
+            category="OTP Rate Limiting",
+            description=(
+                "Using the operator's own authorized bug-bounty test account's real "
+                f"OTP value, this scan proved the rate-limiting weakness is fully "
+                f"exploitable end-to-end rather than theoretical: {context} This "
+                f"demonstrates concretely that an attacker could send far more "
+                f"attempts than any reasonable — or the application's own — policy "
+                f"should allow, and still complete a real, successful authentication."
+            ),
+            request={"method": "POST", "url": result.otp_url},
+            response_summary=f"Real OTP accepted as attempt {attempt_n}",
+            evidence=(
+                f"Real value accepted at attempt {attempt_n}; "
+                f"lockout threshold observed: {result.lockout_attempt_index}; "
+                f"expected/policy limit: {expected_limit if expected_limit is not None else 'not specified'}"
+            ),
+            recommendation=(
+                "Enforce a hard lockout after a small number of failed attempts "
+                "(e.g. 5) tied to the server-side session/account, with exponential "
+                "backoff, and invalidate the current OTP once the limit is reached "
+                "so a fresh one must be issued rather than allowing continued "
+                "guesses against the same code."
+            ),
+            cwe="CWE-307",
+            cvss=9.8,
+            owasp="OWASP Top 10 A07:2021 Identification and Authentication Failures",
+            confirmed=True,
+            confidence=97,
+            confidence_reasons=[
+                "Real, operator-known OTP value for an authorized test account was "
+                "accepted after exceeding the allowed/expected attempt budget",
+                context,
+            ],
+            endpoint=result.otp_url,
+            parameter="",
+        )
+        finding.poc = ProofOfConcept(
+            summary="Real OTP still accepted after an excess-attempt decoy barrage",
+            curl_command=(
+                f'# 1. Send N decoy wrong guesses first (see the missing-rate-limit PoC above)\n'
+                f'# 2. Then submit the real code for your own test account:\n'
+                f'curl -sk -X POST "{result.otp_url}" -H "Content-Type: application/json" '
+                f'-d \'{{"otp": "<your_real_test_account_otp>"}}\' -i'
+            ),
+            python_script=(
+                "import requests\n\n"
+                f'url = "{result.otp_url}"\n'
+                "# send your decoy guesses first, then:\n"
+                'r = requests.post(url, json={"otp": "<your_real_test_account_otp>"})\n'
+                "print(r.status_code)\nprint(r.text[:500])\n"
+            ),
+            burp_request="",
+            expected_result="The real OTP is still accepted despite the preceding excess attempts.",
+            steps=[
+                f"Send {result.attempts_made} decoy wrong guesses to {result.otp_url}.",
+                "Immediately submit your own test account's real, currently-valid OTP.",
+                "Observe it is still accepted despite exceeding the allowed/expected attempt budget.",
+            ],
         )
         return finding
 
