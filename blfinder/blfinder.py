@@ -320,6 +320,7 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
         ("run_ssrf",          "ssrf"),
         ("run_csrf",          "csrf"),
         ("run_source_scan",   "source_scan"),
+        ("skip_verification", "no_verify"),
         ("run_recon",         "recon"),
         ("run_js_extract",    "js_secrets"),
         ("deep_discovery",    "deep_discovery"),
@@ -419,6 +420,20 @@ EXAMPLES:
     core.add_argument("--fuzz-depth",       type=int, default=2,   help="Nested-object mutation depth (default: 2)")
     core.add_argument("--min-confidence",   type=int, default=40,  help="Minimum confidence %% to report (default: 40)")
     core.add_argument("--confirm-attempts", type=int, default=2,   help="Re-verification attempts (default: 2)")
+    core.add_argument(
+        "--no-verify", action="store_true",
+        help=(
+            "Skip the re-verification pass entirely — every finding that "
+            "passes the confidence filter is reported as-is. Use this if "
+            "the verifier is dropping genuine findings on a flaky/stateful "
+            "target (re-verification re-runs the attack request and can "
+            "false-negative on endpoints whose state changed since the "
+            "first request, or that get rate-limited on the retry). When "
+            "verification IS enabled, anything it drops is now also written "
+            "to <output>/dropped_findings.json for manual review instead of "
+            "vanishing silently."
+        ),
+    )
     core.add_argument(
         "--no-scan", action="store_true",
         help="Run discovery only, skip all attack modules",
@@ -1865,6 +1880,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         confirmation_attempts = merged_settings.get("confirm_attempts", args.confirm_attempts),
         resume                = args.resume,
     )
+    config.skip_verification = args.no_verify or prof_settings.get("skip_verification", False)
 
     # ── Resume / Checkpointing ────────────────────────────────────────────────
     # Set up the checkpoint path before anything else touches the scanner, so
