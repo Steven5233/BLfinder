@@ -613,6 +613,27 @@ EXAMPLES:
         ),
     )
     recon.add_argument(
+        "--otp-real-value", default="", metavar="CODE",
+        help=(
+            "The ACTUAL, currently-valid OTP code for YOUR OWN authorized "
+            "bug-bounty test account (e.g. read from the SMS/email you just "
+            "received). Submitted immediately after the Test 1 decoy barrage "
+            "to prove — with definitive, screenshot-grade evidence — that a "
+            "real authentication still succeeds after exceeding the allowed "
+            "attempt budget. Never use another account's OTP here; this must "
+            "be your own test account."
+        ),
+    )
+    recon.add_argument(
+        "--otp-expected-limit", type=int, default=0, metavar="N",
+        help=(
+            "The attempt limit the application is documented/expected to "
+            "enforce (e.g. 5). Used only to phrase the --otp-real-value "
+            "finding precisely ('N decoy attempts sent, M beyond the stated "
+            "limit, and the real code was still accepted'). Optional."
+        ),
+    )
+    recon.add_argument(
         "--otp-delay", type=float, default=0.1, metavar="SECS",
         help="Delay between sequential attempts in Test 1 (default: 0.1s).",
     )
@@ -1440,6 +1461,19 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
     print(f"[*] BLFinder — OTP Rate-Limit Scanner Only: {otp_url}")
     print(f"[*] Digits: {args.otp_digits} | Field: {args.otp_field} | Method: {args.otp_method}\n")
 
+    if args.otp_real_value:
+        if len(args.otp_real_value) != args.otp_digits:
+            print(
+                f"[!] --otp-real-value length ({len(args.otp_real_value)}) does not match "
+                f"--otp-digits ({args.otp_digits}) — it will be ignored for this run"
+            )
+        print(
+            "[*] --otp-real-value is set: this MUST be the real OTP for YOUR OWN "
+            "authorized bug-bounty test account, never anyone else's. It will be "
+            "submitted immediately after the decoy barrage to prove real "
+            "authentication still succeeds beyond the allowed attempt budget.\n"
+        )
+
     config = ScanConfig(
         target_url  = otp_url,
         auth_token  = args.token,
@@ -1469,6 +1503,8 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
                 concurrency=args.otp_concurrency,
                 success_marker=args.otp_success_marker,
                 sequential_delay=args.otp_delay,
+                real_value=args.otp_real_value,
+                expected_limit=(args.otp_expected_limit or None),
                 verbose=args.verbose,
             )
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -1497,6 +1533,9 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
         )
         if result.lockout_attempt_index is not None:
             print(f"[*] Header-spoof bypass  : {'SUCCEEDED' if result.header_bypass_succeeded else 'blocked (good)'}")
+        if result.real_value_tested:
+            outcome = "ACCEPTED (critical finding)" if result.real_value_accepted else "rejected"
+            print(f"[*] Real-value confirm   : submitted as attempt {result.real_value_attempt_number} -> {outcome}")
         if result.accidental_match:
             print(f"[!] WARNING: random guess {result.accidental_match_code} matched the success marker — scan stopped early")
 
