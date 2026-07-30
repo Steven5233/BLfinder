@@ -174,6 +174,12 @@ except ImportError:
     _HAS_CSRF = False
 
 try:
+    from .modules.source_code_scanner import SourceCodeScanner
+    _HAS_SOURCE_SCAN = True
+except ImportError:
+    _HAS_SOURCE_SCAN = False
+
+try:
     from .intelligence.business_classifier import BusinessClassifier, AttackPlan
     _HAS_CLASSIFIER = True
 except ImportError:
@@ -693,6 +699,7 @@ class BLFScanner:
         self._tenant_bola:     Optional[TenantBOLAScanner] = None
         self._ssrf_scanner:    Optional[SSRFScanner] = None
         self._csrf_scanner:    Optional[CSRFScanner] = None
+        self._source_scanner:  Optional[SourceCodeScanner] = None
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
 
@@ -770,6 +777,8 @@ class BLFScanner:
             # active-replay behavior behind config.run_csrf and otherwise
             # only performs passive, read-only hardening-gap detection.
             self._csrf_scanner = CSRFScanner(self)
+        if _HAS_SOURCE_SCAN and getattr(self.config, "run_source_scan", False):
+            self._source_scanner = SourceCodeScanner(self)
         if _HAS_CLASSIFIER:
             self._classifier = BusinessClassifier()
 
@@ -1741,6 +1750,10 @@ class BLFScanner:
         if _HAS_CSRF and self._csrf_scanner and "csrf" not in early_skip:
             early_findings.extend(
                 await self._csrf_scanner.check(url, method, params, body, headers, status, base_body)
+            )
+        if _HAS_SOURCE_SCAN and self._source_scanner and "source_scan" not in early_skip:
+            early_findings.extend(
+                await self._source_scanner.check(url, method, status, headers, base_body)
             )
 
         for f in early_findings:
