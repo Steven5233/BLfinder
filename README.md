@@ -9,10 +9,11 @@
 ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝
 ```
 
-### Business Logic Flaw Detection Engine — v3.1 Phase 5+
+### Business Logic Flaw Detection Engine — v3.2 Phase 6
 
-*The scanner that finds what 90% of bug bounty hunters miss.*  
+*The scanner that finds what 90% of bug bounty hunters miss.*
 *Traffic import · Persistent database · Deep discovery · Live dashboard · HackerOne integration.*
+*Now with SSRF/CSRF, source code exposure scanning, and OTP rate-limit testing.*
 
 <br>
 
@@ -21,7 +22,7 @@
 [![License](https://img.shields.io/badge/License-MIT-purple?style=flat-square)](LICENSE)
 [![OWASP](https://img.shields.io/badge/OWASP-API%20Top%2010-red?style=flat-square)](https://owasp.org/API-Security)
 [![Bug Bounty](https://img.shields.io/badge/Bug%20Bounty-Ready-orange?style=flat-square)](https://hackerone.com)
-[![Version](https://img.shields.io/badge/Version-3.1%20Phase%205%2B-blue?style=flat-square)](https://github.com/Steven5233/BLfinder)
+[![Version](https://img.shields.io/badge/Version-3.2%20Phase%206-blue?style=flat-square)](https://github.com/Steven5233/BLfinder)
 [![GitHub](https://img.shields.io/badge/GitHub-Steven5233%2FBLfinder-181717?style=flat-square&logo=github)](https://github.com/Steven5233/BLfinder)
 
 </div>
@@ -39,6 +40,7 @@
 - [Phase Architecture](#-phase-architecture)
 - [Detection Modules — All 21](#-detection-modules--all-21)
 - [Phase 5+: Deep Discovery Engine](#-phase-5-deep-discovery-engine)
+- [Phase 6: Perimeter, Source Exposure & OTP Testing](#-phase-6-perimeter-source-exposure--otp-testing)
 - [Phase 5: Professional Operations](#-phase-5-professional-operations)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
@@ -110,6 +112,12 @@ Most automated scanners test for known patterns — SQLi, XSS, path traversal. B
 | Persistent Finding Database | ❌ | ❌ | ✅ |
 | HackerOne API Export | ❌ | ❌ | ✅ |
 | Real Evidence Capture | manual | manual | ✅ |
+| SSRF (metadata + blind + OOB, 4-tier) | ⚠️ | ⚠️ | ✅ |
+| CSRF (active forged-replay confirmation) | ⚠️ | ⚠️ | ✅ |
+| Source Code Exposure (.git/.env/backups) | ⚠️ | ⚠️ | ✅ |
+| Source Map Reconstruction + Static Bug Scan | ❌ | ❌ | ✅ |
+| OTP Rate-Limit / Lockout Bypass Testing | ❌ | ❌ | ✅ |
+| Standalone Fast-Path Modes (no full pipeline) | ❌ | ❌ | ✅ |
 
 ---
 
@@ -139,10 +147,17 @@ BLFinder is structured in five cumulative phases. Each phase builds on the last 
 │  Traffic import (Burp/HAR/mitmproxy) · Scan profiles · SQLite database  │
 │  Deduplication · HackerOne API export · Live TUI dashboard              │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  Phase 5+ — Deep Discovery Engine  ◄ NEW                               │
+│  Phase 5+ — Deep Discovery Engine                                       │
 │  JS AST parsing · OpenAPI/Swagger/Postman · Smart wordlist (depth 1–5)  │
 │  API version permutation · Headless SPA crawl · Priority scoring        │
 │  Schema enrichment · Proto/gRPC extraction · Soft-404 filter            │
+├─────────────────────────────────────────────────────────────────────────┤
+│  Phase 6 — Perimeter, Source Exposure & OTP Testing  ◄ NEW              │
+│  SSRF: metadata / blind-timing / OOB / protocol-smuggling (4 tiers)     │
+│  CSRF: forged cross-site replay with semantic-diff effect confirmation  │
+│  Source code exposure (.git/.env/backups) + source-map bug scanning     │
+│  OTP rate-limit, race-condition, and IP-spoof lockout-bypass testing    │
+│  Standalone fast-paths: --source-only / --otp-scan skip the pipeline    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -197,6 +212,9 @@ Activate with dedicated flags. Run after the standard 21-module sweep.
 | **API Version Abuse** | `--version-scan` | Retired `v1`/`v2` endpoints with weaker controls still accessible |
 | **IDOR Mass Enumeration** | `--idor-range N` | Rapid ID-range enumeration; harvests IDs from baseline responses. Supports numeric, UUID, MongoDB ObjectID, Stripe-format, and base62 IDs |
 | **Cross-Endpoint BOLA** | `--idor-cross-endpoint` | Uses IDs harvested from one endpoint to attack others in the same session |
+| **SSRF** | `--ssrf` | Cloud metadata leakage, blind internal-network timing leads, out-of-band collaborator confirmation, protocol-smuggling context. See [Phase 6](#-phase-6-perimeter-source-exposure--otp-testing) |
+| **CSRF** | `--csrf` | Forged cross-site replay with semantic-diff effect confirmation, token-validation-depth check, GET-downgrade and Content-Type bypass checks. See [Phase 6](#-phase-6-perimeter-source-exposure--otp-testing) |
+| **Source Code Scan** | `--source-scan` | Exposed `.git`/`.env`/backup/credential files + source-map reconstruction and static bug-pattern scan. See [Phase 6](#-phase-6-perimeter-source-exposure--otp-testing) |
 
 ---
 
@@ -286,6 +304,95 @@ python blfinder.py \
   -e endpoints.json \
   --html --json -o ~/results
 ```
+
+---
+
+## 🧬 Phase 6: Perimeter, Source Exposure & OTP Testing
+
+Four additions that round out coverage beyond the API surface itself: SSRF and CSRF join the standard endpoint sweep as opt-in modules, while source code exposure and OTP rate-limiting each get their own **standalone fast-path mode** — point them at one URL and they run *only* that check, skipping discovery and every other module entirely. Use the fast-path when you already know exactly what you want tested and don't want the noise or the wait of a full scan.
+
+### SSRF Scanner — `--ssrf`
+
+Four independent evidence tiers, escalating in reliability:
+
+| Tier | What it does | Confidence |
+|------|--------------|------------|
+| 1 — In-band metadata | Points candidate URL parameters at AWS/GCP/Azure/Alibaba/DigitalOcean/Oracle metadata endpoints and `file:///etc/passwd`, then greps the *response the app hands back* for credential/metadata signatures | Confirmed — direct evidence |
+| 2 — Blind internal-network | Loopback/RFC1918/link-local targets with allow-list bypass encodings (decimal/octal/hex IP, IPv6-mapped), confirmed only via a statistically significant `TimingOracle` delta against a guaranteed-unreachable control host | Capped, unconfirmed lead |
+| 3 — Out-of-band | Fires a unique-per-request collaborator subdomain (`--ssrf-oob-domain`); a correlated DNS/HTTP hit is unambiguous proof of server-side egress | Confirmed if a pluggable checker correlates the hit |
+| 4 — Protocol smuggling | Tests `file://`/`gopher://`/`dict://` acceptance — contextual only, raises the severity of a Tier 1–3 finding rather than standing alone | N/A |
+
+Candidate parameters are found by name heuristic (`url`, `callback`, `webhook`, `avatar`, `redirect`, ...) or value shape, recursively through JSON bodies, plus a path-based fallback for webhook/screenshot/unfurl-style features.
+
+```bash
+--ssrf                              # enable within a normal scan
+--ssrf-oob-domain abc123.oast.fun   # optional Tier 3 collaborator domain
+```
+
+### CSRF Scanner — `--csrf`
+
+Never reports "no token found" as a finding on its own. Four layers, and only a live-confirmed exploit chain gets reported:
+
+1. **Token & defense discovery** (passive) — CSRF-token-shaped fields in body/headers/cookies, plus the session cookie's `SameSite` attribute.
+2. **Forged cross-site replay** (the core proof, opt-in via `--csrf`) — resends the exact state-changing request with any token blanked and `Origin`/`Referer` swapped to an attacker domain, then uses the project's own `SemanticDiff` engine to confirm the forged request achieved the *same effect* as the legitimate one — not just "got a response."
+3. **Token validation depth** — if a token exists, resubmits it tampered (with a legitimate Origin) to check whether it's validated for correctness or merely checked for presence.
+4. **GET-downgrade / Content-Type bypass** — is the same mutation reachable via plain GET? Does swapping `Content-Type: text/plain` bypass an implicit JSON-only "defense"?
+
+Without `--csrf`, only a conservative passive hardening-gap check runs (no extra requests, no active replay). Requires cookie-based auth (`-c`) — CSRF doesn't apply to pure Bearer/JWT header auth, and the module correctly stays silent in that case rather than producing a false report.
+
+```bash
+--csrf   # enables ACTIVE replay — resends real state-changing requests
+```
+
+### Source Code Exposure & Static Bug Scanner — `--source-scan` / `--source-only`
+
+**Phase A — Exposure sweep** (once per host): probes ~18 known-sensitive paths (`.git/HEAD`, `.git/config`, `.env` + variants, `.aws/credentials`, `id_rsa`, `.vscode/sftp.json`, `.npmrc`, PHP/WordPress/docker-compose backups, Django `settings.py`, `.htpasswd`). Every path has its own content validator (never just "got a 200") and is checked against a soft-404/SPA-catch-all canary first.
+
+**Phase B — Source map reconstruction**: when a response looks like JS, looks for a `sourceMappingURL` comment, fetches the `.map` file (capped 2MB), and if `sourcesContent` is embedded, statically scans the *original unminified source* for: disabled TLS verification, `eval`/`Function` sinks, DOM XSS sinks, unsafe `postMessage` handlers, hardcoded internal hosts/IPs, `Math.random()` used for tokens, commented-out auth checks, debug/bypass flags. With no map, a reduced minification-safe subset still runs against the raw JS.
+
+Exposure findings are `confirmed=True` (content-validated). Static code-pattern findings are always `confirmed=False`, labeled "Requires Manual Triage" — a regex match is a lead, not proof. Capped at 20 JS files and ~500KB of reconstructed source per host.
+
+```bash
+# Integrated into a normal scan
+--source-scan
+--js-url https://cdn.target.com/main.js     # explicit JS file, repeatable
+
+# Standalone fast path — skips discovery and every other module entirely
+python blfinder.py --source-only -t https://api.target.com -o ~/results -v
+```
+
+### OTP Rate-Limit & Lockout Bypass Scanner — `--otp-scan`
+
+Standalone-only (there's no non-standalone form of this one — it needs its own URL and digit count, not a generic endpoint). Measures rate-limiting robustness; it does **not** attempt to brute-force the real OTP value, and it never touches an OTP send/resend endpoint on its own.
+
+| Test | What it does |
+|------|--------------|
+| 1 — Sequential lockout detection | Random wrong-guess codes one at a time, watching for a 429/403/423, `Retry-After`, or a "too many attempts"-style phrase. No block within the sample budget → flags **missing rate limiting**, with a brute-force time estimate built from *this endpoint's own measured request rate* |
+| 2 — Concurrency burst | A true parallel burst; more processed than the sequential threshold predicts → flags a likely TOCTOU counter race condition |
+| 3 — Header-spoof bypass | Only if a real lockout was found — retries with a fresh random IP in `X-Forwarded-For`/`X-Real-IP`/`X-Client-IP` per request; if the block disappears, the limiter is keyed off a spoofable client header |
+
+```bash
+python blfinder.py --otp-scan \
+  --otp-url https://api.target.com/auth/verify-otp \
+  --otp-digits 6 \
+  --otp-field code \
+  --otp-extra-body '{"user_id":"123","challenge_id":"abc"}' \
+  --otp-samples 30 --otp-concurrency 15 \
+  --otp-success-marker '"verified":true' \
+  -o ~/results
+```
+
+Attempt counts are hard-capped internally (500 sequential / 50 concurrent) regardless of what's requested. If `--otp-success-marker` ever matches a random guess (a real valid code was accidentally hit), the scan stops immediately instead of continuing.
+
+### Skipping Re-Verification — `--no-verify`
+
+Every finding normally passes through `FindingVerifier`, which re-runs the attack request to confirm the anomaly still reproduces before it's reported. This can occasionally false-negative on a flaky or stateful target (session state that only reproduces once, a re-test that gets rate-limited, timing that shifts under load) and drop a genuine finding.
+
+```bash
+--no-verify   # skip re-verification entirely — report every finding as first detected
+```
+
+Even without `--no-verify`, anything the verifier drops is no longer silently discarded — it's written to `<output>/dropped_findings.json` for manual review.
 
 ---
 
@@ -559,6 +666,26 @@ python blfinder.py \
   --deep-discovery --wordlist-depth 2 \
   --save-discovery endpoints.json \
   --no-scan
+
+# 8 — Full scan with SSRF, CSRF, and source-code exposure enabled
+python blfinder.py \
+  -t https://api.target.com \
+  -T user1_token -c "session=abc123" \
+  -e endpoints.json \
+  --ssrf --ssrf-oob-domain abc123.oast.fun \
+  --csrf --source-scan \
+  --html --json -o ~/results
+
+# 9 — Source code exposure only — fastest, lowest-noise, no auth needed
+python blfinder.py --source-only -t https://api.target.com -o ~/results -v
+
+# 10 — OTP rate-limit test only — standalone, needs just the verify URL + digit count
+python blfinder.py --otp-scan \
+  --otp-url https://api.target.com/auth/verify-otp \
+  --otp-digits 6 -o ~/results
+
+# 11 — Re-run without the verifier if it's dropping genuine findings
+python blfinder.py -t https://api.target.com -e endpoints.json --no-verify
 ```
 
 Open `~/results/report.html` for a full interactive report: 7 tabs per finding including side-by-side request comparison, field-level diff, impact assessment, and a HackerOne-ready submission.
@@ -586,6 +713,7 @@ Open `~/results/report.html` for a full interactive report: 7 tabs per finding i
 | `--fuzz-depth` | `2` | Nested JSON mutation depth |
 | `--min-confidence` | `40` | Drop findings below this confidence % |
 | `--confirm-attempts` | `2` | Re-verification attempts per finding |
+| `--no-verify` | off | Skip re-verification entirely — report every finding as first detected. Dropped findings are still written to `dropped_findings.json` when verification runs |
 | `--no-scan` | off | Run discovery only, skip all attack modules |
 | `--skip-unauth` | off | Skip unauthenticated access probes (recommended on Cloudflare-protected targets) |
 | `--max-endpoints` | `5` | Max endpoints processed concurrently (lower to 2–3 on Cloudflare targets) |
@@ -687,6 +815,43 @@ Open `~/results/report.html` for a full interactive report: 7 tabs per finding i
 | `--graphql-deep` | off | Enable full GraphQL deep scan |
 | `--version-scan` | off | Enable API version abuse scan |
 | `--classify` | off | Print business context attack plan and exit |
+
+### SSRF
+
+| Flag | Default | Description |
+|------|---------|--------------|
+| `--ssrf` | off | Enable SSRF scanning module |
+| `--ssrf-oob-domain DOMAIN` | — | Collaborator/interactsh domain for Tier 3 out-of-band confirmation |
+
+### CSRF
+
+| Flag | Default | Description |
+|------|---------|--------------|
+| `--csrf` | off | Enable ACTIVE cross-site replay confirmation (resends real state-changing requests with forged Origin/Referer). Without this, only passive hardening-gap detection runs |
+
+### Source Code Scanner
+
+| Flag | Default | Description |
+|------|---------|--------------|
+| `--source-scan` | off | Enable source exposure sweep + static bug-pattern scan within a normal scan |
+| `--source-only` | off | Run ONLY the source code scanner against `-t/--target`, skip everything else, then exit |
+| `--js-url URL` | — | Explicit JS file URL to feed into Phase B, repeatable — used automatically by `--source-only` in addition to auto-discovered `<script src>` tags |
+
+### OTP Rate-Limit Scanner
+
+| Flag | Default | Description |
+|------|---------|--------------|
+| `--otp-scan` | off | Run ONLY the OTP rate-limit/lockout-bypass scanner, skip everything else, then exit |
+| `--otp-url URL` | — | OTP verification endpoint to test (required with `--otp-scan`) |
+| `--otp-digits N` | — | OTP code length, e.g. `4` or `6` (required with `--otp-scan`) |
+| `--otp-field NAME` | `otp` | Body/query field name holding the OTP guess |
+| `--otp-method METHOD` | `POST` | HTTP method for the verification request |
+| `--otp-in-query` | off | Send the OTP field as a query parameter instead of a JSON body |
+| `--otp-extra-body JSON` | `{}` | Extra JSON object merged alongside the OTP field, e.g. `'{"user_id":"123"}'` |
+| `--otp-samples N` | `20` | Sequential wrong-guess attempts for Test 1 (hard cap 500) |
+| `--otp-concurrency N` | `10` | Simultaneous requests for Test 2 (hard cap 50) |
+| `--otp-success-marker TEXT` | — | Response substring indicating a CORRECT OTP — scan stops immediately if matched |
+| `--otp-delay SECS` | `0.1` | Delay between sequential attempts in Test 1 |
 
 ### Output
 
@@ -975,6 +1140,10 @@ WAF blocks from VPN exit nodes inflate false positives. Disable VPN, re-run, com
 | `Enricher returns fake values (email: testexample@gmail.com)` | Use `--import-burp` instead — enricher placeholders are correct by design; real values come from imported traffic |
 | `Permission denied` | `chmod +x blfinder.py` |
 | `Termux storage issues` | `termux-setup-storage`, use `~/storage/downloads/` for output |
+| `Verifier drops findings I believe are genuine` | Re-run with `--no-verify`, or check `<output>/dropped_findings.json` — every dropped finding is written there, not lost |
+| `--otp-scan does nothing / 0 findings` | Confirm `--otp-field` matches the actual body field name, and pass `--otp-extra-body` for any other required fields (user_id, challenge_id, session, ...) |
+| `--source-only finds no JS bug patterns` | The target's JS may have no exposed `sourceMappingURL`/`.map` file — Phase B falls back to a smaller minification-safe pattern set in that case, which is expected, not a bug |
+| `SSRF Tier 3 (OOB) never confirms` | Requires `--ssrf-oob-domain` pointed at a real collaborator/interactsh server; without it, only Tiers 1/2/4 run |
 
 ---
 
@@ -1057,11 +1226,15 @@ BLfinder/
     │   ├── subdomain_mapper.py      ← Subdomain discovery + API surface scoring
     │   └── js_secret_extractor.py  ← JS file secret pattern extraction
     │
-    ├── modules/                     ← Phase 4: Expanded attack surface
+    ├── modules/                     ← Phase 4/6: Expanded attack surface
     │   ├── idor_mass_enum.py        ← Mass IDOR enumeration + ID harvesting
     │   ├── graphql_deep.py          ← GraphQL schema traversal + field IDOR
     │   ├── websocket_scanner.py     ← WebSocket vulnerability scanner
-    │   └── api_version_abuse.py     ← Version endpoint discovery + downgrade
+    │   ├── api_version_abuse.py     ← Version endpoint discovery + downgrade
+    │   ├── ssrf_scanner.py          ← 4-tier SSRF: metadata/blind/OOB/protocol
+    │   ├── csrf_scanner.py          ← Forged-replay CSRF w/ semantic-diff proof
+    │   ├── source_code_scanner.py   ← .git/.env exposure + source-map bug scan
+    │   └── otp_scanner.py           ← OTP rate-limit + lockout-bypass scanner
     │
     ├── intelligence/                ← Phase 4: Business context
     │   └── business_classifier.py  ← Endpoint classification + attack prioritisation
@@ -1075,6 +1248,8 @@ BLfinder/
     └── tui/                         ← Phase 5: Live dashboard
         └── live_dashboard.py        ← Curses / ANSI TUI + pause support
 ```
+
+> `<output>/dropped_findings.json` is written automatically whenever `FindingVerifier` drops a finding that passed the confidence filter but failed re-test — nothing is silently discarded. Use `--no-verify` to skip re-verification entirely instead.
 
 ---
 
