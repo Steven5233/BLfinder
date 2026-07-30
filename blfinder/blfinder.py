@@ -544,6 +544,63 @@ EXAMPLES:
             "pages included."
         ),
     )
+    recon.add_argument(
+        "--otp-scan", action="store_true",
+        help=(
+            "Run ONLY the OTP rate-limit/lockout-bypass scanner against "
+            "--otp-url, then exit. Skips discovery and every other module. "
+            "Requires --otp-url and --otp-digits."
+        ),
+    )
+    recon.add_argument(
+        "--otp-url", default="", metavar="URL",
+        help="OTP verification endpoint to test (required with --otp-scan).",
+    )
+    recon.add_argument(
+        "--otp-digits", type=int, default=0, metavar="N",
+        help="OTP code length, e.g. 4 or 6 (required with --otp-scan).",
+    )
+    recon.add_argument(
+        "--otp-field", default="otp", metavar="NAME",
+        help="Body/query field name holding the OTP guess (default: otp).",
+    )
+    recon.add_argument(
+        "--otp-method", default="POST", metavar="METHOD",
+        help="HTTP method for the OTP verification request (default: POST).",
+    )
+    recon.add_argument(
+        "--otp-in-query", action="store_true",
+        help="Send the OTP field as a query parameter instead of a JSON body.",
+    )
+    recon.add_argument(
+        "--otp-extra-body", default="{}", metavar="JSON",
+        help=(
+            "Extra JSON object merged into the request alongside the OTP "
+            "field — e.g. '{\"user_id\": \"123\", \"challenge_id\": \"abc\"}' "
+            "for any other fields the endpoint requires."
+        ),
+    )
+    recon.add_argument(
+        "--otp-samples", type=int, default=20, metavar="N",
+        help="Sequential wrong-guess attempts to test for a lockout (default: 20, hard cap 500).",
+    )
+    recon.add_argument(
+        "--otp-concurrency", type=int, default=10, metavar="N",
+        help="Simultaneous requests for the race-condition burst test (default: 10, hard cap 50).",
+    )
+    recon.add_argument(
+        "--otp-success-marker", default="", metavar="TEXT",
+        help=(
+            "Substring in the response body that indicates a CORRECT OTP was "
+            "accepted. If any random guess's response contains this, the scan "
+            "stops immediately instead of continuing to probe. Strongly "
+            "recommended if you know what a success response looks like."
+        ),
+    )
+    recon.add_argument(
+        "--otp-delay", type=float, default=0.1, metavar="SECS",
+        help="Delay between sequential attempts in Test 1 (default: 0.1s).",
+    )
     recon.add_argument("--js-secrets",  action="store_true", help="Enable JS secret extraction")
     recon.add_argument(
         "--subdomain-size", type=int, default=50,
@@ -1321,6 +1378,157 @@ async def run_source_only(args: argparse.Namespace) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# OTP-only fast path — OTPRateLimitScanner ONLY, nothing else
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def run_otp_scan(args: argparse.Namespace) -> int:
+    """
+    Run ONLY the OTP rate-limit/lockout-bypass scanner against --otp-url,
+    entirely bypassing endpoint discovery and every other module. Triggered
+    by --otp-scan; requires --otp-url and --otp-digits.
+
+    Bounded and conservative by design: attempt counts are hard-capped
+    inside OTPRateLimitScanner regardless of what's requested, and this
+    never touches an OTP send/resend endpoint — only the verification
+    endpoint the operator explicitly points it at.
+    """
+    if not args.otp_url:
+        print("[!] --otp-scan requires --otp-url")
+        return 1
+    if not args.otp_digits or args.otp_digits < 1:
+        print("[!] --otp-scan requires --otp-digits (e.g. --otp-digits 6)")
+        return 1
+
+    try:
+        extra_body = json.loads(args.otp_extra_body) if args.otp_extra_body else {}
+        if not isinstance(extra_body, dict):
+            raise ValueError("must be a JSON object")
+    except Exception as e:
+        print(f"[!] --otp-extra-body must be valid JSON object: {e}")
+        return 1
+
+    try:
+        from core.models  import ScanConfig
+        from core.scanner import BLFScanner
+        from core.modules.otp_scanner import OTPRateLimitScanner
+        from core.reporter import (
+            print_terminal_summary,
+            generate_html_report,
+            generate_json_report,
+            generate_markdown_report,
+        )
+    except ImportError as e:
+        print(f"[!] Critical import error: {e}")
+        return 1
+
+    otp_url = args.otp_url
+    print(f"[*] BLFinder — OTP Rate-Limit Scanner Only: {otp_url}")
+    print(f"[*] Digits: {args.otp_digits} | Field: {args.otp_field} | Method: {args.otp_method}\n")
+
+    config = ScanConfig(
+        target_url  = otp_url,
+        auth_token  = args.token,
+        headers     = parse_headers(args.header),
+        cookies     = parse_cookies(args.cookie),
+        proxy       = args.proxy,
+        rate_limit  = args.rate,
+        timeout     = args.timeout,
+        verbose     = args.verbose,
+    )
+
+    findings = []
+    result = None
+    scanner_error = None
+
+    async with BLFScanner(config) as scanner:
+        otp = OTPRateLimitScanner(scanner)
+        try:
+            result, findings = await otp.scan(
+                otp_url=otp_url,
+                method=args.otp_method.upper(),
+                digits=args.otp_digits,
+                field=args.otp_field,
+                extra_body=extra_body,
+                in_query=args.otp_in_query,
+                samples=args.otp_samples,
+                concurrency=args.otp_concurrency,
+                success_marker=args.otp_success_marker,
+                sequential_delay=args.otp_delay,
+                verbose=args.verbose,
+            )
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            print("\n[!] OTP scan interrupted.")
+            return 130
+        except Exception as e:
+            scanner_error = e
+            print(f"[!] Error during OTP scan: {e}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+
+    if scanner_error and not findings:
+        return 1
+
+    if result:
+        print(f"\n[*] Attempts made        : {result.attempts_made}")
+        print(
+            f"[*] Sequential lockout   : "
+            f"{'attempt ' + str(result.lockout_attempt_index) if result.lockout_attempt_index else 'NOT observed'}"
+        )
+        print(f"[*] Measured request rate: {result.measured_rate_per_sec:.2f} req/s")
+        print(
+            f"[*] Concurrency burst    : "
+            f"{result.concurrency_processed}/{result.concurrency_attempts} processed without a block signal"
+        )
+        if result.lockout_attempt_index is not None:
+            print(f"[*] Header-spoof bypass  : {'SUCCEEDED' if result.header_bypass_succeeded else 'blocked (good)'}")
+        if result.accidental_match:
+            print(f"[!] WARNING: random guess {result.accidental_match_code} matched the success marker — scan stopped early")
+
+    os.makedirs(args.output, exist_ok=True)
+    cfg_dict = {"target_url": otp_url}
+
+    if not args.no_color:
+        try:
+            print_terminal_summary(findings, cfg_dict)
+        except Exception as e:
+            print(f"\n[+] OTP scan complete. {len(findings)} findings. (summary error: {e})")
+    else:
+        print(f"\n[+] OTP scan complete. {len(findings)} findings.")
+
+    if args.html or not (args.json or args.md):
+        html_path = os.path.join(args.output, "report.html")
+        try:
+            generate_html_report(findings, cfg_dict, html_path)
+            print(f"[*] HTML report: {html_path}")
+        except Exception as e:
+            print(f"[!] HTML report error: {e}")
+
+    if args.json:
+        json_path = os.path.join(args.output, "report.json")
+        try:
+            generate_json_report(findings, cfg_dict, json_path)
+            print(f"[*] JSON report: {json_path}")
+        except Exception as e:
+            print(f"[!] JSON report error: {e}")
+
+    if args.md:
+        md_path = os.path.join(args.output, "report.md")
+        try:
+            generate_markdown_report(findings, cfg_dict, md_path)
+            print(f"[*] Markdown report: {md_path}")
+        except Exception as e:
+            print(f"[!] Markdown report error: {e}")
+
+    return 1 if any(
+        getattr(f.severity, "value", str(f.severity)) == "CRITICAL"
+        and getattr(f, "confirmed", False)
+        and getattr(f, "confidence", 0) >= 80
+        for f in findings
+    ) else 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Deep Discovery pipeline (outer)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1592,6 +1800,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
 
     if args.source_only:
         return await run_source_only(args)
+
+    if args.otp_scan:
+        return await run_otp_scan(args)
 
     # ── Require target for scanning ───────────────────────────────────────────
     if not args.target:
