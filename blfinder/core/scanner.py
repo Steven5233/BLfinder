@@ -1408,6 +1408,42 @@ class BLFScanner:
 
     # ── Main Runner ───────────────────────────────────────────────────────────
 
+    def _write_dropped_findings(self, dropped: list) -> None:
+        """
+        Findings that passed the confidence filter but failed
+        FindingVerifier's re-test are written here instead of vanishing
+        silently — re-verification can have false negatives (flaky
+        endpoints, session/state that only reproduces once, WAF rate
+        limiting the re-test itself), so this is the manual-review safety
+        net. Use --no-verify to skip re-verification entirely instead.
+        """
+        if not dropped:
+            return
+        try:
+            import os as _os
+            out_dir = getattr(self.config, "output_dir", ".") or "."
+            _os.makedirs(out_dir, exist_ok=True)
+            path = _os.path.join(out_dir, "dropped_findings.json")
+            payload = []
+            for f in dropped:
+                payload.append({
+                    "title": getattr(f, "title", ""),
+                    "severity": getattr(getattr(f, "severity", None), "value", str(getattr(f, "severity", ""))),
+                    "endpoint": getattr(f, "endpoint", ""),
+                    "confidence": getattr(f, "confidence", 0),
+                    "evidence": getattr(f, "evidence", ""),
+                    "request": getattr(f, "request", {}),
+                })
+            with open(path, "w") as fh:
+                json.dump(payload, fh, indent=2, default=str)
+            print(
+                f"  [*] {len(dropped)} finding(s) dropped by re-verification — "
+                f"written to {path} for manual review (or re-run with --no-verify)"
+            )
+        except Exception as e:
+            if getattr(self.config, "verbose", False):
+                print(f"  [!] Could not write dropped_findings.json: {e}")
+
     async def run_all_modules(self, endpoints: list[dict]) -> list[Finding]:
         print(f"[*] BLFinder v3.1 Phase 5 — Target: {self.config.target_url}")
         print(f"[*] {len(endpoints)} endpoints queued\n")
@@ -1608,9 +1644,28 @@ class BLFScanner:
                 f"{stats.get('not_graphql',0)} not-graphql)"
             )
 
-        # Re-verify
-        print(f"[*] Verifying {len(above)} findings...")
-        verified = await self._verifier.verify_all(above, self.base_responses)
+        # Re-verify (skip entirely with --no-verify)
+        if getattr(self.config, "skip_verification", False):
+            print(f"  [*] Skipping re-verification (--no-verify): keeping all {len(above)} findings as-is")
+            verified = above
+        else:
+            print(f"[*] Verifying {len(above)} findings...")
+            verified = await self._verifier.verify_all(above, self.base_responses)
+
+            # Never let a re-verification drop be silent: anything present in
+            # `above` but missing from `verified` failed re-test and was
+            # removed — write those out so a genuine finding that the
+            # verifier got wrong isn't gone for good, just moved to a file
+            # for manual review.
+            if len(verified) < len(above):
+                verified_keys = {
+                    hashlib.md5(f"{f.title}{f.evidence}".encode()).hexdigest() for f in verified
+                }
+                dropped_findings = [
+                    f for f in above
+                    if hashlib.md5(f"{f.title}{f.evidence}".encode()).hexdigest() not in verified_keys
+                ]
+                self._write_dropped_findings(dropped_findings)
 
         # Deduplicate
         seen:   set[str]      = set()
