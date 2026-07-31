@@ -29,7 +29,7 @@
 
 ---
 
-> **⚠️ Legal Notice:** BLFinder is designed exclusively for **authorised security testing** — bug bounty programmes, penetration testing engagements, and security research on systems you own or have explicit written permission to test. Unauthorised use against any system is illegal and unethical. The author assumes no liability for misuse.
+> **⚠️ Legal Notice:** BLFinder is designed exclusively for **authorised security testing** — bug bounty programmes, penetration testing engagements, and security research on systems you own or have explicit written permission to test. Unauthorised use against any system is illegal and unethical. The developer assumes no liability for misuse.
 
 ---
 
