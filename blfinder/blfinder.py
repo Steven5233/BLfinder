@@ -597,7 +597,15 @@ EXAMPLES:
     )
     recon.add_argument(
         "--otp-samples", type=int, default=20, metavar="N",
-        help="Sequential wrong-guess attempts to test for a lockout (default: 20, hard cap 500).",
+        help=(
+            "Sequential wrong-guess attempts to test for a lockout, enumerated "
+            "from 000...0 upward (default: 20, hard cap 100,000 — also "
+            "clamped to the digit count's actual keyspace, e.g. a 4-digit "
+            "OTP naturally caps at 10,000). Raising this toward or past the "
+            "full keyspace of a short OTP turns the test into a genuine "
+            "complete brute-force sweep, not a sample — only do this "
+            "against your own authorized test target/account."
+        ),
     )
     recon.add_argument(
         "--otp-concurrency", type=int, default=10, metavar="N",
@@ -1460,6 +1468,22 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
     otp_url = args.otp_url
     print(f"[*] BLFinder — OTP Rate-Limit Scanner Only: {otp_url}")
     print(f"[*] Digits: {args.otp_digits} | Field: {args.otp_field} | Method: {args.otp_method}\n")
+
+    keyspace = 10 ** max(1, args.otp_digits)
+    effective_samples = min(args.otp_samples, 100_000, keyspace)
+    if effective_samples >= keyspace:
+        print(
+            f"[*] --otp-samples ({args.otp_samples}) covers the FULL {args.otp_digits}-digit "
+            f"keyspace ({keyspace:,} codes) — this run is a complete, exhaustive brute-force "
+            f"sweep (000...0 through 999...9), not a sample. Only run this against a target/"
+            f"account you are explicitly authorized to test.\n"
+        )
+    elif args.otp_samples > 1000:
+        print(
+            f"[*] --otp-samples is set high ({args.otp_samples} of {keyspace:,} possible codes) "
+            f"— this will send a large number of sequential requests and take a while. "
+            f"Only run this against an authorized test target.\n"
+        )
 
     if args.otp_real_value:
         if len(args.otp_real_value) != args.otp_digits:
