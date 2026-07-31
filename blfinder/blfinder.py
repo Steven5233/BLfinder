@@ -103,6 +103,58 @@ import sys
 from pathlib import Path
 
 
+# ── Banner ────────────────────────────────────────────────────────────────
+# Printed on every launch (including --help), before anything else runs.
+
+_BLFINDER_LOGO = r"""
+██████╗ ██╗     ███████╗██╗███╗   ██╗██████╗ ███████╗██████╗
+██╔══██╗██║     ██╔════╝██║████╗  ██║██╔══██╗██╔════╝██╔══██╗
+██████╔╝██║     █████╗  ██║██╔██╗ ██║██║  ██║█████╗  ██████╔╝
+██╔══██╗██║     ██╔══╝  ██║██║╚██╗██║██║  ██║██╔══╝  ██╔══██╗
+██████╔╝███████╗██║     ██║██║ ╚████║██████╔╝███████╗██║  ██║
+╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝"""
+
+_BLFINDER_VERSION_TAG = "v3.2 Phase 6"
+_BLFINDER_TAGLINE = "Business Logic Flaw Detection Engine"
+_BLFINDER_SUBTAGLINE = "Traffic Import · Deep Discovery · SSRF/CSRF · Source Exposure · OTP Rate-Limit Testing"
+_BLFINDER_AUTHOR = "séç gúy"
+_BLFINDER_REPO = "github.com/Steven5233/BLfinder"
+
+
+def print_banner() -> None:
+    """
+    Prints the BLFinder banner. Called unconditionally as the very first
+    thing `parse_args()` does, so it appears both on a normal launch and
+    ahead of argparse's own `--help` output (since this runs before
+    argparse ever touches sys.argv). Suppressed by --no-banner/--no-color
+    or the NO_COLOR/BLFINDER_NO_BANNER environment variables, for clean
+    output in scripts/CI.
+    """
+    argv = sys.argv[1:]
+    if "--no-banner" in argv or os.environ.get("BLFINDER_NO_BANNER"):
+        return
+
+    no_color = "--no-color" in argv or bool(os.environ.get("NO_COLOR"))
+    if no_color:
+        accent = reset = dim = green = crit = ""
+    else:
+        accent = "\033[1;35m"   # purple accent, matches the HTML report's --accent
+        crit   = "\033[1;31m"   # red, matches the HTML report's --critical
+        green  = "\033[1;32m"
+        dim    = "\033[2m"
+        reset  = "\033[0m"
+
+    # Colour just the trailing "F" the way the HTML report logo does
+    # (BL<span class="critical">F</span>inder), by splitting the ASCII art
+    # at its vertical midpoint column-wise isn't practical for block glyphs,
+    # so the whole wordmark is rendered in the accent colour instead and the
+    # tagline/author lines carry the rest of the palette.
+    print(f"{accent}{_BLFINDER_LOGO}{reset}")
+    print(f"{dim}        {_BLFINDER_TAGLINE} · {_BLFINDER_VERSION_TAG}{reset}")
+    print(f"{dim}        {_BLFINDER_SUBTAGLINE}{reset}")
+    print(f"{green}        Developed by {_BLFINDER_AUTHOR}{reset}{dim} — {_BLFINDER_REPO}{reset}\n")
+
+
 # ── Discovery CLI-args integration (core/discovery/cli_args.py) ──────────────
 # These functions mirror the interface defined in cli_args.py so that the
 # module can be imported OR the logic lives here as a safe fallback.
@@ -337,6 +389,7 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
+    print_banner()
     p = argparse.ArgumentParser(
         description="BLFinder v3.1 Phase 5+ — Business Logic Flaw Scanner",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -815,6 +868,7 @@ EXAMPLES:
     out.add_argument("--md",            action="store_true", help="Generate Markdown report")
     out.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     out.add_argument("--no-color",      action="store_true", help="Disable ANSI colour output")
+    out.add_argument("--no-banner",     action="store_true", help="Suppress the BLFinder banner (useful for scripts/CI)")
 
     return p.parse_args()
 
