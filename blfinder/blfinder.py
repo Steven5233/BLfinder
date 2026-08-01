@@ -100,6 +100,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -136,10 +137,9 @@ def print_banner() -> None:
 
     no_color = "--no-color" in argv or bool(os.environ.get("NO_COLOR"))
     if no_color:
-        accent = reset = dim = green = crit = ""
+        accent = reset = dim = green = ""
     else:
         accent = "\033[1;35m"   # purple accent, matches the HTML report's --accent
-        crit   = "\033[1;31m"   # red, matches the HTML report's --critical
         green  = "\033[1;32m"
         dim    = "\033[2m"
         reset  = "\033[0m"
@@ -1566,6 +1566,7 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
     findings = []
     result = None
     scanner_error = None
+    _scan_phase_start = time.monotonic()
 
     async with BLFScanner(config) as scanner:
         otp = OTPRateLimitScanner(scanner)
@@ -1617,8 +1618,11 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
         if result.accidental_match:
             print(f"[!] WARNING: random guess {result.accidental_match_code} matched the success marker — scan stopped early")
 
+    print(f"[*] OTP scan phase took {time.monotonic() - _scan_phase_start:.1f}s ({result.attempts_made if result else 0} attempts sent)")
+
     os.makedirs(args.output, exist_ok=True)
     cfg_dict = {"target_url": otp_url}
+    _report_phase_start = time.monotonic()
 
     if not args.no_color:
         try:
@@ -1651,6 +1655,8 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
             print(f"[*] Markdown report: {md_path}")
         except Exception as e:
             print(f"[!] Markdown report error: {e}")
+    print(f"[*] Report generation took {time.monotonic() - _report_phase_start:.2f}s")
+
 
     return 1 if any(
         getattr(f.severity, "value", str(f.severity)) == "CRITICAL"
@@ -1997,7 +2003,6 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         confirmation_attempts = merged_settings.get("confirm_attempts", args.confirm_attempts),
         resume                = args.resume,
     )
-    config.skip_verification = args.no_verify or prof_settings.get("skip_verification", False)
 
     # ── Resume / Checkpointing ────────────────────────────────────────────────
     # Set up the checkpoint path before anything else touches the scanner, so
@@ -2084,6 +2089,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.ssrf_oob_domain      = getattr(args, "ssrf_oob_domain", "") or prof_settings.get("ssrf_oob_domain", "")
     config.run_csrf             = args.csrf         or prof_settings.get("run_csrf", False)
     config.run_source_scan      = args.source_scan  or prof_settings.get("run_source_scan", False)
+    config.skip_verification    = args.no_verify    or prof_settings.get("skip_verification", False)
     config.print_attack_plan         = args.classify
     config.max_endpoint_concurrency   = getattr(args, "max_endpoints", 5)  # WEAK-7 FIX
 
@@ -2426,6 +2432,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 print(f"[!] Dashboard init error: {e}")
 
         interrupted = False
+        _scan_phase_start = time.monotonic()
         try:
             findings = await scanner.run_all_modules(endpoints)
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -2509,8 +2516,12 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             pass
 
     # ── Generate reports ──────────────────────────────────────────────────────
+    scan_phase_elapsed = time.monotonic() - _scan_phase_start
+    print(f"[*] Scan + verification phase took {scan_phase_elapsed:.1f}s")
+
     os.makedirs(args.output, exist_ok=True)
     cfg_dict = {"target_url": config.target_url}
+    _report_phase_start = time.monotonic()
 
     if not args.no_color:
         try:
@@ -2557,6 +2568,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             generate_markdown_report(findings, cfg_dict, md_path)
         except Exception as e:
             print(f"[!] Markdown report error: {e}")
+
+    report_phase_elapsed = time.monotonic() - _report_phase_start
+    print(f"[*] Report generation took {report_phase_elapsed:.2f}s")
 
     # BUG-G FIX: exit 1 only on confirmed CRITICAL findings with >=80% confidence.
     # Unconfirmed / low-confidence CRITICAL findings (e.g. price manipulation FPs)
