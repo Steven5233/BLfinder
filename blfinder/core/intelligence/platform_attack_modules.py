@@ -58,6 +58,12 @@ import re
 import time
 import uuid
 from typing import Any, Optional
+
+try:
+    from ..analysis.semantic_diff import SemanticDiff
+    _HAS_SEMANTIC_DIFF = True
+except ImportError:
+    _HAS_SEMANTIC_DIFF = False
 from urllib.parse import urlparse, urljoin
 
 
@@ -123,6 +129,11 @@ def _get(data: Any, *keys, default=None) -> Any:
 
 
 def _similarity(a: str, b: str) -> float:
+    if _HAS_SEMANTIC_DIFF:
+        try:
+            return SemanticDiff.compare(a[:3000], b[:3000]).semantic_similarity
+        except Exception:
+            pass
     return difflib.SequenceMatcher(None, a[:3000], b[:3000]).ratio()
 
 
@@ -279,9 +290,21 @@ def _bodies_differ_meaningfully(base: str, tampered: str, threshold: float = 0.0
     """
     RC-3 FIX: Return True only when responses differ by more than threshold.
     Previously modules compared status codes only — now body content is checked.
+
+    Body content comparison itself was raw difflib, which has the same
+    envelope-vs-data blind spot as every other site in this file's FP-fix
+    history — now scored with semantic_diff so timestamp/nonce noise
+    doesn't count as "differs" and a real changed field isn't diluted by
+    a large shared envelope.
     """
     if not base or not tampered:
         return bool(tampered and not base)  # getting data when we had none
+    if _HAS_SEMANTIC_DIFF:
+        try:
+            sim = SemanticDiff.compare(base[:4000], tampered[:4000]).semantic_similarity
+            return (1.0 - sim) > threshold
+        except Exception:
+            pass
     sim = difflib.SequenceMatcher(None, base[:4000], tampered[:4000]).ratio()
     return (1.0 - sim) > threshold
 
