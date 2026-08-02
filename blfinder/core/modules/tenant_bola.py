@@ -48,6 +48,12 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from ..models import Finding, Severity, ProofOfConcept
 from .idor_mass_enum import _detect_id_type, _build_numeric_range
 
+try:
+    from ..analysis.semantic_diff import SemanticDiff
+    _HAS_SEMANTIC_DIFF = True
+except ImportError:
+    _HAS_SEMANTIC_DIFF = False
+
 _TENANT_PATH_KEYWORDS = (
     "org", "orgs", "organization", "organizations",
     "tenant", "tenants", "workspace", "workspaces",
@@ -299,6 +305,20 @@ class TenantBOLAScanner:
     def _differs_meaningfully(self, base: str, other: str, threshold: float = 0.08) -> bool:
         if not base or not other:
             return bool(other and not base)
+        # Confirms cross-tenant object access: does another tenant's
+        # response actually contain different data, or just differ in
+        # incidental bytes (timestamps, key order)? Raw string similarity
+        # answers the wrong question here — two different tenants' records
+        # sharing the same JSON schema can be >90% byte-identical (shared
+        # field names, boilerplate) while the actual owned data differs
+        # completely, which is exactly the BOLA signal this is meant to
+        # catch. Semantic diff scores the real data, not the envelope.
+        if _HAS_SEMANTIC_DIFF:
+            try:
+                sim = SemanticDiff.compare(base[:4000], other[:4000]).semantic_similarity
+                return (1.0 - sim) > threshold
+            except Exception:
+                pass
         sim = difflib.SequenceMatcher(None, base[:4000], other[:4000]).ratio()
         return (1.0 - sim) > threshold
 
