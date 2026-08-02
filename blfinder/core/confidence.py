@@ -10,6 +10,12 @@ import re
 import difflib
 from .models import Finding, Severity
 
+try:
+    from .analysis.semantic_diff import SemanticDiff
+    _HAS_SEMANTIC_DIFF = True
+except ImportError:
+    _HAS_SEMANTIC_DIFF = False
+
 
 class ConfidenceEngine:
     """
@@ -62,7 +68,24 @@ class ConfidenceEngine:
             fp_checks.append(f"Failure tokens ({failure_hits}) exceed success tokens ({success_hits}) — likely error response")
 
         # ── 3. Response similarity / diff analysis ─────────────────────────────
-        similarity = difflib.SequenceMatcher(None, baseline_body[:2000], tampered_body[:2000]).ratio()
+        # This score feeds every finding before it's reported, so the same
+        # false-positive/false-negative risk as verifier.py's _similarity()
+        # applies here: raw byte comparison penalizes/rewards findings based
+        # on incidental differences (timestamps, key order) rather than
+        # actual security-relevant content changes.
+        if _HAS_SEMANTIC_DIFF:
+            try:
+                similarity = SemanticDiff.compare(
+                    baseline_body[:2000], tampered_body[:2000]
+                ).semantic_similarity
+            except Exception:
+                similarity = difflib.SequenceMatcher(
+                    None, baseline_body[:2000], tampered_body[:2000]
+                ).ratio()
+        else:
+            similarity = difflib.SequenceMatcher(
+                None, baseline_body[:2000], tampered_body[:2000]
+            ).ratio()
 
         if similarity > 0.98:
             score -= 15
