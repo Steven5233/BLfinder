@@ -1,5 +1,5 @@
 """
-core/scanner.py  — BLFScanner v3.1 Phase 5+ FIXED
+core/scanner.py  — BLFScanner v3.1 Phase 5+ 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 BLFinder v3.1 Phase 5 — core/scanner.py
@@ -40,6 +40,16 @@ from .confidence import ConfidenceEngine, severity_from_confidence
 from .poc import PoCGenerator
 from .verifier import FindingVerifier
 from .checkpoint import ScanCheckpoint
+
+try:
+    from .intelligence.field_type_engine import (
+        FieldType, infer_field_type, is_attack_relevant,
+        generate_payloads, generate_time_payloads, build_canary_value,
+        PostureCache, is_non_api_path, pollution_probe_value,
+    )
+    _HAS_FIELD_TYPING = True
+except ImportError:
+    _HAS_FIELD_TYPING = False
 
 # ── Phase 1 imports ───────────────────────────────────────────────────────────
 try:
@@ -655,6 +665,14 @@ class BLFScanner:
         self.discovered_endpoints: list[dict] = []
         self._seen_findings: set = set()
 
+        # Attack targeting: per-endpoint type-validation posture, shared
+        # across price/quantity/mass-assignment modules so each endpoint
+        # is calibrated once instead of re-probed by every module. Also
+        # dedupes the fixed admin-path probe list to once per domain
+        # instead of once per discovered endpoint.
+        self._posture_cache = PostureCache() if _HAS_FIELD_TYPING else None
+        self._admin_paths_probed: set[str] = set()
+
         # Core helpers
         self.confidence_engine = ConfidenceEngine()
         self.poc_generator     = PoCGenerator(config)
@@ -1101,6 +1119,88 @@ class BLFScanner:
                     m[i] = sub
                     mutations.append(m)
         return mutations
+
+    async def _targeted_payloads_for(
+        self, module: str, method: str, url: str, body: dict, key: str, original: Any
+    ) -> list[Any]:
+        """
+        Type-aware, calibrated replacement for a fixed universal tamper
+        list. Falls back to a conservative built-in list if the field
+        typing engine isn't importable (keeps the scanner working even
+        if that module is missing/broken).
+
+        1. Infer the field's real type from its observed value.
+        2. Check this endpoint's cached validation posture. If it hasn't
+           been calibrated yet, fire ONE cheap canary request with an
+           obviously wrong-typed value for this field and learn whether
+           the endpoint rejects bad types (strict) or accepts anything
+           (permissive) — the answer is cached per (method, url) so the
+           other modules hitting the same endpoint reuse it instead of
+           re-probing.
+        3. Generate payloads that match the field's real type envelope
+           (so they have a chance of reaching business logic) plus, only
+           if the endpoint is permissive, a broader type-breaking set.
+        """
+        if not _HAS_FIELD_TYPING or self._posture_cache is None:
+            return [0, 0.01, -1, -100, "0", 1]  # legacy fallback
+
+        ftype = infer_field_type(key, original)
+        posture = self._posture_cache.get(method, url)
+
+        if not posture.calibrated:
+            canary_val = build_canary_value(ftype)
+            for mutated in self._mutate_nested(body, key, canary_val):
+                try:
+                    status, _, resp_body, _ = await self._request(method, url, json=mutated)
+                except Exception:
+                    status, resp_body = 0, ""
+                rejected = status in (400, 401, 403, 405, 409, 415, 422) or status == 0
+                self._posture_cache.record_calibration(method, url, canary_rejected=rejected)
+                if not rejected and not posture.weak_validation_finding_emitted:
+                    # The endpoint accepted a value with the wrong type
+                    # entirely for this field — that's a real, separately
+                    # reportable weak-input-validation signal, not just
+                    # plumbing for the payload generator.
+                    posture.weak_validation_finding_emitted = True
+                    self._flag_weak_type_validation(url, method, key, canary_val, status)
+                break  # one canary probe is enough to calibrate
+
+        return generate_payloads(ftype, original, permissive=not posture.strict)
+
+    def _flag_weak_type_validation(
+        self, url: str, method: str, key: str, canary_val: Any, status: int
+    ) -> None:
+        """
+        Records a low-severity informational finding when an endpoint
+        accepts an obviously wrong-typed value for a field. Kept low
+        severity/confidence on its own — it's context for the report,
+        not a headline bug — but it's exactly the kind of target where
+        the broader (type-breaking) payload set is worth trying.
+        """
+        try:
+            f = Finding(
+                title=f"Weak Type Validation — `{key}` accepts wrong-typed input",
+                severity=Severity.LOW,
+                category="Input Validation",
+                description=(
+                    f"`{method} {url}` accepted a canary value of the wrong "
+                    f"type (`{canary_val!r}`) for field `{key}` (HTTP {status}) "
+                    f"instead of rejecting it at the validation layer. This "
+                    f"widens the field's real attack surface — broader tamper "
+                    f"payloads for this field are being tried as a result."
+                ),
+                request={"method": method, "url": url, "note": f"canary: {key}={canary_val!r}"},
+                response_summary=f"HTTP {status}",
+                evidence=f"Type-mismatched canary for `{key}` returned HTTP {status} (not rejected).",
+                recommendation="Enforce strict schema/type validation server-side before business logic runs.",
+                cwe="CWE-20", cvss=3.1,
+                owasp="API8:2023 Security Misconfiguration",
+                confidence=55, endpoint=url, parameter=key,
+            )
+            if f.confidence >= self.config.min_confidence:
+                self.findings.append(f)
+        except Exception:
+            pass  # never let telemetry-style finding creation break the scan
 
     def _finalize_finding(
         self,
@@ -1892,7 +1992,6 @@ class BLFScanner:
             "unit_price", "subtotal", "payment_amount", "order_total",
             "grand_total", "final_price", "shipping_cost", "discount_amount",
         ]
-        tamper_values = [0, 0.01, -1, -100, 0.00001, "0", "0.00", 1, None, False]
 
         def find_price_fields(obj, keys, results, path=""):
             if isinstance(obj, dict):
@@ -1908,6 +2007,19 @@ class BLFScanner:
         find_price_fields(body, price_keys, price_fields)
 
         for field_path, key, original in price_fields:
+            # ── Attack-targeting gate ────────────────────────────────────
+            # Name-substring matching ("order_total_id" contains "total")
+            # can catch identifier fields that aren't actually tamperable
+            # prices. Skip anything the type engine says isn't a real
+            # numeric/monetary field for this attack class — that request
+            # budget is better spent on fields that can actually confirm
+            # or refute a business-logic bug.
+            if _HAS_FIELD_TYPING and not is_attack_relevant("price_manipulation", key, original):
+                continue
+
+            tamper_values = await self._targeted_payloads_for(
+                "price_manipulation", method, url, body, key, original
+            )
             for tampered in tamper_values:
                 for mutated_body in self._mutate_nested(body, key, tampered):
                     ev = self._new_evidence()
@@ -1970,7 +2082,15 @@ class BLFScanner:
             if key not in body:
                 continue
             original = body[key]
-            for tampered in [-1, -100, -9999, 0, -0.5]:
+            # Same relevance gate as price_manipulation: skip fields that
+            # match the name but aren't actually a tamperable numeric
+            # quantity (e.g. "items" holding a list, not a count).
+            if _HAS_FIELD_TYPING and not is_attack_relevant("negative_quantity", key, original):
+                continue
+            tampered_values = await self._targeted_payloads_for(
+                "negative_quantity", method, url, body, key, original
+            )
+            for tampered in tampered_values:
                 test_body = {**body, key: tampered}
                 ev = self._new_evidence()
                 await self._req_ev("baseline", ev, method, url, req_body=body)
@@ -1979,10 +2099,9 @@ class BLFScanner:
                     continue
                 if not self._response_indicates_success(resp_body, status):
                     continue
-                canary = {**body, key: "INVALID_QTY_CANARY"}
-                cs, _, _, _ = await self._request(method, url, json=canary)
-                if cs in (200, 201):
-                    continue
+                # The posture cache already ran an equivalent canary probe
+                # for this endpoint/field via _targeted_payloads_for, so
+                # this module no longer needs its own separate one.
                 pkg = self._build_pkg(ev, title=f"Negative Quantity — {key}={tampered}",
                                       endpoint=url, vuln_type="Negative Quantity", confidence=80)
                 f = Finding(
@@ -2083,8 +2202,25 @@ class BLFScanner:
             s_na, _, rb_na, _ = await self._req_ev("attack", ev_na, method, url,
                                                     req_body=body if body else None, token_override="")
             if s_na in (200, 201) and self._response_indicates_success(rb_na, s_na):
-                sim = difflib.SequenceMatcher(None, base_body[:2000], rb_na[:2000]).ratio()
-                if sim > 0.7:
+                # This decides whether to report a CRITICAL "Missing
+                # Authentication" finding — raw string similarity is the
+                # wrong tool here. Two JSON error/wrapper responses can
+                # share >70% of their bytes (common envelope keys,
+                # boilerplate) while containing completely different
+                # actual data, or two genuinely-identical-data responses
+                # can score under 0.7 purely from key reordering or a
+                # volatile field. Both failure directions matter for a
+                # CRITICAL finding: false positive burns credibility on
+                # a HackerOne submission, false negative silently drops
+                # a real missing-auth bug.
+                if _HAS_SEMANTIC:
+                    is_same = not SemanticDiff.compare(
+                        base_body[:2000], rb_na[:2000], threshold=0.15
+                    ).is_different
+                else:
+                    sim = difflib.SequenceMatcher(None, base_body[:2000], rb_na[:2000]).ratio()
+                    is_same = sim > 0.7
+                if is_same:
                     pkg_na = self._build_pkg(ev_na, title="Unauthenticated Access",
                                              endpoint=url, vuln_type="Missing Authentication",
                                              confidence=90, confirmed=True)
@@ -2113,6 +2249,16 @@ class BLFScanner:
     # MODULE 4 — BOPLA
     async def _check_bopla(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        # Field-expansion probes (?expand=all, ?fields=*, ...) only mean
+        # something against a GET representation, and only against an
+        # actual API route — firing them at a write-only endpoint or a
+        # static asset URL that slipped into the discovered-endpoint list
+        # can only ever echo the same fixed response, wasting 6 requests
+        # per endpoint for zero possible signal.
+        if method.upper() not in ("GET", "HEAD"):
+            return findings
+        if _HAS_FIELD_TYPING and is_non_api_path(url):
+            return findings
         base_len = len(base_body)
         for probe in [
             {"expand": "all"}, {"fields": "*"}, {"include": "all"},
@@ -2238,7 +2384,7 @@ class BLFScanner:
                 pass
 
         for key in ["otp", "mfa_token", "verification_token"]:
-            if key not in body:
+            if key not in body or method.upper() not in ("POST", "PUT", "PATCH"):
                 continue
             test_body = {k: v for k, v in body.items() if k != key}
             ev = self._new_evidence()
@@ -2273,6 +2419,13 @@ class BLFScanner:
     # MODULE 6 — Mass Assignment  [WEAK-2 FIX: dynamic field discovery]
     async def _check_mass_assignment(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        # Mass assignment is a write-path bug class — injecting privileged
+        # fields into a GET request's (nonexistent or ignored) body can't
+        # demonstrate anything, since GET bodies are routinely dropped
+        # before they reach a deserializer. Restricting to write verbs
+        # cuts pure-noise requests without losing any real coverage.
+        if not isinstance(body, dict) or method.upper() not in ("POST", "PUT", "PATCH"):
+            return findings
         privileged_keys = [
             "is_admin", "admin", "role", "is_premium", "premium",
             "subscription", "plan", "credits", "balance", "is_staff",
@@ -2386,6 +2539,17 @@ class BLFScanner:
         findings: list[Finding] = []
         parsed = urlparse(url)
         base   = f"{parsed.scheme}://{parsed.netloc}"
+
+        # This probe list is domain-scoped, not endpoint-scoped — /admin
+        # on a given host is the same target no matter which of the
+        # host's 200 discovered endpoints triggered this check. Without
+        # this cache, a scan of N endpoints on one domain fires these 10
+        # paths × 2 tokens N times each: identical requests, identical
+        # findings, N-fold duplication for zero extra signal.
+        if base in self._admin_paths_probed:
+            return findings
+        self._admin_paths_probed.add(base)
+
         admin_paths = [
             "/admin", "/api/admin", "/api/v1/admin", "/manage",
             "/api/users/all", "/api/roles", "/api/permissions",
@@ -2470,11 +2634,19 @@ class BLFScanner:
     # MODULE 8 — Coupon Abuse
     async def _check_coupon_stacking(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        # Coupon stacking mutates a request body field — meaningless
+        # against GET (no body to stack in) and meaningless if the
+        # matched field isn't actually a code-shaped value (e.g. a
+        # boolean "promo_active" flag matched by name-substring "promo").
+        if not isinstance(body, dict) or method.upper() not in ("POST", "PUT", "PATCH"):
+            return findings
         coupon_keys = ["coupon", "coupon_code", "promo_code", "discount_code", "voucher", "promo"]
         for key in coupon_keys:
             if key not in body:
                 continue
             original      = body[key]
+            if _HAS_FIELD_TYPING and not is_attack_relevant("coupon_stacking", key, original):
+                continue
             base_discount = self._extract_discount(base_body)
             for test_body, label in [
                 ({**body, key: [original, original]}, "duplicate array"),
@@ -2528,7 +2700,15 @@ class BLFScanner:
         for key in time_keys:
             if key not in body:
                 continue
-            for ts, label in [("2099-12-31T23:59:59Z", "far-future"), (-1, "unix-negative")]:
+            original = body[key]
+            if _HAS_FIELD_TYPING:
+                ftype = infer_field_type(key, original)
+                if not is_attack_relevant("time_logic_bypass", key, original):
+                    continue
+                candidates = generate_time_payloads(ftype, original)
+            else:
+                candidates = [("2099-12-31T23:59:59Z", "far-future"), (-1, "unix-negative")]
+            for ts, label in candidates:
                 test_body = {**body, key: ts}
                 ev = self._new_evidence()
                 await self._req_ev("baseline", ev, method, url, req_body=body)
@@ -2575,6 +2755,15 @@ class BLFScanner:
             if isinstance(v, (int, float)) and not isinstance(v, bool)
         ]
         for key in numeric_keys:
+            # Overflowing a foreign-key/PK field (matched here only
+            # because it happens to be numeric) doesn't test integer
+            # overflow — it tests whether that ID exists, which is
+            # IDOR/BOLA's job with proper cross-user comparison, not a
+            # blind overflow probe that will just 404/mismatch and get
+            # mislabeled as an overflow finding if it happens to land on
+            # someone else's record.
+            if _HAS_FIELD_TYPING and not is_attack_relevant("integer_overflow", key, body[key]):
+                continue
             for val in [2**31 - 1, 2**63 - 1, -2**31, 9999999999]:
                 test_body = {**body, key: val}
                 try:
@@ -2652,6 +2841,15 @@ class BLFScanner:
     # MODULE 11 — Hidden Parameter Disclosure
     async def _check_hidden_parameter_disclosure(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        # This module probes debug/verbose-style query params by issuing
+        # GET requests. For an endpoint that's only ever exercised as
+        # POST/PUT/PATCH/DELETE, forcing it through GET usually just
+        # tests routing (404/405) rather than hidden-parameter behavior —
+        # burning 8 requests per endpoint for a question this module
+        # can't actually answer there. Restrict to endpoints that are
+        # genuinely GET-shaped.
+        if method.upper() not in ("GET", "HEAD"):
+            return findings
         probes = {
             "debug": "1", "verbose": "1", "admin": "1", "internal": "1",
             "full": "1", "include_deleted": "1", "show_all": "1", "_debug": "1",
@@ -3209,6 +3407,31 @@ class BLFScanner:
     # MODULE 16 — Limit / Offset Manipulation
     async def _check_limit_offset_manipulation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        if method.upper() not in ("GET", "HEAD"):
+            return findings
+        if _HAS_FIELD_TYPING and is_non_api_path(url):
+            return findings
+
+        def _count(data):
+            if isinstance(data, list):
+                return len(data)
+            if isinstance(data, dict):
+                for k in ("data", "items", "results", "records"):
+                    if k in data and isinstance(data[k], list):
+                        return len(data[k])
+            return 0
+
+        base_data  = self._try_parse_json(base_body)
+        base_count = _count(base_data)
+        # This module tests whether a server-side page-size cap can be
+        # bypassed. That question only makes sense against a paginated
+        # collection response in the first place — a single-object GET
+        # (e.g. /users/42) has no "records" to over-fetch, so probing it
+        # with limit=99999 can't produce a meaningful result either way.
+        is_collection = isinstance(base_data, list) or base_count > 0
+        if not is_collection:
+            return findings
+
         for probe in [
             {"limit": 99999, "offset": 0},
             {"per_page": 99999},
@@ -3229,17 +3452,7 @@ class BLFScanner:
             if status != 200 or len(resp_body) <= len(base_body) * 2:
                 continue
 
-            def _count(data):
-                if isinstance(data, list):
-                    return len(data)
-                if isinstance(data, dict):
-                    for k in ("data", "items", "results", "records"):
-                        if k in data and isinstance(data[k], list):
-                            return len(data[k])
-                return 0
-
-            count      = _count(self._try_parse_json(resp_body))
-            base_count = _count(self._try_parse_json(base_body))
+            count = _count(self._try_parse_json(resp_body))
             if count <= base_count * 2:
                 continue
             pkg = self._build_pkg(
@@ -3274,6 +3487,10 @@ class BLFScanner:
     # MODULE 17 — Soft Delete Bypass
     async def _check_soft_delete_bypass(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        if method.upper() not in ("GET", "HEAD"):
+            return findings
+        if _HAS_FIELD_TYPING and is_non_api_path(url):
+            return findings
         for probe in [
             {"include_deleted": "true"},
             {"show_deleted":    "true"},
@@ -3321,6 +3538,14 @@ class BLFScanner:
     # MODULE 18 — HTTP Method Override
     async def _check_http_method_override(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
+        # Overriding to DELETE only tests something new when the
+        # endpoint's real method isn't already DELETE, and only against
+        # an actual API route — a static asset URL can't have method
+        # semantics to override.
+        if method.upper() == "DELETE":
+            return findings
+        if _HAS_FIELD_TYPING and is_non_api_path(url):
+            return findings
         for oh in [
             {"X-HTTP-Method-Override": "DELETE"},
             {"X-Method-Override":      "DELETE"},
@@ -3372,10 +3597,19 @@ class BLFScanner:
         findings: list[Finding] = []
         if not params:
             return findings
+        if _HAS_FIELD_TYPING and is_non_api_path(url):
+            return findings
         for key, val in list(params.items())[:3]:
             parsed   = urlparse(url)
+            # A duplicate value that doesn't share the original's type
+            # shape (e.g. dropping "999999" next to a UUID param) mostly
+            # just proves the framework rejects malformed input, not how
+            # it resolves two genuinely duplicated parameters — pick a
+            # same-shaped second value so a first/last/concat difference
+            # in behavior actually has a chance to show up.
+            dup_val = pollution_probe_value(key, val) if _HAS_FIELD_TYPING else "999999"
             test_url = urlunparse(
-                parsed._replace(query=f"{key}={val}&{key}=999999")
+                parsed._replace(query=f"{key}={val}&{key}={dup_val}")
             )
             ev = self._new_evidence()
             await self._req_ev("baseline", ev, "GET", url)
