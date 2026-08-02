@@ -93,6 +93,12 @@ import difflib
 import json
 from .models import Finding, ScanConfig
 
+try:
+    from .analysis.semantic_diff import SemanticDiff
+    _HAS_SEMANTIC_DIFF = True
+except ImportError:
+    _HAS_SEMANTIC_DIFF = False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tuning constants
@@ -147,10 +153,39 @@ def _status_class(status: int) -> str:
 
 
 def _similarity(a: str, b: str, limit: int = 3000) -> float:
-    """SequenceMatcher ratio between two strings, truncated for speed."""
+    """
+    Similarity between two response bodies, used across the verifier's
+    majority-vote and re-test gates that decide whether a finding
+    survives to the final report.
+
+    Was: raw difflib.SequenceMatcher.ratio() on truncated strings. That
+    treats a response purely as an opaque byte sequence — two JSON
+    objects with identical data but different key order, or differing
+    only in a timestamp/nonce field, can score as "different" even
+    though nothing meaningful changed, while a response that changed one
+    security-relevant field deep in a large payload can score as
+    "similar" purely because most of the surrounding bytes matched. Since
+    this function runs *after* every other detection module, in the code
+    path with the final say on whether a finding is reported at all,
+    that's exactly the place false-positive/false-negative risk from
+    naive string comparison matters most.
+
+    Now: delegates to SemanticDiff, which parses both bodies as JSON,
+    excludes known-volatile fields (timestamps, nonces, request IDs)
+    before scoring, and only falls back to raw string comparison when a
+    body genuinely isn't JSON. Falls back to the original difflib
+    behavior if semantic_diff isn't importable, so a broken/missing
+    module degrades gracefully instead of breaking verification.
+    """
     if not a or not b:
         return 0.0
-    return difflib.SequenceMatcher(None, a[:limit], b[:limit]).ratio()
+    a, b = a[:limit], b[:limit]
+    if _HAS_SEMANTIC_DIFF:
+        try:
+            return SemanticDiff.compare(a, b).semantic_similarity
+        except Exception:
+            pass  # fall through to raw comparison below
+    return difflib.SequenceMatcher(None, a, b).ratio()
 
 
 def _is_success_body(body: str, status: int) -> bool:
