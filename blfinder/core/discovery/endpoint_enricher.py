@@ -479,6 +479,8 @@ class EndpointEnricher:
         target_url:    str,
         auth_token:    str   = "",
         second_token:  str   = "",
+        api_key_sid:    str  = "",
+        api_key_secret: str  = "",
         cookies:       dict  = None,    # BUG-A FIX: cookie auth support
         extra_headers: dict  = None,    # BUG-A FIX: custom headers
         proxy:         str   = "",      # BUG-H FIX: proxy support
@@ -489,9 +491,11 @@ class EndpointEnricher:
         promote_get:   bool  = True,
         rate_limit_s:  float = 0.1,
     ):
-        self.target_url    = target_url.rstrip("/")
-        self.auth_token    = auth_token
-        self.second_token  = second_token
+        self.target_url     = target_url.rstrip("/")
+        self.auth_token     = auth_token
+        self.second_token   = second_token
+        self.api_key_sid    = api_key_sid
+        self.api_key_secret = api_key_secret
         self.cookies       = dict(cookies) if cookies else {}
         self.extra_headers = dict(extra_headers) if extra_headers else {}
         self.proxy         = proxy or ""
@@ -636,6 +640,10 @@ class EndpointEnricher:
             if not token.lower().startswith("bearer "):
                 token = f"Bearer {token}"
             headers["Authorization"] = token
+        elif self.api_key_sid and self.api_key_secret:
+            import base64
+            raw = f"{self.api_key_sid}:{self.api_key_secret}".encode("utf-8")
+            headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
 
         try:
             import aiohttp
@@ -754,6 +762,8 @@ async def enrich_endpoints(
     target_url:    str,
     auth_token:    str   = "",
     second_token:  str   = "",
+    api_key_sid:    str  = "",
+    api_key_secret: str  = "",
     cookies:       dict  = None,    # BUG-A FIX
     extra_headers: dict  = None,    # BUG-A FIX
     proxy:         str   = "",      # BUG-H FIX
@@ -774,9 +784,11 @@ async def enrich_endpoints(
         return endpoints
 
     enricher = EndpointEnricher(
-        target_url    = target_url,
-        auth_token    = auth_token,
-        second_token  = second_token,
+        target_url     = target_url,
+        auth_token     = auth_token,
+        second_token   = second_token,
+        api_key_sid    = api_key_sid,
+        api_key_secret = api_key_secret,
         cookies       = cookies or {},
         extra_headers = extra_headers or {},
         proxy         = proxy or "",
