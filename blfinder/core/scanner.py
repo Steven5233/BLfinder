@@ -858,7 +858,17 @@ class BLFScanner:
 
     # ── Request infrastructure ────────────────────────────────────────────────
 
-    def _build_headers(self, extra: dict = None, token: str = None) -> dict:
+    @staticmethod
+    def _basic_auth_value(sid: str, secret: str) -> str:
+        raw = f"{sid}:{secret}".encode("utf-8")
+        return "Basic " + base64.b64encode(raw).decode("ascii")
+
+    def _build_headers(
+        self,
+        extra: dict = None,
+        token: str = None,
+        api_key: tuple = None,
+    ) -> dict:
         ua = (
             next(self._ua_cycle)
             if getattr(self.config, "user_agent_rotate", True)
@@ -872,8 +882,14 @@ class BLFScanner:
             "X-Requested-With": "XMLHttpRequest",
         }
         t = token if token is not None else self.config.auth_token
+        sid, secret = (
+            api_key if api_key is not None
+            else (self.config.api_key_sid, self.config.api_key_secret)
+        )
         if t:
             headers["Authorization"] = f"Bearer {t}"
+        elif sid and secret:
+            headers["Authorization"] = self._basic_auth_value(sid, secret)
         if self._session_mgr and self._session_mgr.state.csrf_token:
             csrf_hdr = self._session_mgr.state.csrf_header_name or "X-CSRF-Token"
             headers[csrf_hdr] = self._session_mgr.state.csrf_token
@@ -888,6 +904,7 @@ class BLFScanner:
         url: str,
         headers: dict = None,
         token_override: str = None,
+        api_key_override: tuple = None,
         _retry_on_401: bool = True,
         **kwargs,
     ) -> tuple[int, dict, str, float]:
@@ -914,6 +931,12 @@ class BLFScanner:
                 req_headers.pop("Authorization", None)
             else:
                 req_headers["Authorization"] = f"Bearer {token_override}"
+        elif api_key_override is not None:
+            sid, secret = api_key_override
+            if sid and secret:
+                req_headers["Authorization"] = self._basic_auth_value(sid, secret)
+            else:
+                req_headers.pop("Authorization", None)
 
         cookies = dict(self.config.cookies)
         if self._session_mgr:
@@ -999,6 +1022,7 @@ class BLFScanner:
         url: str,
         req_body: dict | None = None,
         token_override: str | None = None,
+        api_key_override: tuple | None = None,
         extra_headers: dict | None = None,
         **kwargs,
     ) -> tuple[int, dict, str, float]:
@@ -1006,11 +1030,16 @@ class BLFScanner:
             method, url,
             headers=extra_headers,
             token_override=token_override,
+            api_key_override=api_key_override,
             json=req_body if req_body else None,
             **kwargs,
         )
         if ev is not None:
-            built = self._build_headers(extra_headers, token=token_override)
+            built = self._build_headers(
+                extra_headers,
+                token=token_override,
+                api_key=api_key_override,
+            )
             ev.record(
                 label=label, method=method, url=url,
                 req_headers=built, req_body=req_body,
@@ -2154,11 +2183,17 @@ class BLFScanner:
                 ]):
                     continue
                 confirmed = False
-                if self.config.second_user_token:
+                _s2_sid    = getattr(self.config, "second_api_key_sid", "")
+                _s2_secret = getattr(self.config, "second_api_key_secret", "")
+                if self.config.second_user_token or (_s2_sid and _s2_secret):
                     s2, _, _, _ = await self._req_ev(
                         "cross_user", ev, method, test_url,
                         req_body=body if body else None,
-                        token_override=self.config.second_user_token,
+                        token_override=self.config.second_user_token or None,
+                        api_key_override=(
+                            (_s2_sid, _s2_secret)
+                            if not self.config.second_user_token else None
+                        ),
                     )
                     confirmed = s2 == 200
                 if self.config.no_auth_check:
@@ -2595,7 +2630,10 @@ class BLFScanner:
 
     async def _check_function_level_access(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        if not self.config.second_user_token:
+        _s2_sid    = getattr(self.config, "second_api_key_sid", "")
+        _s2_secret = getattr(self.config, "second_api_key_secret", "")
+        _has_second_identity = bool(self.config.second_user_token) or bool(_s2_sid and _s2_secret)
+        if not _has_second_identity:
             return findings
         for test_method in ["DELETE", "PUT", "PATCH"]:
             if test_method == method:
@@ -2605,7 +2643,11 @@ class BLFScanner:
             status, _, resp_body, _ = await self._req_ev(
                 "attack", ev, test_method, url,
                 req_body=body if body else None,
-                token_override=self.config.second_user_token,
+                token_override=self.config.second_user_token or None,
+                api_key_override=(
+                    (_s2_sid, _s2_secret)
+                    if not self.config.second_user_token else None
+                ),
             )
             if status in (200, 201, 204):
                 pkg = self._build_pkg(
