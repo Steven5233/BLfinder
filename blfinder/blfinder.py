@@ -446,6 +446,30 @@ EXAMPLES:
     core.add_argument("-T2", "--token2",   default="",   help="Auth token for User 2")
     core.add_argument("-T3", "--token3",   default="",   help="Auth token for User 3")
     core.add_argument(
+        "--api-key-sid", default="", metavar="SID",
+        help="API Key SID for User 1 (HTTP Basic Auth, requires --api-key-secret).",
+    )
+    core.add_argument(
+        "--api-key-secret", default="", metavar="SECRET",
+        help="API Key Secret for User 1 (paired with --api-key-sid).",
+    )
+    core.add_argument(
+        "--api-key-sid2", default="", metavar="SID",
+        help="API Key SID for User 2 (requires --api-key-secret2).",
+    )
+    core.add_argument(
+        "--api-key-secret2", default="", metavar="SECRET",
+        help="API Key Secret for User 2 (paired with --api-key-sid2).",
+    )
+    core.add_argument(
+        "--api-key-sid3", default="", metavar="SID",
+        help="API Key SID for User 3 (paired with --api-key-secret3).",
+    )
+    core.add_argument(
+        "--api-key-secret3", default="", metavar="SECRET",
+        help="API Key Secret for User 3 (paired with --api-key-sid3).",
+    )
+    core.add_argument(
         "-e", "--endpoints", default="",
         help="Endpoints JSON file (list of {url, method, body, params})",
     )
@@ -457,7 +481,14 @@ EXAMPLES:
     core.add_argument(
         "-c", "--cookie",
         action="append", default=[], metavar="name=value",
-        help="Extra cookie (repeatable)",
+        help="Extra cookie (repeatable). A whole pasted 'Cookie:' header "
+             "value also works in a single -c, e.g. -c \"a=1; b=2; c=3\"",
+    )
+    core.add_argument(
+        "--cookie-file", default="", metavar="FILE",
+        help="Load a full cookie jar from a file — JSON export from a "
+             "browser cookie-editor extension, a Netscape cookies.txt, "
+             "or a plain-text pasted 'Cookie:' header.",
     )
     core.add_argument("--proxy",             default="",            help="HTTP proxy URL")
     core.add_argument(
@@ -925,12 +956,89 @@ def parse_headers(header_list: list[str]) -> dict:
 
 
 def parse_cookies(cookie_list: list[str]) -> dict:
-    """Parse ['name=value', ...] into a dict."""
+    """Parse ['name=value', ...] into a dict. Each item may itself be a
+    full pasted cookie header (semicolon-separated pairs), e.g. copying
+    the raw 'Cookie: a=1; b=2; c=3' value straight from browser devtools
+    into a single -c argument."""
     cookies: dict = {}
     for item in cookie_list:
-        if "=" in item:
-            k, _, v = item.partition("=")
-            cookies[k.strip()] = v.strip()
+        item = item.strip()
+        if item.lower().startswith("cookie:"):
+            item = item.split(":", 1)[1].strip()
+        for pair in item.split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                k, _, v = pair.partition("=")
+                k, v = k.strip(), v.strip()
+                if k:
+                    cookies[k] = v
+    return cookies
+
+
+def load_cookie_file(path: str) -> dict:
+    """Load a full site cookie jar from a file so a large cookie set
+    doesn't have to be retyped/re-pasted on the command line. Accepts:
+      - JSON array export (Cookie-Editor / EditThisCookie style):
+        [{"name": "...", "value": "..."}, ...]
+      - JSON object: {"name": "value", ...}
+      - Netscape/Mozilla cookies.txt (7 tab-separated fields per line)
+      - Plain text: one or more 'name=value' pairs, semicolon or
+        newline separated (a raw pasted Cookie header also works here)
+    """
+    cookies: dict = {}
+    if not path:
+        return cookies
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except OSError as e:
+        print(f"[!] Could not read --cookie-file {path}: {e}")
+        return cookies
+
+    stripped = raw.strip()
+    if not stripped:
+        return cookies
+
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            data = json.loads(stripped)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    cookies[str(k)] = str(v)
+                return cookies
+            if isinstance(data, list):
+                for entry in data:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = entry.get("name") or entry.get("key")
+                    value = entry.get("value")
+                    if name is not None and value is not None:
+                        cookies[str(name)] = str(value)
+                return cookies
+        except json.JSONDecodeError:
+            pass  # fall through to plain-text/Netscape parsing below
+
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "\t" in line:
+            fields = line.split("\t")
+            if len(fields) >= 7:
+                name, value = fields[5].strip(), fields[6].strip()
+                if name:
+                    cookies[name] = value
+                continue
+        cookies.update(parse_cookies([line]))
+    return cookies
+
+
+def resolve_cookies(args: argparse.Namespace) -> dict:
+    """Merge -c/--cookie values with --cookie-file, if given. Explicit
+    -c entries take precedence over the file so a stale/wrong cookie in
+    the file can still be overridden on the command line."""
+    cookies = load_cookie_file(getattr(args, "cookie_file", ""))
+    cookies.update(parse_cookies(args.cookie))
     return cookies
 
 
@@ -1358,14 +1466,16 @@ async def run_source_only(args: argparse.Namespace) -> int:
     print(f"[*] BLFinder — Source Code Scanner Only: {target}\n")
 
     config = ScanConfig(
-        target_url  = target,
-        auth_token  = args.token,
-        headers     = parse_headers(args.header),
-        cookies     = parse_cookies(args.cookie),
-        proxy       = args.proxy,
-        rate_limit  = args.rate,
-        timeout     = args.timeout,
-        verbose     = args.verbose,
+        target_url     = target,
+        auth_token     = args.token,
+        api_key_sid    = args.api_key_sid,
+        api_key_secret = args.api_key_secret,
+        headers        = parse_headers(args.header),
+        cookies        = resolve_cookies(args),
+        proxy          = args.proxy,
+        rate_limit     = args.rate,
+        timeout        = args.timeout,
+        verbose        = args.verbose,
     )
     # Force-enable regardless of --source-scan/profile — this mode's whole
     # point is running this module and only this module.
@@ -1553,14 +1663,16 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
         )
 
     config = ScanConfig(
-        target_url  = otp_url,
-        auth_token  = args.token,
-        headers     = parse_headers(args.header),
-        cookies     = parse_cookies(args.cookie),
-        proxy       = args.proxy,
-        rate_limit  = args.rate,
-        timeout     = args.timeout,
-        verbose     = args.verbose,
+        target_url     = otp_url,
+        auth_token     = args.token,
+        api_key_sid    = args.api_key_sid,
+        api_key_secret = args.api_key_secret,
+        headers        = parse_headers(args.header),
+        cookies        = resolve_cookies(args),
+        proxy          = args.proxy,
+        rate_limit     = args.rate,
+        timeout        = args.timeout,
+        verbose        = args.verbose,
     )
 
     findings = []
@@ -1917,6 +2029,16 @@ async def run_deep_discovery(
 async def main() -> int:  # noqa: C901  (intentionally long — orchestration only)
     args = parse_args()
 
+    for _sid_flag, _secret_flag, _sid_val, _secret_val in [
+        ("--api-key-sid",  "--api-key-secret",  args.api_key_sid,  args.api_key_secret),
+        ("--api-key-sid2", "--api-key-secret2", args.api_key_sid2, args.api_key_secret2),
+        ("--api-key-sid3", "--api-key-secret3", args.api_key_sid3, args.api_key_secret3),
+    ]:
+        if bool(_sid_val) != bool(_secret_val):
+            missing = _secret_flag if _sid_val else _sid_flag
+            print(f"[!] {missing} is required when its SID/Secret pair partner is set — exiting.")
+            return 1
+
     # ── DB-only / utility commands ────────────────────────────────────────────
     if args.show_history:
         await cmd_show_history(args)
@@ -1988,8 +2110,14 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         auth_token            = args.token,
         second_user_token     = args.token2,
         third_user_token      = args.token3,
+        api_key_sid           = args.api_key_sid,
+        api_key_secret        = args.api_key_secret,
+        second_api_key_sid    = args.api_key_sid2,
+        second_api_key_secret = args.api_key_secret2,
+        third_api_key_sid     = args.api_key_sid3,
+        third_api_key_secret  = args.api_key_secret3,
         headers               = parse_headers(args.header),
-        cookies               = parse_cookies(args.cookie),
+        cookies               = resolve_cookies(args),
         proxy                 = args.proxy,
         rate_limit            = merged_settings.get("rate_limit", args.rate),
         timeout               = args.timeout,
@@ -2348,10 +2476,11 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         1 for ep in endpoints
         if not ep.get("body") and not ep.get("params")
     )
+    _has_auth = bool(args.token) or bool(args.api_key_sid and args.api_key_secret)
     _should_enrich = (
         not getattr(args, "no_enrich", False)
         and _bare_count > 0
-        and args.token  # need auth to probe protected endpoints
+        and _has_auth  # need auth to probe protected endpoints
         and not args.no_scan
     )
     if _should_enrich:
@@ -2370,6 +2499,8 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 target_url    = config.target_url,
                 auth_token    = config.auth_token,
                 second_token  = getattr(config, "second_user_token", "") or "",
+                api_key_sid    = getattr(config, "api_key_sid", "") or "",
+                api_key_secret = getattr(config, "api_key_secret", "") or "",
                 cookies       = dict(getattr(config, "cookies", {}) or {}),
                 extra_headers = dict(getattr(config, "headers", {}) or {}),
                 proxy         = getattr(config, "proxy", "") or "",
@@ -2394,10 +2525,11 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 "core/discovery/endpoint_enricher.py in your project.\n"
                 "[!] Continuing with bare endpoints (attack modules may find less)."
             )
-    elif _bare_count > 0 and not args.token:
+    elif _bare_count > 0 and not _has_auth:
         print(
             f"[*] {_bare_count} endpoints have no body/params. "
-            f"Pass -T TOKEN to enable automatic enrichment (--enrich)."
+            f"Pass -T TOKEN or --api-key-sid/--api-key-secret to enable "
+            f"automatic enrichment (--enrich)."
         )
     elif getattr(args, "no_enrich", False) and _bare_count > 0:
         print(f"[*] Enrichment skipped (--no-enrich). {_bare_count} endpoints are bare.")
