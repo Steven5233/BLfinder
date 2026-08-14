@@ -57,6 +57,12 @@ class ScanConfig:
     auth_token: str = ""
     second_user_token: str = ""
     third_user_token: str = ""
+    api_key_sid: str = ""
+    api_key_secret: str = ""
+    second_api_key_sid: str = ""
+    second_api_key_secret: str = ""
+    third_api_key_sid: str = ""
+    third_api_key_secret: str = ""
     no_auth_check: bool = True
     timeout: int = 20
     rate_limit: float = 0.3
