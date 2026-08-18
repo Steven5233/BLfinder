@@ -286,21 +286,16 @@ class EvidenceCapture:
 
         Labels: "baseline", "attack", "no_auth", "cross_user", or any custom string.
         """
-        # Sanitise headers — remove actual token values from evidence
-        # (replace with placeholder length indicator to avoid leaking tokens)
-        safe_req_headers = _sanitise_headers(req_headers)
-        safe_resp_headers = _sanitise_headers(resp_headers)
-
         req = RequestRecord(
             method=method,
             url=url,
-            headers=safe_req_headers,
+            headers=dict(req_headers),
             body=req_body,
             label=label,
         )
         resp = ResponseRecord(
             status=resp_status,
-            headers=safe_resp_headers,
+            headers=dict(resp_headers),
             body=resp_body,
             elapsed_ms=elapsed * 1000,
             label=label,
@@ -388,29 +383,3 @@ class EvidenceCapture:
     def clear(self):
         """Reset for reuse across multiple findings."""
         self._pairs.clear()
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-_SENSITIVE_HEADER_PREFIXES = ("authorization", "x-api-key", "x-auth", "cookie", "set-cookie")
-
-
-def _sanitise_headers(headers: dict) -> dict:
-    """
-    Replace sensitive header values with length-only placeholders.
-    Keeps enough information to be useful while not leaking tokens.
-    """
-    result = {}
-    for k, v in headers.items():
-        k_lower = k.lower()
-        if any(k_lower.startswith(prefix) for prefix in _SENSITIVE_HEADER_PREFIXES):
-            if k_lower == "authorization" and v.startswith("Bearer "):
-                token = v[7:]
-                result[k] = f"Bearer {token[:8]}...{token[-4:]} [{len(token)} chars]"
-            elif k_lower.startswith("cookie"):
-                result[k] = "[cookie redacted for security]"
-            else:
-                result[k] = f"[{len(v)} chars, redacted]"
-        else:
-            result[k] = v
-    return result
