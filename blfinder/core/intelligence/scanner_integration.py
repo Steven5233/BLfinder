@@ -80,6 +80,12 @@ def _dict_to_finding(d: dict, scanner) -> Any:
             parameter       = d.get("parameter",      ""),
         )
 
+        pkg = d.get("evidence_package")
+        if pkg is not None:
+            f.evidence_package = pkg  # type: ignore[attr-defined]
+            if getattr(pkg, "summary", None):
+                f.evidence = pkg.summary
+
         if not getattr(f, "false_positive_checks", None):
             f.false_positive_checks = []
         if not getattr(f, "confidence_reasons", None):
