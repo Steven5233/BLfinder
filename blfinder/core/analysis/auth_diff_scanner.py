@@ -81,6 +81,7 @@ Stage 5 — Finding Generation
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 from dataclasses import dataclass, field
@@ -251,6 +252,45 @@ class SchemaExtractor:
 # Diff engine
 # ─────────────────────────────────────────────────────────────────────────────
 
+# JWTs are re-issued fresh on nearly every call (unique jti/iat/exp), so a
+# raw string diff on a JWT field will almost always report "different" even
+# when it's the exact same identity/session. Decode both tokens and compare
+# only the claims that actually indicate a different identity or privilege
+# level was disclosed — ignore claims that vary by design on every issuance.
+_JWT_VOLATILE_CLAIMS = {"iat", "exp", "nbf", "jti", "nonce"}
+_JWT_IDENTITY_CLAIMS = {
+    "sub", "uid", "user_id", "userId", "email", "role", "roles",
+    "scope", "scopes", "aud", "admin", "is_admin", "permissions",
+}
+
+
+def _decode_jwt_claims(token: Any) -> dict | None:
+    if not isinstance(token, str):
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _jwt_identity_differs(a_token: Any, b_token: Any) -> bool | None:
+    """True/False if an identity-relevant claim differs. None if either
+    token isn't a decodable JWT — caller should fall back to raw compare."""
+    a = _decode_jwt_claims(a_token)
+    b = _decode_jwt_claims(b_token)
+    if a is None or b is None:
+        return None
+    for key in _JWT_IDENTITY_CLAIMS:
+        if a.get(key) != b.get(key):
+            return True
+    return False
+
+
 class DiffEngine:
     """
     Compares two FieldSchema dicts and produces DiffFinding objects.
@@ -283,8 +323,22 @@ class DiffEngine:
             if auth_field.sensitivity < self.min_sensitivity:
                 continue
 
+            # A null/empty value can't be an exposure or a leak — nothing
+            # was actually disclosed, so skip before diffing/flagging it.
+            if self._is_empty(unauth_field.value) and self._is_empty(auth_field.value):
+                continue
+            if self._is_empty(unauth_field.value):
+                continue
+
             # Type 4: VALUE_EXPOSURE — same field, different/more-complete value
-            value_diff = self._value_differs(auth_field.value, unauth_field.value)
+            if auth_field.category == "JWT" and unauth_field.category == "JWT":
+                jwt_diff   = _jwt_identity_differs(auth_field.value, unauth_field.value)
+                value_diff = (
+                    jwt_diff if jwt_diff is not None
+                    else self._value_differs(auth_field.value, unauth_field.value)
+                )
+            else:
+                value_diff = self._value_differs(auth_field.value, unauth_field.value)
             if value_diff:
                 findings.append(DiffFinding(
                     diff_type="VALUE_EXPOSURE",
@@ -471,6 +525,16 @@ class DiffEngine:
         return SEVERITY_LOW
 
     @staticmethod
+    def _is_empty(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str) and value.strip() == "":
+            return True
+        if isinstance(value, (list, dict)) and len(value) == 0:
+            return True
+        return False
+
+    @staticmethod
     def _value_differs(a: Any, b: Any) -> bool:
         if a is None and b is None: return False
         if a is None or b is None:  return True
@@ -592,10 +656,12 @@ class AuthDiffScanner:
         token1 = self._config.auth_token
         token2 = getattr(self._config, "second_user_token", "")
 
+        ev = self._scanner._new_evidence()
+
         # ── Authenticated request ─────────────────────────────────────────────
-        auth_status, auth_hdrs, auth_body, _ = await self._scanner._request(
-            method, url,
-            json=body if body else None,
+        auth_status, auth_hdrs, auth_body, _ = await self._scanner._req_ev(
+            "baseline", ev, method, url,
+            req_body=body if body else None,
             params=params if params else None,
             token_override=token1 or None,
         )
@@ -612,11 +678,12 @@ class AuthDiffScanner:
             return findings  # no fields to diff
 
         # ── Unauthenticated request ───────────────────────────────────────────
-        unauth_status, _, unauth_body, _ = await self._scanner._request(
-            method, url,
-            json=body if body else None,
+        unauth_status, _, unauth_body, _ = await self._scanner._req_ev(
+            "no_auth", ev, method, url,
+            req_body=body if body else None,
             params=params if params else None,
             token_override="",   # explicitly no token
+            cookies_override={}, # explicitly no cookies — must be a true anonymous request
         )
 
         if unauth_status == 0:
@@ -633,13 +700,13 @@ class AuthDiffScanner:
                 endpoint=url, method=method,
             )
             for dr in diff_results:
-                findings.append(self._to_finding(dr, "auth_diff"))
+                findings.append(self._to_finding(dr, "auth_diff", ev=ev))
 
         # ── Cross-user diff (when second token available) ─────────────────────
         if token2 and token2 != token1:
-            user2_status, _, user2_body, _ = await self._scanner._request(
-                method, url,
-                json=body if body else None,
+            user2_status, _, user2_body, _ = await self._scanner._req_ev(
+                "cross_user", ev, method, url,
+                req_body=body if body else None,
                 params=params if params else None,
                 token_override=token2,
             )
@@ -652,7 +719,7 @@ class AuthDiffScanner:
                     endpoint=url, method=method,
                 )
                 for dr in cross_results:
-                    findings.append(self._to_finding(dr, "cross_user_diff"))
+                    findings.append(self._to_finding(dr, "cross_user_diff", ev=ev))
 
         return findings
 
@@ -703,7 +770,7 @@ class AuthDiffScanner:
 
     # ── Conversion to Finding-compatible dict ─────────────────────────────────
 
-    def _to_finding(self, dr: DiffFinding, source: str) -> dict:
+    def _to_finding(self, dr: DiffFinding, source: str, ev: "EvidenceCapture | None" = None) -> dict:
         """
         Convert a DiffFinding to a dict compatible with BLFScanner's
         Finding dataclass constructor.
@@ -757,6 +824,12 @@ class AuthDiffScanner:
             "request":     {"method": dr.method, "url": dr.endpoint},
             "response_summary": dr.evidence,
             "evidence":    dr.evidence,
+            "evidence_package": self._scanner._build_pkg(
+                ev, title=title, endpoint=dr.endpoint, vuln_type=diff_label,
+                confidence=min(100, dr.sensitivity + 10),
+                confirmed=dr.diff_type in ("CROSS_USER_DATA_LEAK", "ROLE_ESCALATION_FIELD"),
+                fp_notes=[],
+            ) if ev is not None else None,
             "recommendation": dr.recommendation,
             "cwe":         cwe_map.get(cat, "CWE-200"),
             "cvss":        cvss_map.get(dr.severity, 5.3),
