@@ -99,6 +99,8 @@ try:
 except ImportError:
     _HAS_SEMANTIC_DIFF = False
 
+from .response_heuristics import looks_like_error
+
 
 
 
@@ -122,12 +124,6 @@ PASS_FRACTION = 0.5
 
 
 HARD_FAIL_STATUSES = {0, 404, 410, 500, 502, 503, 504}
-
-
-FAILURE_TOKENS = frozenset([
-    "error", "invalid", "rejected", "denied", "forbidden",
-    "not found", "unauthorized", "bad request", "exception",
-])
 
 
 SUCCESS_TOKENS = frozenset([
@@ -194,10 +190,7 @@ def _is_success_body(body: str, status: int) -> bool:
         return False
     if not body or body.startswith(("TIMEOUT", "ERROR:", "CONNECTION_ERROR:")):
         return False
-    bl = body.lower()
-    if any(t in bl for t in FAILURE_TOKENS):
-        return False
-    return True
+    return not looks_like_error(body, status)
 
 
 
