@@ -47,6 +47,7 @@ class Finding:
     false_positive_checks: list[str] = field(default_factory=list)
     endpoint: str = ""
     parameter: str = ""
+    evidence_package: Optional[object] = None
 
 
 @dataclass

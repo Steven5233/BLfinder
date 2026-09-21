@@ -103,6 +103,16 @@ class PoCGenerator:
             lines.append(body_str)
         return "\n".join(lines)
 
+    def _baseline_pair(self, f: Finding):
+        """Return (baseline_body, baseline_status) from the real captured
+        EvidencePackage, or (None, None) if no baseline was captured.
+        Never fabricate a baseline from the attack request itself."""
+        pkg = getattr(f, "evidence_package", None)
+        if pkg and getattr(pkg, "baseline", None):
+            b = pkg.baseline
+            return b.request.body, b.response.status
+        return None, None
+
     def _python_script_header(self) -> str:
         return '''#!/usr/bin/env python3
 """
@@ -124,6 +134,25 @@ session.verify = False
         method = req.get("method", "POST")
         body = req.get("body", {})
         token = self.config.auth_token
+        baseline_body, baseline_status = self._baseline_pair(f)
+
+        if baseline_body is None:
+            baseline_comment = (
+                "# NOTE: no baseline was captured for this finding.\n"
+                "# Replace normal_body below with the UNMODIFIED request body\n"
+                "# (the legitimate price/quantity) before running this PoC.\n"
+            )
+            normal_body_literal = json.dumps(body, indent=4)
+        else:
+            baseline_comment = f"# Captured baseline responded HTTP {baseline_status}\n"
+            try:
+                normal_body_literal = json.dumps(
+                    baseline_body if isinstance(baseline_body, (dict, list))
+                    else json.loads(baseline_body),
+                    indent=4,
+                )
+            except (TypeError, ValueError):
+                normal_body_literal = json.dumps({"raw": str(baseline_body)}, indent=4)
 
         python = self._python_script_header() + f'''
 TARGET = "{url}"
@@ -133,20 +162,22 @@ HEADERS = {{
 }}
 
 # Step 1: Baseline — normal purchase
-normal_body = {json.dumps({k: v for k, v in body.items()}, indent=4)}
+{baseline_comment}normal_body = {normal_body_literal}
 r1 = session.request("{method}", TARGET, json=normal_body, headers=HEADERS)
 print(f"[BASELINE] Status: {{r1.status_code}}")
 print(f"[BASELINE] Body: {{r1.text[:300]}}")
 
-# Step 2: Tampered — manipulated price/quantity
+# Step 2: Tampered — manipulated price/quantity (as captured by BLFinder)
 tampered_body = {json.dumps(body, indent=4)}
 r2 = session.request("{method}", TARGET, json=tampered_body, headers=HEADERS)
 print(f"\\n[TAMPERED] Status: {{r2.status_code}}")
 print(f"[TAMPERED] Body: {{r2.text[:500]}}")
 
-if r2.status_code in (200, 201):
-    print("\\n[!] VULNERABILITY CONFIRMED — tampered value accepted")
-    print("[!] Compare order values in both responses above")
+if r2.status_code in (200, 201) and r2.text.strip() != r1.text.strip():
+    print("\\n[!] LIKELY VULNERABLE — tampered request accepted and response differs from baseline")
+    print("[!] Manually confirm the order/invoice total reflects the tampered price, not just HTTP 200")
+elif r2.status_code in (200, 201):
+    print("\\n[?] Tampered request returned 200 but response is identical to baseline — verify manually, may be a false positive")
 else:
     print("\\n[-] Tampered request rejected")
 '''
@@ -178,6 +209,11 @@ else:
         body = req.get("body", {})
         token1 = self.config.auth_token
         token2 = self.config.second_user_token
+        baseline_body, _ = self._baseline_pair(f)
+        owner_url = url
+        pkg = getattr(f, "evidence_package", None)
+        if pkg and getattr(pkg, "baseline", None):
+            owner_url = pkg.baseline.request.url
 
         two_user_section = ""
         if token2:
@@ -202,20 +238,20 @@ if r3.status_code == 200:
 # IDOR/BOLA PoC
 # Requires two accounts: User 1 (resource owner) and User 2 (attacker)
 
-TARGET = "{url}"
+{"# NOTE: no baseline captured — OWNER_URL below is a placeholder, replace it" + chr(10) + "# with User 1's own resource URL before running." + chr(10) if owner_url == url else ""}OWNER_URL = "{owner_url}"    # User 1's own resource (baseline, if captured)
+TARGET    = "{url}"          # The other user's resource ID — the actual attack URL
 
 # Step 1: User 1 accesses their own resource (baseline)
 HEADERS_USER1 = {{
     "Authorization": "Bearer {token1}",
     "Content-Type": "application/json",
 }}
-r1 = session.request("{method}", TARGET, headers=HEADERS_USER1)
+r1 = session.request("{method}", OWNER_URL, headers=HEADERS_USER1)
 print(f"[USER1 OWN RESOURCE] Status: {{r1.status_code}}")
 print(f"[USER1 RESPONSE] Body: {{r1.text[:300]}}")
 
-# Step 2: Access a neighbouring resource ID (IDOR attempt)
-tampered_url = "{url}"  # URL with ID replaced as shown in Evidence
-r2 = session.request("{method}", tampered_url, headers=HEADERS_USER1)
+# Step 2: Access the DIFFERENT resource ID flagged by BLFinder (IDOR attempt)
+r2 = session.request("{method}", TARGET, headers=HEADERS_USER1)
 print(f"\\n[IDOR ATTEMPT] Status: {{r2.status_code}}")
 print(f"[IDOR RESPONSE] Body: {{r2.text[:500]}}")
 
