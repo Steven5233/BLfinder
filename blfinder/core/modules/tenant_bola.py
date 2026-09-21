@@ -47,6 +47,7 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 from ..models import Finding, Severity, ProofOfConcept
 from .idor_mass_enum import _detect_id_type, _build_numeric_range
+from ..response_heuristics import looks_like_error
 
 try:
     from ..analysis.semantic_diff import SemanticDiff
@@ -126,6 +127,15 @@ class TenantBOLAScanner:
 
     async def _test_cross_account(self, url, method, base_body, loc):
         try:
+            noauth_status, _, noauth_body, _ = await self._request(
+                method, url, token_override=""
+            )
+        except Exception as e:
+            if self._config.verbose:
+                print(f"[!] TenantBOLAScanner unauth baseline probe on {url}: {e}")
+            noauth_status, noauth_body = None, ""
+
+        try:
             status2, _, body2, _ = await self._request(
                 method, url, token_override=self._second_token
             )
@@ -137,6 +147,9 @@ class TenantBOLAScanner:
             return None
         if not self._looks_ok(body2, status2):
             return None
+        if noauth_status in (200, 201) and self._looks_ok(noauth_body, noauth_status):
+            if not self._differs_meaningfully(noauth_body, body2):
+                return None
 
         return self._build(
             url, method, loc,
@@ -325,15 +338,7 @@ class TenantBOLAScanner:
     def _looks_ok(self, body: str, status: int) -> bool:
         if self._resp_ok:
             return self._resp_ok(body, status)
-        if not body:
-            return False
-        lower = body.lower()
-        return status in (200, 201) and not any(
-            s in lower for s in (
-                "unauthorized", "forbidden", "not found",
-                '"error"', "internal server error", "stack trace",
-            )
-        )
+        return status in (200, 201) and not looks_like_error(body, status)
 
 
 

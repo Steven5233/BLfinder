@@ -898,6 +898,23 @@ class BLFScanner:
             headers.update(extra)
         return headers
 
+    async def _read_body_capped(self, resp) -> str:
+        limit = getattr(self.config, "max_body_bytes", 10_000_000)
+        chunks = []
+        total = 0
+        async for chunk in resp.content.iter_chunked(65536):
+            total += len(chunk)
+            if total > limit:
+                chunks.append(chunk[: limit - (total - len(chunk))])
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        encoding = resp.charset or "utf-8"
+        try:
+            return raw.decode(encoding, errors="replace")
+        except LookupError:
+            return raw.decode("utf-8", errors="replace")
+
     async def _request(
         self,
         method: str,
@@ -954,7 +971,7 @@ class BLFScanner:
                 **kwargs,
             ) as resp:
                 elapsed   = time.time() - start
-                body      = await resp.text(errors="replace")
+                body      = await self._read_body_capped(resp)
                 resp_hdrs = dict(resp.headers)
                 self.rate_limiter.record(url, resp.status, elapsed)
                 self.request_log.append({
@@ -3039,7 +3056,7 @@ class BLFScanner:
                 proxy=self.config.proxy if self.config.proxy else None,
             ) as resp:
                 elapsed = time.time() - start
-                body = await resp.text(errors="replace")
+                body = await self._read_body_capped(resp)
                 return resp.status, dict(resp.headers), body, elapsed
         except asyncio.TimeoutError:
             return 0, {}, "TIMEOUT", time.time() - start

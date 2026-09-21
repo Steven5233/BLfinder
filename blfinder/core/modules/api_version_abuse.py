@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urljoin
 
+from ..response_heuristics import looks_like_error
+
 
 @dataclass
 class APIVersion:
@@ -277,7 +279,7 @@ class APIVersionScanner:
                     continue
                 if len(resp_body) < 30:
                     continue
-                if _body_is_error(resp_body):
+                if looks_like_error(resp_body):
                     continue
 
 
@@ -565,9 +567,3 @@ def _flatten_keys(obj: Any, prefix: str = "") -> list[str]:
     return keys
 
 
-def _body_is_error(body: str) -> bool:
-    b = body.lower()
-    return any(s in b for s in [
-        "not found", "error", "invalid", "forbidden",
-        "unauthorized", "does not exist",
-    ])

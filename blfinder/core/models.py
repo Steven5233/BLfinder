@@ -66,6 +66,7 @@ class ScanConfig:
     third_api_key_secret: str = ""
     no_auth_check: bool = True
     timeout: int = 20
+    max_body_bytes: int = 10_000_000
     rate_limit: float = 0.3
     max_redirects: int = 5
     verify_ssl: bool = False

@@ -32,6 +32,8 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from ..response_heuristics import looks_like_error
+
 
 class ResourceStatusType(str, Enum):
     OWNED     = "OWNED"       
@@ -283,7 +285,7 @@ class IDORMassEnumerator:
                 status, _, resp_body, _ = await self._request(
                     method, test_url
                 )
-                if status == 200 and not _body_is_error(resp_body):
+                if status == 200 and not looks_like_error(resp_body):
                     ev  = self._new_ev()
                     pkg = self._build_pkg(
                         ev,
@@ -428,7 +430,7 @@ class IDORMassEnumerator:
                     method, rs.url,
                     token_override=self._config.second_user_token,
                 )
-                confirmed = s2 == 200 and not _body_is_error(rb2)
+                confirmed = s2 == 200 and not looks_like_error(rb2)
                 if rs:
                     rs.confirmed_idor      = confirmed
                     rs.cross_user_status   = s2
@@ -529,7 +531,7 @@ def _classify_status(
         return ResourceStatusType.ERROR
     if status not in (200, 201):
         return ResourceStatusType.UNKNOWN
-    if _body_is_error(body):
+    if looks_like_error(body):
         return ResourceStatusType.NOT_FOUND
     body_hash = _hash(body)
     if body_hash == owned_hash:
@@ -549,14 +551,6 @@ def _find_id_fields(body: dict) -> list[tuple[str, Any]]:
     return results
 
 
-def _body_is_error(body: str) -> bool:
-    if not body:
-        return True
-    b = body.lower()
-    return any(s in b for s in [
-        "not found", "does not exist", "no resource",
-        "invalid id", "not authorized", "access denied",
-    ])
 
 
 def _hash(s: str) -> str:
