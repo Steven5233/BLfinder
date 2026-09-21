@@ -22,9 +22,9 @@ import argparse
 from typing import Any
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Argument definitions
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def add_discovery_args(parser: argparse.ArgumentParser) -> None:
     """
@@ -151,9 +151,9 @@ def add_discovery_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ScanConfig population
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def apply_discovery_args(args: argparse.Namespace, config: Any) -> None:
     """
@@ -171,7 +171,7 @@ def apply_discovery_args(args: argparse.Namespace, config: Any) -> None:
     config.save_discovery     = getattr(args, "save_discovery",    "")
     config.no_deep_discovery  = getattr(args, "no_deep_discovery", False)
 
-    # Parse discovery_tags from comma string → list
+
     raw_tags = getattr(args, "discovery_tags", "")
     if isinstance(raw_tags, str):
         config.discovery_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
@@ -180,14 +180,14 @@ def apply_discovery_args(args: argparse.Namespace, config: Any) -> None:
     else:
         config.discovery_tags = []
 
-    # If smart_discovery is explicitly disabled, also disable deep discovery
+
     if not getattr(config, "smart_discovery", True):
         config.no_deep_discovery = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Profile → discovery settings bridge
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def apply_profile_discovery(profile: dict, args: argparse.Namespace, config: Any) -> None:
     """
@@ -201,26 +201,26 @@ def apply_profile_discovery(profile: dict, args: argparse.Namespace, config: Any
 
     settings = profile.get("settings", {})
 
-    # depth: only apply profile if user left it at default (2)
+
     if settings.get("discovery_depth") and getattr(args, "discovery_depth", 2) == 2:
         config.discovery_depth = settings["discovery_depth"]
 
-    # business tags: only apply profile if user didn't specify any
+
     if settings.get("business_tags") and not config.discovery_tags:
         config.discovery_tags = settings["business_tags"]
 
-    # no_wordlist: profile can enable but not disable (CLI wins)
+
     if settings.get("no_wordlist") and not config.no_wordlist:
         config.no_wordlist = True
 
-    # headless: only if profile requests it and user didn't disable
+
     if settings.get("use_headless") and not getattr(args, "no_deep_discovery", False):
         config.use_headless = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Quick-start integration snippet (printed by --help-discovery)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 INTEGRATION_SNIPPET = '''
 # ── Add to parse_args() in blfinder.py ────────────────────────────────────────

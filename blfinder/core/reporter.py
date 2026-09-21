@@ -53,7 +53,7 @@ def print_terminal_summary(findings: list[Finding], config: dict):
         print(f"  {ANSI['DIM']}Confidence : {confidence}%{ANSI['RESET']}")
         print(f"  Evidence   : {f.evidence[:120]}")
 
-        # Show if evidence package is attached
+
         pkg = getattr(f, "evidence_package", None)
         if pkg and pkg.has_sensitive_data:
             print(f"  {ANSI['GREEN']}Sensitive  : {pkg.sensitive_data_preview}{ANSI['RESET']}")
@@ -71,7 +71,7 @@ def generate_html_report(findings: list[Finding], config: dict, output_path: str
         from .reporting.evidence_report import EvidenceReportGenerator
         return EvidenceReportGenerator().generate(findings, output_path, config)
     except ImportError:
-        # Fallback to basic HTML if reporting module not available
+
         return _basic_html_report(findings, config, output_path)
 
 
@@ -125,7 +125,7 @@ def generate_markdown_report(findings: list[Finding], config: dict, output_path:
             "",
         ]
 
-        # Use HackerOne formatter if evidence package is available
+
         pkg = getattr(f, "evidence_package", None)
         if pkg:
             try:
@@ -183,7 +183,7 @@ def generate_hackerone_report(
         return ""
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _build_summary(findings: list[Finding]) -> dict:
     s = {"total": len(findings)}
@@ -206,12 +206,12 @@ def _finding_to_dict(f: Finding) -> dict:
     d["endpoint"]    = getattr(f, "endpoint", "")
     d["parameter"]   = getattr(f, "parameter", "")
 
-    # REPORT-FIX: the generated PoC (curl command, standalone Python repro
-    # script, Burp Repeater request, manual steps, expected result) was
-    # never being written out anywhere — only `poc.summary` ever reached
-    # the terminal printout. It's the single most useful artifact for
-    # actually reproducing/reporting a finding, so it belongs in the
-    # persisted report, not just in memory during the scan.
+
+
+
+
+
+
     poc = getattr(f, "poc", None)
     if poc:
         d["poc"] = {
@@ -224,7 +224,7 @@ def _finding_to_dict(f: Finding) -> dict:
             "video_note":      poc.video_note,
         }
 
-    # Include evidence package summary if available
+
     pkg = getattr(f, "evidence_package", None)
     if pkg:
         d["evidence_package"] = {

@@ -26,7 +26,7 @@ class HTTPRecorder:
     All methods are static — no state required.
     """
 
-    # ── Burp Suite Format ─────────────────────────────────────────────────────
+
 
     @staticmethod
     def request_to_burp(req: RequestRecord) -> str:
@@ -42,12 +42,12 @@ class HTTPRecorder:
         lines = [f"{req.method} {path} HTTP/1.1"]
         lines.append(f"Host: {parsed.netloc}")
 
-        # Write headers (skip Host since we added it)
+
         for k, v in req.headers.items():
             if k.lower() != "host":
                 lines.append(f"{k}: {v}")
 
-        # Body
+
         body_str = _body_to_string(req.body)
         if body_str:
             lines.append(f"Content-Length: {len(body_str.encode())}")
@@ -63,7 +63,7 @@ class HTTPRecorder:
         """
         Convert a ResponseRecord to Burp Suite raw HTTP response format.
         """
-        # Determine reason phrase
+
         reason = _status_reason(resp.status)
         lines  = [f"HTTP/1.1 {resp.status} {reason}"]
 
@@ -91,7 +91,7 @@ class HTTPRecorder:
         sections.append(HTTPRecorder.response_to_burp(resp))
         return "\n".join(sections)
 
-    # ── cURL ──────────────────────────────────────────────────────────────────
+
 
     @staticmethod
     def request_to_curl(req: RequestRecord, include_comments: bool = True) -> str:
@@ -104,19 +104,19 @@ class HTTPRecorder:
         parts.append(f'"{req.url}"')
 
         for k, v in req.headers.items():
-            # Skip headers that curl sets automatically
+
             if k.lower() in ("content-length", "transfer-encoding", "host"):
                 continue
-            # Don't shell-escape the header value — keep it readable
+
             parts.append(f'-H "{k}: {v}"')
 
         body_str = _body_to_string(req.body)
         if body_str:
-            # Use single quotes for body to avoid shell issues
+
             safe_body = body_str.replace("'", "'\"'\"'")
             parts.append(f"-d '{safe_body}'")
 
-        # Join with line continuation for readability
+
         cmd = " \\\n  ".join(parts)
 
         if include_comments and req.label:
@@ -136,13 +136,13 @@ class HTTPRecorder:
         lines.append(HTTPRecorder.request_to_curl(req, include_comments=False))
         lines.append("")
         lines.append(f"# Expected response: HTTP {resp.status}")
-        # Show first 3 lines of response body as comment
+
         body_preview = resp.body.strip()[:200]
         for line in body_preview.split("\n")[:3]:
             lines.append(f"# {line}")
         return "\n".join(lines)
 
-    # ── Python requests ───────────────────────────────────────────────────────
+
 
     @staticmethod
     def request_to_python(req: RequestRecord) -> str:
@@ -183,7 +183,7 @@ class HTTPRecorder:
         ]
         return "\n".join(lines)
 
-    # ── HTTPie (Termux-friendly) ──────────────────────────────────────────────
+
 
     @staticmethod
     def request_to_httpie(req: RequestRecord) -> str:
@@ -215,7 +215,7 @@ class HTTPRecorder:
 
         return " \\\n  ".join(parts)
 
-    # ── Multi-format bundle ───────────────────────────────────────────────────
+
 
     @staticmethod
     def build_poc_bundle(req: RequestRecord, resp: ResponseRecord) -> dict:
@@ -231,7 +231,7 @@ class HTTPRecorder:
         }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _body_to_string(body: str | dict | list | None) -> str:
     if body is None:

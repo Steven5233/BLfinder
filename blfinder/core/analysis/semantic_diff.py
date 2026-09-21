@@ -25,58 +25,58 @@ class DiffResult:
     Result of a semantic comparison between two API responses.
     All fields are populated even on error — never raises.
     """
-    # Core verdict
-    is_different: bool = False          # True = meaningful difference found
-    structural_change: bool = False     # Schema changed (new/removed keys)
-    value_changes: dict = field(default_factory=dict)   # {field: [old_val, new_val]}
-    new_keys: list[str] = field(default_factory=list)   # Keys only in response B
-    removed_keys: list[str] = field(default_factory=list)  # Keys only in response A
 
-    # Field classification
-    volatile_fields_ignored: list[str] = field(default_factory=list)   # Excluded from compare
-    sensitive_changes: list[str] = field(default_factory=list)          # High-value changed fields
-    privileged_changes: list[str] = field(default_factory=list)         # Role/permission changes
+    is_different: bool = False          
+    structural_change: bool = False     
+    value_changes: dict = field(default_factory=dict)   
+    new_keys: list[str] = field(default_factory=list)   
+    removed_keys: list[str] = field(default_factory=list)  
 
-    # Scores
-    semantic_similarity: float = 1.0   # 0.0 (totally different) – 1.0 (identical)
-    raw_similarity: float = 1.0        # Raw string similarity before semantic analysis
-    noise_ratio: float = 0.0           # Fraction of diff explained by volatile fields
 
-    # Size analysis
+    volatile_fields_ignored: list[str] = field(default_factory=list)   
+    sensitive_changes: list[str] = field(default_factory=list)          
+    privileged_changes: list[str] = field(default_factory=list)         
+
+
+    semantic_similarity: float = 1.0   
+    raw_similarity: float = 1.0        
+    noise_ratio: float = 0.0           
+
+
     size_a: int = 0
     size_b: int = 0
     size_delta: int = 0
     size_delta_pct: float = 0.0
 
-    # Record count (for list responses)
+
     count_a: int = 0
     count_b: int = 0
     count_delta: int = 0
 
-    # Metadata
-    parse_error: bool = False          # Could not parse one or both as JSON
-    fp_signals: list[str] = field(default_factory=list)    # False positive warnings
-    confidence_boost: int = 0          # Added to finding confidence when differences confirmed
+
+    parse_error: bool = False          
+    fp_signals: list[str] = field(default_factory=list)    
+    confidence_boost: int = 0          
 
 
-# Fields that are almost always noise — excluded from semantic comparison
+
 _DEFAULT_VOLATILE_PATTERNS = [
-    # Timestamps
+
     r"^timestamp$", r"^created_at$", r"^updated_at$", r"^expires_at$",
     r"^last_seen$", r"^last_login$", r"^modified_at$", r"^date$",
     r".*_at$", r".*_time$", r".*_date$",
-    # Identifiers that change per-request
+
     r"^request_id$", r"^trace_id$", r"^correlation_id$", r"^x-request-id$",
-    r"^nonce$", r"^_nonce$", r"^jti$",  # JWT ID
-    # Cache/CDN fields
+    r"^nonce$", r"^_nonce$", r"^jti$",  
+
     r"^age$", r"^cache_hit$", r"^x-cache$", r"^etag$", r"^cf-ray$",
-    # Session noise
+
     r"^session_expires$", r"^token_expiry$", r"^valid_until$",
-    # Pagination metadata that legitimately changes
+
     r"^page$", r"^current_page$", r"^offset$",
 ]
 
-# Fields whose changes are high-value (boost finding confidence)
+
 _SENSITIVE_FIELDS = {
     "email", "phone", "mobile", "address", "ssn", "dob", "date_of_birth",
     "credit_card", "card_number", "cvv", "bank_account", "routing_number",
@@ -87,7 +87,7 @@ _SENSITIVE_FIELDS = {
     "ip_address", "location", "lat", "lng", "coordinates",
 }
 
-# Fields whose changes indicate privilege escalation
+
 _PRIVILEGED_FIELDS = {
     "role", "roles", "permissions", "scopes", "is_admin", "admin",
     "is_staff", "is_superuser", "account_type", "tier", "plan",
@@ -145,32 +145,32 @@ class SemanticDiff:
             abs(result.size_delta) / max(result.size_a, 1)
         )
 
-        # Raw string similarity (before semantic analysis)
+
         result.raw_similarity = difflib.SequenceMatcher(
             None, body_a[:5000], body_b[:5000]
         ).ratio()
 
-        # Identical — no further analysis needed
+
         if body_a == body_b:
             result.semantic_similarity = 1.0
             return result
 
-        # Try JSON parsing for deep analysis
+
         data_a = self._safe_parse(body_a)
         data_b = self._safe_parse(body_b)
 
         if data_a is None or data_b is None:
             result.parse_error = True
-            # Fall back to string-based comparison
+
             return self._string_fallback(result, body_a, body_b, threshold)
 
-        # Both parsed — do deep structural analysis
+
         return self._deep_compare(result, data_a, data_b, threshold)
 
     def _deep_compare(self, result: DiffResult, data_a: Any, data_b: Any, threshold: float) -> DiffResult:
         """Deep JSON structural comparison."""
 
-        # ── List responses (paginated APIs) ────────────────────────────────────
+
         if isinstance(data_a, list) and isinstance(data_b, list):
             result.count_a = len(data_a)
             result.count_b = len(data_b)
@@ -181,32 +181,32 @@ class SemanticDiff:
                 result.structural_change = True
                 result.confidence_boost += 15
                 if abs(result.count_delta) > result.count_a:
-                    result.confidence_boost += 20  # Double or more records
+                    result.confidence_boost += 20  
             elif result.count_a > 0:
-                # Same count but compare first item for field-level changes
+
                 self._compare_dicts(result, data_a[0], data_b[0], prefix="[0]")
 
             result.semantic_similarity = self._list_similarity(data_a, data_b)
             return result
 
-        # ── Normalize: if one is list-wrapped dict, unwrap ────────────────────
+
         if isinstance(data_a, list) and len(data_a) == 1 and isinstance(data_a[0], dict):
             data_a = data_a[0]
         if isinstance(data_b, list) and len(data_b) == 1 and isinstance(data_b[0], dict):
             data_b = data_b[0]
 
-        # ── Nested dict extraction (handle {data: {...}}, {result: {...}}) ─────
+
         data_a = self._unwrap_envelope(data_a)
         data_b = self._unwrap_envelope(data_b)
 
         if not isinstance(data_a, dict) or not isinstance(data_b, dict):
-            # Mixed types — meaningful difference
+
             result.is_different = True
             result.semantic_similarity = 0.0
             result.confidence_boost += 20
             return result
 
-        # ── Key-level analysis ─────────────────────────────────────────────────
+
         keys_a = set(data_a.keys())
         keys_b = set(data_b.keys())
 
@@ -218,35 +218,35 @@ class SemanticDiff:
             result.is_different = True
             result.confidence_boost += 15
 
-            # Sensitive new keys are high value
+
             sensitive_new = [k for k in result.new_keys if k.lower() in _SENSITIVE_FIELDS]
             if sensitive_new:
                 result.sensitive_changes.extend(sensitive_new)
                 result.confidence_boost += 25
 
-        # ── Value-level comparison for shared keys ─────────────────────────────
+
         self._compare_dicts(result, data_a, data_b, prefix="")
 
-        # ── Compute final semantic similarity ──────────────────────────────────
+
         total_keys = max(len(keys_a | keys_b), 1)
         changed_keys = len(result.value_changes) + len(result.new_keys) + len(result.removed_keys)
         volatile_ignored = len(result.volatile_fields_ignored)
 
-        # Similarity = (unchanged keys) / (total keys), ignoring volatile
+
         effective_total = max(total_keys - volatile_ignored, 1)
         effective_changed = max(changed_keys, 0)
         result.semantic_similarity = max(0.0, 1.0 - (effective_changed / effective_total))
 
-        # Noise ratio: how much of the diff is just volatile fields
+
         total_diff = changed_keys + volatile_ignored
         result.noise_ratio = volatile_ignored / max(total_diff, 1)
 
-        # ── Final verdict ──────────────────────────────────────────────────────
+
         meaningful_diff = result.semantic_similarity < (1.0 - threshold)
         if meaningful_diff or result.structural_change:
             result.is_different = True
 
-        # ── FP signals ────────────────────────────────────────────────────────
+
         self._add_fp_signals(result)
 
         return result
@@ -267,12 +267,12 @@ class SemanticDiff:
             if val_a == val_b:
                 continue
 
-            # Recurse into nested dicts
+
             if isinstance(val_a, dict) and isinstance(val_b, dict):
                 self._compare_dicts(result, val_a, val_b, prefix=field_path)
                 continue
 
-            # Recurse into lists of dicts
+
             if isinstance(val_a, list) and isinstance(val_b, list):
                 if len(val_a) != len(val_b):
                     result.value_changes[field_path] = [val_a, val_b]
@@ -285,11 +285,11 @@ class SemanticDiff:
                         result.is_different = True
                 continue
 
-            # Scalar change — record it
+
             result.value_changes[field_path] = [val_a, val_b]
             result.is_different = True
 
-            # Classify the change
+
             key_lower = key.lower()
             if key_lower in _SENSITIVE_FIELDS:
                 result.sensitive_changes.append(field_path)
@@ -304,26 +304,26 @@ class SemanticDiff:
 
     def _add_fp_signals(self, result: DiffResult):
         """Add false positive warning signals based on the diff analysis."""
-        # Almost all differences are volatile fields — likely noise
+
         if result.noise_ratio > 0.8 and not result.structural_change:
             result.fp_signals.append(
                 f"High noise ratio ({result.noise_ratio:.0%}) — most differences are volatile fields like timestamps"
             )
 
-        # Response only got bigger — may just be pagination, not IDOR
+
         if result.size_delta > 0 and not result.value_changes and not result.new_keys:
             result.fp_signals.append(
                 "Response is larger but no structured field changes detected — may be formatting difference"
             )
 
-        # Semantic similarity still very high despite raw difference
+
         if result.semantic_similarity > 0.95 and result.raw_similarity < 0.95:
             result.fp_signals.append(
                 f"Semantic similarity={result.semantic_similarity:.2f} despite raw diff — "
                 "difference likely explained by volatile fields"
             )
 
-        # Only one field changed and it looks like a counter/sequence
+
         if len(result.value_changes) == 1:
             key = list(result.value_changes.keys())[0]
             old_v, new_v = result.value_changes[key]
@@ -342,7 +342,7 @@ class SemanticDiff:
             result.is_different = True
             result.confidence_boost += 10
 
-            # Check for success/failure tokens in the different response
+
             success_tokens = ["success", "created", "order_id", "transaction", "confirmed"]
             failure_tokens = ["error", "invalid", "denied", "forbidden", "rejected"]
 
@@ -354,7 +354,7 @@ class SemanticDiff:
                 result.fp_signals.append(
                     "Non-JSON response contains failure tokens — tampered request was likely rejected"
                 )
-                result.is_different = False  # Override — not a real positive
+                result.is_different = False  
                 result.confidence_boost = 0
         else:
             result.fp_signals.append(
@@ -393,7 +393,7 @@ class SemanticDiff:
         if not body or body.startswith(("TIMEOUT", "ERROR:", "CONNECTION_ERROR:")):
             return None
         body = body.strip()
-        # Handle JSONP
+
         jsonp_match = re.match(r'^\w+\((.*)\);?$', body, re.DOTALL)
         if jsonp_match:
             body = jsonp_match.group(1)
@@ -414,7 +414,7 @@ class ResponseFingerprint:
         """Return a stable hash that ignores volatile field values."""
         data = SemanticDiff._safe_parse(body)
         if data is None:
-            # For non-JSON: hash with timestamps stripped
+
             cleaned = re.sub(
                 r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*Z?',
                 'TIMESTAMP',

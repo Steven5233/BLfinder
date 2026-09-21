@@ -100,36 +100,36 @@ except ImportError:
     _HAS_SEMANTIC_DIFF = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tuning constants
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Minimum similarity between the ORIGINAL ATTACK response and the RE-TEST
-# response for the re-test to count as reproducing the anomaly.
-# 0.45 handles timestamp / UUID / token churn while still catching a
-# soft-404 shell injection (which scores ~0.10 against a JSON API response).
+
+
+
+
+
+
+
 RETEST_SIMILARITY_THRESHOLD = 0.45
 
-# Minimum similarity between baseline and re-test response for an IDOR
-# finding to count as "still showing different data".
-# Kept at a tighter 0.85 because we WANT the baseline and attack to differ.
+
+
+
 IDOR_DIFFER_THRESHOLD = 0.85
 
-# Fraction of attempts that must pass for a finding to survive.
-# 0.5 = majority (1/2, 2/3, 2/4 …).
+
+
 PASS_FRACTION = 0.5
 
-# HTTP statuses that mean the endpoint is dead / unreachable.
-# Re-tests landing here always count as a failure.
+
+
 HARD_FAIL_STATUSES = {0, 404, 410, 500, 502, 503, 504}
 
-# Tokens whose presence in a response body indicate an error / rejection.
+
 FAILURE_TOKENS = frozenset([
     "error", "invalid", "rejected", "denied", "forbidden",
     "not found", "unauthorized", "bad request", "exception",
 ])
 
-# Tokens whose presence suggests a successful business operation.
+
 SUCCESS_TOKENS = frozenset([
     "success", "created", "updated", "confirmed", "processed",
     "completed", "accepted", "order_id", "transaction_id",
@@ -184,7 +184,7 @@ def _similarity(a: str, b: str, limit: int = 3000) -> float:
         try:
             return SemanticDiff.compare(a, b).semantic_similarity
         except Exception:
-            pass  # fall through to raw comparison below
+            pass  
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
@@ -200,17 +200,17 @@ def _is_success_body(body: str, status: int) -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FindingVerifier
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class FindingVerifier:
 
     def __init__(self, scanner, config: ScanConfig):
-        self.scanner = scanner   # BLFScanner instance — provides _request()
+        self.scanner = scanner   
         self.config  = config
 
-    # ── Public entry point ────────────────────────────────────────────────────
+
 
     async def verify_all(
         self,
@@ -234,9 +234,9 @@ class FindingVerifier:
             elif isinstance(result, Exception):
                 if self.config.verbose:
                     print(f"  [!] Verifier exception for '{f.title[:55]}': {result}")
-                # On exception keep the finding — don't silently discard it.
-                # The confidence + dedup filter in run_all_modules() will catch
-                # anything that should not be reported.
+
+
+
                 verified.append(f)
 
         dropped = len(findings) - len(verified)
@@ -247,7 +247,7 @@ class FindingVerifier:
 
         return verified
 
-    # ── Per-finding verification ──────────────────────────────────────────────
+
 
     async def _verify_one(
         self,
@@ -268,24 +268,24 @@ class FindingVerifier:
         hdrs   = req.get("headers")
 
         if not url:
-            # No URL to re-test — preserve as-is rather than silently drop
+
             return finding
 
-        # Pull baseline data
+
         baseline    = base_responses.get(url, {})
         base_body   = baseline.get("body",   "")
         base_status = baseline.get("status", 0)
 
-        # ── FIX 1: already confirmed → liveness check only ────────────────────
-        # A confirmed=True finding was cross-user verified during the scan.
-        # That is stronger evidence than a body-similarity re-test. We only
-        # need to confirm the endpoint has not disappeared since the scan ran.
+
+
+
+
         if getattr(finding, "confirmed", False):
             return await self._liveness_check(finding, method, url, body, hdrs)
 
-        # ── Standard re-verification ──────────────────────────────────────────
-        # Extract the original attack response body for similarity comparison.
-        # response_summary is "HTTP 200 — {body[:300]}" so we parse it out.
+
+
+
         attack_body = self._extract_attack_body(finding)
 
         attempts  = max(1, self.config.confirmation_attempts)
@@ -309,7 +309,7 @@ class FindingVerifier:
                         f"  [!] Verifier _request error "
                         f"({url[:55]}): {e}"
                     )
-                # Count as a failed attempt but don't crash
+
                 if attempt < attempts - 1:
                     await asyncio.sleep(0.3)
                 continue
@@ -323,15 +323,15 @@ class FindingVerifier:
             ):
                 successes += 1
 
-            # Sleep between attempts — not after the last one
+
             if attempt < attempts - 1:
                 await asyncio.sleep(0.3)
 
-        # ── Majority vote ─────────────────────────────────────────────────────
+
         required = max(1, round(attempts * PASS_FRACTION))
         return self._apply_verdict(finding, successes, attempts, required)
 
-    # ── Liveness check (for confirmed findings) ───────────────────────────────
+
 
     async def _liveness_check(
         self,
@@ -355,7 +355,7 @@ class FindingVerifier:
         try:
             status, _, _, _ = await self.scanner._request(method, url, **kwargs)
         except Exception:
-            # Network error — keep the finding, don't punish for connectivity
+
             return finding
 
         if status in HARD_FAIL_STATUSES:
@@ -366,7 +366,7 @@ class FindingVerifier:
                 )
             return None
 
-        # Endpoint still alive — bump confidence slightly for the clean re-test
+
         if getattr(finding, "confidence", 0) < 100:
             finding.confidence = min(100, finding.confidence + 5)
         if hasattr(finding, "confidence_reasons"):
@@ -375,7 +375,7 @@ class FindingVerifier:
             )
         return finding
 
-    # ── Verdict application ───────────────────────────────────────────────────
+
 
     def _apply_verdict(
         self,
@@ -388,7 +388,7 @@ class FindingVerifier:
         Apply the majority-vote verdict and update the finding accordingly.
         """
         if successes >= required:
-            # ── Reproduced cleanly ────────────────────────────────────────────
+
             finding.confirmed = True
             finding.confidence = min(100, finding.confidence + 15)
             if hasattr(finding, "confidence_reasons"):
@@ -398,7 +398,7 @@ class FindingVerifier:
             return finding
 
         if successes > 0:
-            # ── Intermittent ──────────────────────────────────────────────────
+
             finding.confirmed = False
             finding.confidence = max(0, finding.confidence - 20)
             if hasattr(finding, "confidence_reasons"):
@@ -414,12 +414,12 @@ class FindingVerifier:
                     f"  [~] Intermittent ({successes}/{attempts}): "
                     f"{finding.title[:55]}"
                 )
-            # Keep if still above min_confidence threshold
+
             if finding.confidence >= self.config.min_confidence:
                 return finding
             return None
 
-        # ── Did not reproduce ─────────────────────────────────────────────────
+
         if self.config.verbose:
             print(
                 f"  [-] Did not reproduce (0/{attempts}): "
@@ -427,7 +427,7 @@ class FindingVerifier:
             )
         return None
 
-    # ── Anomaly detection ─────────────────────────────────────────────────────
+
 
     def _still_anomalous(
         self,
@@ -449,13 +449,13 @@ class FindingVerifier:
         attack_body         : original attack response body (for similarity)
         finding             : the Finding being re-verified
         """
-        # Hard-fail statuses never reproduce an anomaly
+
         if status in HARD_FAIL_STATUSES:
             return False
 
         cat = (finding.category or "").lower()
 
-        # ── Access control (IDOR, BOLA, BFLA, privilege, authentication) ──────
+
         if any(k in cat for k in [
             "idor", "bola", "privilege", "bfla",
             "authentication", "function level", "missing auth",
@@ -464,29 +464,29 @@ class FindingVerifier:
                 status, body, base_status, base_body, attack_body
             )
 
-        # ── Manipulation (price, quantity, mass assignment, state, coupon) ────
+
         if any(k in cat for k in [
             "price", "quantity", "mass", "state", "coupon",
             "workflow", "time", "integer", "discount",
         ]):
             return self._check_manipulation(status, body, attack_body)
 
-        # ── Race conditions ───────────────────────────────────────────────────
+
         if "race" in cat:
             return _status_class(status) == "2xx"
 
-        # ── Information disclosure (BOPLA, hidden param, enumeration) ─────────
+
         if any(k in cat for k in [
             "disclosure", "bopla", "hidden", "enumeration",
             "property", "soft delete", "limit",
         ]):
             return self._check_disclosure(status, body, base_body)
 
-        # ── JWT ───────────────────────────────────────────────────────────────
+
         if "jwt" in cat:
             return _status_class(status) == "2xx" and _is_success_body(body, status)
 
-        # ── GraphQL ───────────────────────────────────────────────────────────
+
         if "graphql" in cat:
             return (
                 status == 200
@@ -495,10 +495,10 @@ class FindingVerifier:
                 and not body.strip().startswith("<")
             )
 
-        # ── Generic fallback ──────────────────────────────────────────────────
+
         return self._check_generic(status, body, base_body, attack_body)
 
-    # ── Category-specific anomaly checks ─────────────────────────────────────
+
 
     def _check_access_control(
         self,
@@ -515,15 +515,15 @@ class FindingVerifier:
         sc      = _status_class(status)
         base_sc = _status_class(base_status)
 
-        # Classic: baseline was 401/403/404, re-test got 2xx
+
         if base_sc in ("4xx",) and base_status in (401, 403, 404) and sc == "2xx":
             return True
 
-        # Same-status IDOR: both baseline and re-test return 200, but
-        # re-test body should differ from baseline (different resource)
+
+
         if sc == "2xx" and base_sc == "2xx":
             sim_to_baseline = _similarity(base_body, body)
-            # If attack_body is available, confirm retry looks like attack
+
             if attack_body:
                 sim_to_attack = _similarity(attack_body, body)
                 return (
@@ -532,7 +532,7 @@ class FindingVerifier:
                 )
             return sim_to_baseline < IDOR_DIFFER_THRESHOLD
 
-        # No-auth: re-test without token still gets through
+
         if sc == "2xx":
             return _is_success_body(body, status)
 
@@ -553,10 +553,10 @@ class FindingVerifier:
             return False
         if not _is_success_body(body, status):
             return False
-        # If we have the original attack body, confirm retry looks the same
+
         if attack_body:
             return _similarity(attack_body, body) >= RETEST_SIMILARITY_THRESHOLD
-        # No attack body available — presence of success tokens is enough
+
         bl = body.lower()
         return any(t in bl for t in SUCCESS_TOKENS)
 
@@ -573,10 +573,10 @@ class FindingVerifier:
             return False
         if not body:
             return False
-        # Re-test response should be larger than baseline
+
         if len(body) > len(base_body) * 1.15:
             return True
-        # Or structurally different (new JSON keys)
+
         try:
             base_data = json.loads(base_body) if base_body else {}
             new_data  = json.loads(body)
@@ -606,19 +606,19 @@ class FindingVerifier:
         if attack_body:
             sim_to_attack   = _similarity(attack_body, body)
             sim_to_baseline = _similarity(base_body,   body)
-            # Attack similarity must be meaningfully higher than baseline
+
             return (
                 sim_to_attack >= RETEST_SIMILARITY_THRESHOLD
                 and sim_to_attack > sim_to_baseline + 0.10
             )
 
-        # No attack body — just check the response is not a baseline copy
+
         if base_body:
             return _similarity(base_body, body) < 0.95
 
         return _is_success_body(body, status)
 
-    # ── Helper ────────────────────────────────────────────────────────────────
+
 
     @staticmethod
     def _extract_attack_body(finding: Finding) -> str:
@@ -631,12 +631,12 @@ class FindingVerifier:
         """
         summary = getattr(finding, "response_summary", "") or ""
         if summary:
-            # Strip "HTTP NNN — " prefix
+
             if " — " in summary:
                 return summary.split(" — ", 1)[1]
             if "HTTP " in summary and "\n" in summary:
                 return summary.split("\n", 1)[1]
             return summary
 
-        # Fall back to evidence field
+
         return getattr(finding, "evidence", "") or ""

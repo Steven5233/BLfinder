@@ -25,22 +25,22 @@ from .capture import ResponseRecord
 
 
 class ChangeType(str, Enum):
-    ADDED   = "ADDED"       # Field exists in attack, absent in baseline
-    REMOVED = "REMOVED"     # Field exists in baseline, absent in attack
-    CHANGED = "CHANGED"     # Field exists in both but value differs
-    SAME    = "SAME"        # Field exists in both with same value
+    ADDED   = "ADDED"       
+    REMOVED = "REMOVED"     
+    CHANGED = "CHANGED"     
+    SAME    = "SAME"        
 
 
 @dataclass
 class FieldDiff:
     """Diff result for a single field."""
-    field_path: str                     # Dot-notation: "user.role"
+    field_path: str                     
     change_type: ChangeType
     baseline_value: Any = None
     attack_value: Any = None
-    is_sensitive: bool = False          # True if field name suggests sensitive data
-    is_privileged: bool = False         # True if field relates to auth/permissions
-    security_impact: str = ""          # Human-readable impact description
+    is_sensitive: bool = False          
+    is_privileged: bool = False         
+    security_impact: str = ""          
 
     @property
     def display_baseline(self) -> str:
@@ -57,42 +57,42 @@ class DiffReport:
     Complete diff between baseline and attack responses.
     The main output of DiffEngine.compare().
     """
-    # Field-level diffs (the core data)
+
     field_diffs: list[FieldDiff] = field(default_factory=list)
 
-    # Categorised findings
+
     added_fields: list[FieldDiff] = field(default_factory=list)
     removed_fields: list[FieldDiff] = field(default_factory=list)
     changed_fields: list[FieldDiff] = field(default_factory=list)
     sensitive_changes: list[FieldDiff] = field(default_factory=list)
     privileged_changes: list[FieldDiff] = field(default_factory=list)
 
-    # Size analysis
+
     baseline_size: int = 0
     attack_size: int = 0
     size_delta: int = 0
     size_delta_pct: float = 0.0
 
-    # Status analysis
+
     baseline_status: int = 0
     attack_status: int = 0
     status_changed: bool = False
 
-    # List/count analysis (for pagination abuse findings)
+
     baseline_count: int = 0
     attack_count: int = 0
     count_delta: int = 0
 
-    # Raw text diff (fallback for non-JSON)
+
     raw_diff_lines: list[str] = field(default_factory=list)
 
-    # Parse errors
+
     baseline_is_json: bool = False
     attack_is_json: bool = False
 
-    # Metadata
+
     is_meaningfully_different: bool = False
-    similarity_score: float = 1.0       # 0.0 (totally different) – 1.0 (identical)
+    similarity_score: float = 1.0       
 
     @property
     def one_line_summary(self) -> str:
@@ -200,7 +200,7 @@ class DiffReport:
         )
 
 
-# ── Sensitive / Privileged field detection ────────────────────────────────────
+
 
 _SENSITIVE_KEYWORDS = {
     "password", "secret", "token", "key", "hash", "salt",
@@ -295,25 +295,25 @@ class DiffEngine:
             abs(report.size_delta) / max(report.baseline_size, 1)
         )
 
-        # Parse JSON
+
         base_data   = _safe_parse(baseline.body)
         attack_data = _safe_parse(attack.body)
         report.baseline_is_json = base_data is not None
         report.attack_is_json   = attack_data is not None
 
         if base_data is not None and attack_data is not None:
-            # Deep JSON comparison
+
             cls._deep_compare(report, base_data, attack_data, prefix="")
             cls._categorise(report)
 
-            # Count analysis for list responses
+
             if isinstance(base_data, list) and isinstance(attack_data, list):
                 report.baseline_count = len(base_data)
                 report.attack_count   = len(attack_data)
                 report.count_delta    = report.attack_count - report.baseline_count
 
         else:
-            # Fallback: raw text diff
+
             report.raw_diff_lines = list(
                 difflib.unified_diff(
                     baseline.body.splitlines(),
@@ -325,12 +325,12 @@ class DiffEngine:
                 )
             )
 
-        # Similarity score
+
         report.similarity_score = difflib.SequenceMatcher(
             None, baseline.body[:3000], attack.body[:3000]
         ).ratio()
 
-        # Meaningful difference verdict
+
         report.is_meaningfully_different = (
             report.status_changed
             or bool(report.added_fields)
@@ -355,7 +355,7 @@ class DiffEngine:
         if depth > 6:
             return
 
-        # Unwrap common envelope patterns
+
         if isinstance(base, dict) and isinstance(attack, dict):
             for envelope in ("data", "result", "response", "payload"):
                 if envelope in base and envelope in attack and len(base) <= 3:
@@ -369,7 +369,7 @@ class DiffEngine:
                 path = f"{prefix}.{key}" if prefix else key
 
                 if _is_volatile(key):
-                    continue    # Skip volatile fields — they always differ
+                    continue    
 
                 if key in base and key in attack:
                     if base[key] == attack[key]:
@@ -407,7 +407,7 @@ class DiffEngine:
                     fd.security_impact = _security_impact(fd)
                     report.field_diffs.append(fd)
 
-                else:   # key in base only
+                else:   
                     fd = FieldDiff(
                         field_path=path,
                         change_type=ChangeType.REMOVED,
@@ -420,7 +420,7 @@ class DiffEngine:
             cls._compare_lists(report, base, attack, prefix, depth)
 
         else:
-            # Scalar or mixed-type comparison
+
             if base != attack:
                 fd = FieldDiff(
                     field_path=prefix or "root",
@@ -455,7 +455,7 @@ class DiffEngine:
             )
             report.field_diffs.append(fd)
 
-        # Compare first items to detect schema changes
+
         if base and attack and isinstance(base[0], dict) and isinstance(attack[0], dict):
             cls._deep_compare(report, base[0], attack[0], f"{prefix}[0]", depth + 1)
 
@@ -477,13 +477,13 @@ class DiffEngine:
                 report.privileged_changes.append(fd)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _safe_parse(body: str) -> Any:
     if not body or body.startswith(("TIMEOUT", "ERROR:", "CONNECTION_ERROR:")):
         return None
     body = body.strip()
-    # Handle JSONP
+
     import re
     jsonp = re.match(r'^\w+\((.*)\);?$', body, re.DOTALL)
     if jsonp:

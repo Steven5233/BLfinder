@@ -46,79 +46,79 @@ from ..models import (
 from ..layer5_dedup.normaliser import normalise_url, extract_id_params, dedup_key
 
 
-# ── Asset extensions to reject ────────────────────────────────────────────────
+
 _ASSET_EXTS = frozenset({
     ".css", ".scss", ".less", ".sass",
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".avif",
     ".woff", ".woff2", ".ttf", ".eot", ".otf",
     ".mp3", ".mp4", ".webm", ".ogg",
     ".pdf", ".zip", ".gz", ".tar",
-    ".map",          # source maps
+    ".map",          
     ".md", ".txt",
 })
 
-# Prefixes that are definitely not API endpoints
+
 _REJECT_PREFIXES = (
     "data:", "blob:", "javascript:", "mailto:", "tel:",
     "chrome-extension://", "moz-extension://",
     "#", "//localhost", "//127.0.0.1", "//0.0.0.0",
 )
 
-# Only accept paths that match this shape
+
 _PATH_SHAPE = re.compile(
     r'^/[a-zA-Z][a-zA-Z0-9_/-]{2,80}$'
 )
 
 
-# ── Regex patterns (Pass 1) ───────────────────────────────────────────────────
-# Each group captures a path string.  Patterns are ordered by specificity.
+
+
 _PATTERNS: list[tuple[str, re.Pattern]] = [
-    # fetch('/api/…') / fetch(`/api/…`)
+
     ("fetch_call",
      re.compile(r'''(?:fetch|axios\.(?:get|post|put|patch|delete|request))\s*\(\s*[`"']([/][^`"'\s<>]{3,80})[`"']''', re.I)),
 
-    # axios({ url: '/api/…' }) / request({ uri: '/api/…' })
+
     ("axios_obj",
      re.compile(r'''(?:url|uri|endpoint|path)\s*:\s*[`"']([/][^`"'\s<>]{3,80})[`"']''', re.I)),
 
-    # const API = '/api/v1'
+
     ("const_assign",
      re.compile(r'''(?:const|let|var)\s+\w+\s*=\s*[`"']([/][a-zA-Z][^`"'\s<>]{2,79})[`"']''', re.I)),
 
-    # baseURL: 'https://api.example.com/v1'  — extract the path only
+
     ("base_url",
      re.compile(r'''baseURL?\s*[=:]\s*[`"']https?://[^/`"']+([/][^`"'\s<>]{1,80})[`"']''', re.I)),
 
-    # Express-style router: router.get('/path', handler) / app.post('/…')
+
     ("express_route",
      re.compile(r'''(?:router|app)\s*\.\s*(?:get|post|put|patch|delete|all)\s*\(\s*[`"']([/][^`"'\s<>]{2,80})[`"']''', re.I)),
 
-    # React-Router / Vue-Router: path: '/route'  component:
+
     ("router_path",
      re.compile(r'''(?:^|,|\{)\s*path\s*:\s*[`"']([/][^`"'\s<>]{1,80})[`"']''', re.I | re.M)),
 
-    # String template literals: `/api/orders/${id}`  — capture prefix
+
     ("template_literal",
      re.compile(r'`([/][a-zA-Z][a-zA-Z0-9_/-]{1,60})\$\{', re.I)),
 
-    # XMLHttpRequest.open('GET', '/path')
+
     ("xhr_open",
      re.compile(r'''\.open\s*\(\s*[`"'][A-Z]+[`"']\s*,\s*[`"']([/][^`"'\s<>]{3,80})[`"']''', re.I)),
 
-    # ky.get('/path') / got('/path') / superagent.get('/path')
+
     ("ky_got",
      re.compile(r'''(?:ky|got|request|superagent|needle)\s*(?:\.[a-z]+)?\s*\(\s*[`"']([/][^`"'\s<>]{3,80})[`"']''', re.I)),
 
-    # Apollo / GraphQL: uri: '/graphql'
+
     ("apollo_uri",
      re.compile(r'''uri\s*:\s*[`"']([/][^`"'\s<>]{2,80})[`"']''', re.I)),
 
-    # Bare string that looks exactly like an API path (as property value or array item)
+
     ("bare_path",
      re.compile(r'''[`"']([/](?:api|v\d|internal|graphql|rpc)[/][^`"'\s<>]{2,70})[`"']''', re.I)),
 ]
 
-# Method keywords that appear near a URL in the same expression
+
 _METHOD_HINTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'\.(delete|del)\s*\(', re.I), "DELETE"),
     (re.compile(r'\.(put)\s*\(',         re.I), "PUT"),
@@ -138,18 +138,18 @@ def _is_valid_api_path(path: str) -> bool:
     for prefix in _REJECT_PREFIXES:
         if path.lower().startswith(prefix):
             return False
-    # Must have at least one non-slash char after leading /
+
     stripped = path.lstrip("/")
     if len(stripped) < 3:
         return False
-    # Reject pure asset paths
+
     for ext in _ASSET_EXTS:
         if stripped.lower().endswith(ext):
             return False
-    # Must match overall shape
+
     if not _PATH_SHAPE.match(path.rstrip("/")):
         return False
-    # Must contain at least one letter
+
     if not re.search(r'[a-zA-Z]', path):
         return False
     return True
@@ -174,7 +174,7 @@ def _regex_pass(js_content: str, base_url: str) -> list[tuple[str, str, str]]:
             path = m.group(1)
             if not _is_valid_api_path(path):
                 continue
-            # Look at surrounding context (±200 chars) for method hints
+
             start   = max(0, m.start() - 200)
             end     = min(len(js_content), m.end() + 200)
             context = js_content[start:end]
@@ -194,23 +194,23 @@ def _ast_pass(js_content: str) -> list[tuple[str, str, str]]:
     """
     results: list[tuple[str, str, str]] = []
 
-    # Tokenise: find all string literals (single, double, backtick)
+
     string_pattern = re.compile(
         r'''(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|`([^`\\]*(?:\\.[^`\\]*)*)`)'''
     )
     for m in string_pattern.finditer(js_content):
         raw = m.group(1) or m.group(2) or m.group(3) or ""
-        # Skip very long strings (they're prose, not paths)
+
         if len(raw) > 200:
             continue
-        # Check if the string IS an API path
+
         if _is_valid_api_path(raw):
-            # Look at property name to the left for method hint
+
             pre = js_content[max(0, m.start()-50):m.start()]
             method = _infer_method_from_context(pre + raw)
             results.append((raw, method, "ast:string_literal"))
             continue
-        # Check if the string contains a path as a substring (e.g. full URL)
+
         url_match = re.search(r'https?://[^/\s`"\']+([/][a-zA-Z][a-zA-Z0-9_/-]{2,79})', raw)
         if url_match:
             path = url_match.group(1)
@@ -244,7 +244,7 @@ def _extract_import_urls(js_content: str, current_url: str, base_url: str) -> li
     return urls
 
 
-# ── Tag + priority helpers (same logic as openapi_parser) ────────────────────
+
 _TAG_KEYWORDS: dict[str, list[str]] = {
     "payment":  ["payment", "pay", "billing", "invoice", "charge", "transaction",
                  "refund", "wallet", "balance"],
@@ -270,7 +270,7 @@ def _priority(tags: list[str]) -> int:
     return 3
 
 
-# ── Main async class ──────────────────────────────────────────────────────────
+
 
 class JSASTParser:
     """
@@ -297,7 +297,7 @@ class JSASTParser:
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
 
-        # ── Step 1: fetch the root HTML to collect initial JS URLs ────────────
+
         js_urls_to_fetch: list[str] = []
         html_content = ""
         try:
@@ -314,7 +314,7 @@ class JSASTParser:
             result.elapsed_s = time.time() - t0
             return result
 
-        # Extract JS file URLs from the HTML
+
         for m in re.finditer(
             r'<script[^>]+src\s*=\s*["\']([^"\']+\.js(?:\?[^"\']*)?)["\']',
             html_content, re.I,
@@ -327,7 +327,7 @@ class JSASTParser:
             else:
                 js_urls_to_fetch.append(urljoin(target_url, href))
 
-        # Also run passes directly on inline <script> content
+
         inline_scripts = re.findall(
             r'<script(?:[^>]*)>(.*?)</script>', html_content, re.S | re.I
         )
@@ -336,7 +336,7 @@ class JSASTParser:
             inline_results.extend(_regex_pass(inline, base))
             inline_results.extend(_ast_pass(inline))
 
-        # ── Step 2: fetch and parse each JS file (with recursive import follow) ─
+
         fetched:     set[str]   = set()
         all_raw:     list[tuple[str, str, str]] = list(inline_results)
         queue:       list[str]  = list(js_urls_to_fetch[:config.max_js_files])
@@ -361,15 +361,15 @@ class JSASTParser:
                     ct      = resp.headers.get("Content-Type", "")
                     content = await resp.text(errors="replace")
 
-                # Reject non-JS (e.g. redirected to login HTML)
+
                 if "<html" in content[:300].lower() and "script" not in ct.lower():
                     continue
 
-                # Both passes on this file
+
                 all_raw.extend(_regex_pass(content, base))
                 all_raw.extend(_ast_pass(content))
 
-                # Follow imports if enabled and within depth
+
                 if config.follow_js_imports and depth_count < max_depth:
                     imports = _extract_import_urls(content, url, base)
                     for imp in imports:
@@ -381,7 +381,7 @@ class JSASTParser:
                 if self.verbose:
                     result.errors.append(f"js fetch {url}: {e}")
 
-        # ── Step 3: deduplicate raw results and build DiscoveredEndpoints ─────
+
         seen_keys: set[str] = set()
 
         for path, method, evidence in all_raw:

@@ -16,36 +16,36 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlunparse
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tuning constants
-# ─────────────────────────────────────────────────────────────────────────────
 
-_TIMING_THRESHOLD    = 0.080   # seconds — minimum timing delta to count as oracle
-_SIZE_THRESHOLD      = 25      # bytes  — minimum size delta in _run_all_oracles
 
-# Minimum size delta for header injection findings specifically.
-# Kept higher than _SIZE_THRESHOLD because header injection produces more noise.
+
+
+_TIMING_THRESHOLD    = 0.080   
+_SIZE_THRESHOLD      = 25      
+
+
+
 MIN_SIZE_DELTA_BYTES = 20
 
-# Minimum number of oracle signals required for a header injection finding.
-# 1 oracle (status change alone) is insufficient — CDNs/WAFs echo headers.
+
+
 MIN_ORACLE_COUNT_HEADER = 2
 
-# HTTP statuses that make a baseline comparison meaningless.
-# 0   = connection failure / timeout
-# 5xx = server error (unreliable, may vary per request)
-# 408 = request timeout
-# 429 = rate limited (response body varies)
+
+
+
+
+
 INVALID_BASELINE_STATUSES = frozenset({0, 408, 429, 500, 502, 503, 504})
 
-# Methods that require authentication — skip if no token is provided.
-# These always fail unauthenticated, producing status-0 baselines.
+
+
 SKIP_UNAUTHENTICATED_METHODS = frozenset({"DELETE", "PUT", "PATCH"})
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data models
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 @dataclass
 class OracleSignal:
@@ -85,9 +85,9 @@ class BlindIDORResult:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Pattern libraries
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _RESOURCE_EXISTS_PATTERNS = [
     re.compile(r'\baccess\s+denied\b',              re.I),
@@ -108,7 +108,7 @@ _RESOURCE_NOTFOUND_PATTERNS = [
     re.compile(r'\bcould\s+not\s+find\b',   re.I),
 ]
 
-# Headers to inject during header injection scan
+
 _INJECTION_HEADERS = [
     {"X-User-Id":          "1"},
     {"X-Account-Id":       "1"},
@@ -121,9 +121,9 @@ _INJECTION_HEADERS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BlindIDORScanner
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class BlindIDORScanner:
     """
@@ -135,7 +135,7 @@ class BlindIDORScanner:
         self._r      = scanner._request
         self._config = scanner.config
 
-    # ── Public interface ──────────────────────────────────────────────────────
+
 
     async def scan_path(
         self,
@@ -251,9 +251,9 @@ class BlindIDORScanner:
         """
         results = []
 
-        # ── Guard 1: Skip destructive methods without auth token ──────────────
-        # DELETE/PUT/PATCH without a token will almost always fail the
-        # connection (status 0), making any comparison meaningless.
+
+
+
         if method.upper() in SKIP_UNAUTHENTICATED_METHODS and not token_owned:
             if self._config.verbose:
                 print(
@@ -262,7 +262,7 @@ class BlindIDORScanner:
                 )
             return results
 
-        # ── Take baseline ─────────────────────────────────────────────────────
+
         try:
             baseline_status, _, baseline_body, _ = await self._r(
                 method, url,
@@ -272,10 +272,10 @@ class BlindIDORScanner:
         except Exception:
             return results
 
-        # ── Guard 2: Validate baseline status ─────────────────────────────────
-        # Status 0 = connection failure. Any probe response compared against
-        # a failed baseline will look like a "change" — this is the root cause
-        # of every false positive in the Twilio scan.
+
+
+
+
         if baseline_status in INVALID_BASELINE_STATUSES:
             if self._config.verbose:
                 print(
@@ -284,9 +284,9 @@ class BlindIDORScanner:
                 )
             return results
 
-        # ── Guard 3: Canary header validation ─────────────────────────────────
-        # Send a completely random header. If it changes the response too,
-        # the endpoint reacts to ALL unknown headers — probes are unreliable.
+
+
+
         canary_triggered = await self._canary_check(
             url, method, body, token_owned, baseline_status, baseline_body
         )
@@ -299,7 +299,7 @@ class BlindIDORScanner:
                 )
             return results
 
-        # ── Run injection probes ──────────────────────────────────────────────
+
         for hdr in _INJECTION_HEADERS:
             hdr_name = list(hdr.keys())[0]
             hdr_val  = list(hdr.values())[0]
@@ -314,19 +314,19 @@ class BlindIDORScanner:
             except Exception:
                 continue
 
-            # No change at all — not interesting
+
             if s == baseline_status and not _responses_differ(baseline_body, resp_body):
                 continue
 
-            # WAF block — not a finding
+
             if _is_waf_block(resp_body):
                 continue
 
-            # ── Guard 4: 403 probe = server rejected the injection ─────────────
-            # A 403 response to the injected header means the server SAW the
-            # header and correctly rejected it. This is NOT an IDOR.
-            # The only valid 403 case is when the baseline was ALSO 403 (meaning
-            # the endpoint normally requires auth and the header didn't help).
+
+
+
+
+
             if s == 403 and baseline_status != 403:
                 if self._config.verbose:
                     print(
@@ -335,7 +335,7 @@ class BlindIDORScanner:
                     )
                 continue
 
-            # ── Guard 5: Minimum size delta ───────────────────────────────────
+
             size_delta = len(resp_body) - len(baseline_body)
             status_changed = s != baseline_status
 
@@ -347,15 +347,15 @@ class BlindIDORScanner:
                     )
                 continue
 
-            # ── Build oracle signals ──────────────────────────────────────────
+
             oracle_signals: list[OracleSignal] = []
 
-            # Status oracle
+
             if status_changed:
-                # Only count status change as a signal when it's meaningful:
-                # 200 → accessing something new (high confidence)
-                # 4xx → 2xx access gained (high confidence)
-                # Other changes are lower confidence
+
+
+
+
                 if s == 200 and baseline_status in (401, 403):
                     contrib = 50
                     detail  = f"Access gained: baseline {baseline_status} → injected header returns {s}"
@@ -373,7 +373,7 @@ class BlindIDORScanner:
                     confidence_contribution=contrib,
                 ))
 
-            # Size oracle (only if meaningful)
+
             if abs(size_delta) >= MIN_SIZE_DELTA_BYTES:
                 contrib = 25 if abs(size_delta) >= 100 else 15
                 oracle_signals.append(OracleSignal(
@@ -383,7 +383,7 @@ class BlindIDORScanner:
                     confidence_contribution=contrib,
                 ))
 
-            # Error message oracle
+
             baseline_exists   = any(p.search(baseline_body) for p in _RESOURCE_EXISTS_PATTERNS)
             baseline_notfound = any(p.search(baseline_body) for p in _RESOURCE_NOTFOUND_PATTERNS)
             probe_exists      = any(p.search(resp_body)     for p in _RESOURCE_EXISTS_PATTERNS)
@@ -397,7 +397,7 @@ class BlindIDORScanner:
                     confidence_contribution=35,
                 ))
 
-            # Content analysis oracle — did the response gain meaningful data?
+
             if (
                 s == 200
                 and _response_has_data(resp_body)
@@ -410,7 +410,7 @@ class BlindIDORScanner:
                     confidence_contribution=40,
                 ))
 
-            # ── Guard 6: Minimum oracle count ─────────────────────────────────
+
             if len(oracle_signals) < MIN_ORACLE_COUNT_HEADER:
                 if self._config.verbose:
                     print(
@@ -420,7 +420,7 @@ class BlindIDORScanner:
                     )
                 continue
 
-            # ── Build result ──────────────────────────────────────────────────
+
             r = BlindIDORResult()
             r.owned_url        = url
             r.tested_url       = url
@@ -435,7 +435,7 @@ class BlindIDORScanner:
             r.oracles_triggered = [sig.detail for sig in oracle_signals]
             r.confidence       = min(100, sum(sig.confidence_contribution for sig in oracle_signals))
             r.is_idor          = True
-            r.confirmed        = True   # header injection that passes all guards is strong signal
+            r.confirmed        = True   
             r.fp_risk          = "LOW"
             r.title            = (
                 f"Header-based IDOR — `{hdr_name}` overrides user context"
@@ -450,7 +450,7 @@ class BlindIDORScanner:
 
         return results
 
-    # ── Canary check ──────────────────────────────────────────────────────────
+
 
     async def _canary_check(
         self,
@@ -482,19 +482,19 @@ class BlindIDORScanner:
                 token_override=token_owned or None,
             )
         except Exception:
-            return False  # If canary probe fails, assume injection is meaningful
+            return False  
 
-        # Canary changed the status code
+
         if s != baseline_status:
             return True
 
-        # Canary changed the body size meaningfully
+
         if abs(len(body_text) - len(baseline_body)) >= MIN_SIZE_DELTA_BYTES:
             return True
 
         return False
 
-    # ── Core oracle engine ────────────────────────────────────────────────────
+
 
     async def _run_all_oracles(
         self,
@@ -543,10 +543,10 @@ class BlindIDORScanner:
             result.fp_signals.append("Could not collect response samples")
             return result
 
-        # ── FIX 7: Validate dominant owned status ─────────────────────────────
-        # Original code only checked "all timed out". This is not enough —
-        # if the dominant owned status is 0 (most samples failed), the
-        # comparison is still meaningless.
+
+
+
+
         owned_statuses = [r[0] for r in owned_resp]
         test_statuses  = [r[0] for r in test_resp]
         dom_owned      = _dominant(owned_statuses)
@@ -568,7 +568,7 @@ class BlindIDORScanner:
         result.status_owned  = dom_owned
         result.status_tested = dom_test
 
-        # Oracle 1: Status
+
         sig_status = OracleSignal(name="STATUS")
         if dom_owned != dom_test:
             sig_status.triggered = True
@@ -582,7 +582,7 @@ class BlindIDORScanner:
                 )
         result.signals.append(sig_status)
 
-        # Oracle 2: Size
+
         owned_sizes = [len(r[1]) for r in owned_resp]
         test_sizes  = [len(r[1]) for r in test_resp]
         avg_owned_sz = statistics.mean(owned_sizes)
@@ -601,7 +601,7 @@ class BlindIDORScanner:
             )
         result.signals.append(sig_size)
 
-        # Oracle 3: Error message
+
         owned_body_str = owned_resp[0][1]
         test_body_str  = test_resp[0][1]
 
@@ -637,7 +637,7 @@ class BlindIDORScanner:
                 result.error_diff = sig_error.detail
         result.signals.append(sig_error)
 
-        # Oracle 4: Timing (corroborated only)
+
         sig_timing = OracleSignal(name="TIMING")
         owned_times = [r[2] for r in owned_resp]
         test_times  = [r[2] for r in test_resp]
@@ -672,7 +672,7 @@ class BlindIDORScanner:
                         )
         result.signals.append(sig_timing)
 
-        # Oracle 5: Cross-user
+
         sig_cross = OracleSignal(name="CROSS_USER")
         if token_other and token_other != token_owned:
             s_cross, _, b_cross, _ = await self._r(
@@ -694,7 +694,7 @@ class BlindIDORScanner:
                 result.confirmed = True
         result.signals.append(sig_cross)
 
-        # ── Aggregate ─────────────────────────────────────────────────────────
+
         triggered          = [s for s in result.signals if s.triggered]
         result.oracles_triggered = [s.detail for s in triggered]
         result.confidence  = min(100, sum(s.confidence_contribution for s in triggered))
@@ -702,7 +702,7 @@ class BlindIDORScanner:
         non_cross = [s for s in triggered if s.name != "CROSS_USER"]
         result.is_idor = result.confirmed or len(non_cross) >= 2
 
-        # Final FP checks
+
         if result.is_idor:
             if _is_waf_block(test_body_str):
                 result.is_idor  = False
@@ -730,9 +730,9 @@ class BlindIDORScanner:
         return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Utility functions (unchanged from v3.0)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _adjacent_ids(original: int) -> list[int]:
     candidates = []

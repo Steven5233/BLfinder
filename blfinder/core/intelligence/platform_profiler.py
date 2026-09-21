@@ -13,9 +13,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Platform type constants
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 PLATFORM_STREAMING   = "STREAMING"
 PLATFORM_FINTECH     = "FINTECH"
@@ -24,7 +24,7 @@ PLATFORM_ECOMMERCE   = "ECOMMERCE"
 PLATFORM_SAAS        = "SAAS"
 PLATFORM_UNKNOWN     = "UNKNOWN"
 
-# Sub-types for known platforms
+
 KNOWN_SPOTIFY        = "SPOTIFY"
 KNOWN_STRIPE         = "STRIPE"
 KNOWN_PAYPAL         = "PAYPAL"
@@ -45,9 +45,9 @@ KNOWN_STARLING       = "STARLING"
 KNOWN_TRUELAYER      = "TRUELAYER"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data models
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 @dataclass
 class PlatformProfile:
@@ -64,9 +64,9 @@ class PlatformProfile:
     domain_chains:          list[str]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Known platform database
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 KNOWN_PLATFORMS: dict[str, dict] = {
 
@@ -776,9 +776,9 @@ KNOWN_PLATFORMS: dict[str, dict] = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Unknown platform fingerprinting signals
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _STREAMING_SIGNALS = [
     (r"subscription|premium|free.tier|plan", 20, PLATFORM_STREAMING),
@@ -816,9 +816,9 @@ _ECOMMERCE_SIGNALS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Platform profiler
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class PlatformProfiler:
     """
@@ -958,9 +958,9 @@ class PlatformProfiler:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Defaults for unknown platforms
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _default_priority_modules(ptype: str) -> list[str]:
     return {

@@ -24,17 +24,17 @@ from typing import Any
 class FieldProfile:
     """Statistical profile of a single field across multiple observations."""
     name: str
-    path: str                          # Dot-notation path e.g. "user.address.city"
+    path: str                          
     observed_values: list = field(default_factory=list)
     unique_count: int = 0
-    is_volatile: bool = False          # Changes on every request
-    is_stable: bool = False            # Same across all requests
-    is_sequential: bool = False        # Monotonically increasing (counter)
-    is_temporal: bool = False          # Looks like a timestamp
-    is_identifier: bool = False        # UUID, random token
-    value_type: str = "unknown"        # string, integer, float, boolean, null
-    sample_values: list = field(default_factory=list)  # Up to 3 representative values
-    volatility_score: float = 0.0     # 0.0 (stable) to 1.0 (completely volatile)
+    is_volatile: bool = False          
+    is_stable: bool = False            
+    is_sequential: bool = False        
+    is_temporal: bool = False          
+    is_identifier: bool = False        
+    value_type: str = "unknown"        
+    sample_values: list = field(default_factory=list)  
+    volatility_score: float = 0.0     
 
 
 class VolatileFieldExtractor:
@@ -53,23 +53,23 @@ class VolatileFieldExtractor:
         # → ["timestamp", "request_id", "expires_at", "session_token"]
     """
 
-    # Patterns that strongly suggest a field is a timestamp
+
     TIMESTAMP_PATTERNS = [
-        re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}', re.I),    # ISO 8601
-        re.compile(r'^\d{10}$'),                                             # Unix timestamp
-        re.compile(r'^\d{13}$'),                                             # Unix ms timestamp
-        re.compile(r'\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2}'),        # RFC 2822
+        re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}', re.I),    
+        re.compile(r'^\d{10}$'),                                             
+        re.compile(r'^\d{13}$'),                                             
+        re.compile(r'\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2}'),        
     ]
 
-    # Patterns that strongly suggest a field is a random identifier
+
     IDENTIFIER_PATTERNS = [
-        re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I),  # UUID
-        re.compile(r'^[0-9a-f]{32,64}$', re.I),        # MD5/SHA hex
-        re.compile(r'^[A-Za-z0-9+/]{20,}={0,2}$'),     # Base64
-        re.compile(r'^[A-Za-z0-9_-]{20,}$'),            # JWT-style / random token
+        re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I),  
+        re.compile(r'^[0-9a-f]{32,64}$', re.I),        
+        re.compile(r'^[A-Za-z0-9+/]{20,}={0,2}$'),     
+        re.compile(r'^[A-Za-z0-9_-]{20,}$'),            
     ]
 
-    # Field name patterns that are almost certainly volatile
+
     VOLATILE_NAME_PATTERNS = [
         re.compile(r'.*_at$', re.I),
         re.compile(r'.*_time$', re.I),
@@ -88,9 +88,9 @@ class VolatileFieldExtractor:
     ]
 
     def __init__(self):
-        # endpoint → {field_path → FieldProfile}
+
         self._profiles: dict[str, dict[str, FieldProfile]] = defaultdict(dict)
-        # Global volatile fields learned across all endpoints
+
         self._global_volatile: set[str] = set()
 
     def observe(self, body: str, endpoint: str = "_global"):
@@ -135,19 +135,19 @@ class VolatileFieldExtractor:
         for path, prof in profiles.items():
             self._classify_field(prof)
             if prof.is_volatile:
-                # If volatile in one endpoint, likely volatile globally
+
                 leaf_name = path.split(".")[-1]
                 self._global_volatile.add(leaf_name)
 
     def is_volatile(self, field_name: str, endpoint: str = "_global") -> bool:
         """Quick check: is this field name volatile?"""
-        # Check name patterns first (fast path)
+
         if any(p.match(field_name) for p in self.VOLATILE_NAME_PATTERNS):
             return True
-        # Check learned global volatiles
+
         if field_name in self._global_volatile:
             return True
-        # Check endpoint-specific profiles
+
         profiles = self._profiles.get(endpoint, {})
         if field_name in profiles:
             return profiles[field_name].is_volatile
@@ -164,7 +164,7 @@ class VolatileFieldExtractor:
         volatile_fields = set(self.get_volatile_fields(endpoint))
         return self._strip_volatile_recursive(data, volatile_fields)
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+
 
     def _walk_and_record(self, obj: Any, endpoint: str, prefix: str):
         """Recursively walk a JSON object and record field values."""
@@ -172,11 +172,11 @@ class VolatileFieldExtractor:
             for key, value in obj.items():
                 path = f"{prefix}.{key}" if prefix else key
                 self._record_value(endpoint, path, key, value)
-                # Recurse (limit depth to 5 to avoid explosion)
+
                 if isinstance(value, (dict, list)) and prefix.count(".") < 5:
                     self._walk_and_record(value, endpoint, path)
         elif isinstance(obj, list) and obj:
-            # Sample first item of arrays
+
             if isinstance(obj[0], dict):
                 self._walk_and_record(obj[0], endpoint, f"{prefix}[0]")
 
@@ -189,11 +189,11 @@ class VolatileFieldExtractor:
         str_val = str(value)
         prof.observed_values.append(str_val)
 
-        # Keep only last 20 observations
+
         if len(prof.observed_values) > 20:
             prof.observed_values = prof.observed_values[-20:]
 
-        # Track value type
+
         if isinstance(value, bool):
             prof.value_type = "boolean"
         elif isinstance(value, int):
@@ -205,7 +205,7 @@ class VolatileFieldExtractor:
         else:
             prof.value_type = "string"
 
-        # Update sample values (keep up to 3 unique)
+
         if str_val not in prof.sample_values and len(prof.sample_values) < 3:
             prof.sample_values.append(str_val)
 
@@ -219,40 +219,40 @@ class VolatileFieldExtractor:
         prof.unique_count = len(unique_vals)
         total = len(prof.observed_values)
 
-        # Volatility score = fraction of unique values
+
         prof.volatility_score = len(unique_vals) / total
 
-        # Name-based fast classification
+
         if any(p.match(prof.name) for p in self.VOLATILE_NAME_PATTERNS):
             prof.is_volatile = True
             prof.volatility_score = 1.0
             return
 
-        # All values same → stable
+
         if len(unique_vals) == 1:
             prof.is_stable = True
             prof.volatility_score = 0.0
             return
 
-        # All values different → volatile
+
         if len(unique_vals) == total:
             prof.is_volatile = True
 
-        # Timestamp detection
+
         for val in list(unique_vals)[:5]:
             if any(p.search(val) for p in self.TIMESTAMP_PATTERNS):
                 prof.is_temporal = True
                 prof.is_volatile = True
                 break
 
-        # Random identifier detection
+
         for val in list(unique_vals)[:5]:
             if any(p.match(val) for p in self.IDENTIFIER_PATTERNS):
                 prof.is_identifier = True
                 prof.is_volatile = True
                 break
 
-        # Sequential counter detection (integers incrementing)
+
         if prof.value_type == "integer":
             try:
                 int_vals = [int(v) for v in prof.observed_values]
@@ -263,14 +263,14 @@ class VolatileFieldExtractor:
             except (ValueError, TypeError):
                 pass
 
-        # High-entropy string detection (random tokens)
+
         if prof.value_type == "string" and len(unique_vals) > 1:
             avg_len = statistics.mean(len(v) for v in unique_vals)
             if avg_len > 16:
-                # Check entropy — high entropy = likely random
+
                 sample = list(unique_vals)[0]
                 entropy = self._string_entropy(sample)
-                if entropy > 4.0:  # High entropy threshold
+                if entropy > 4.0:  
                     prof.is_identifier = True
                     prof.is_volatile = True
 

@@ -1,4 +1,4 @@
-# BLFinder v3.1 — Evidence Capture Package
+
 from .capture import EvidencePackage, EvidenceCapture, RequestRecord, ResponseRecord
 from .http_recorder import HTTPRecorder
 from .diff_engine import DiffEngine, FieldDiff, DiffReport

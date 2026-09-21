@@ -133,7 +133,7 @@ class EndpointValidator:
     def __init__(self, scanner, config: ValidationConfig | None = None, **kwargs):
         self._scanner = scanner
         self._config  = config or ValidationConfig()
-        # Accept any extra kwargs injected by scanner_patch without crashing
+
         for k, v in kwargs.items():
             if hasattr(self._config, k):
                 setattr(self._config, k, v)

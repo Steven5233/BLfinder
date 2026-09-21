@@ -40,13 +40,13 @@ def checkpoint_path_for(target_url: str, output_dir: str = ".") -> str:
 class ScanCheckpoint:
     target_url: str
     path:       str
-    completed:  set   = field(default_factory=set)   # {(url, method), ...}
-    findings:   list  = field(default_factory=list)  # list[Finding], pre-dedup/verify
+    completed:  set   = field(default_factory=set)   
+    findings:   list  = field(default_factory=list)  
     started_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     total_endpoints: int = 0
 
-    # ── Mutators ───────────────────────────────────────────────────────────
+
 
     def mark_done(self, url: str, method: str, findings: list | None = None) -> None:
         """Record one endpoint as fully checked and persist immediately."""
@@ -68,7 +68,7 @@ class ScanCheckpoint:
     def is_done(self, url: str, method: str) -> bool:
         return (url, method) in self.completed
 
-    # ── Persistence ─────────────────────────────────────────────────────────
+
 
     def save(self) -> None:
         """Atomic write (write to temp file, then os.replace) so a crash or
@@ -80,9 +80,9 @@ class ScanCheckpoint:
                 pickle.dump(self, fh, protocol=pickle.HIGHEST_PROTOCOL)
             os.replace(tmp_path, self.path)
         except Exception:
-            # Checkpointing must never be allowed to crash the scan itself —
-            # worst case, resume support is degraded for this run, not the
-            # scan's actual findings.
+
+
+
             pass
 
     @classmethod
@@ -98,8 +98,8 @@ class ScanCheckpoint:
         if os.path.exists(path):
             try:
                 ckpt = cls.load(path)
-                # Guard against reusing a stale checkpoint from a different
-                # target that happened to hash-collide or share a filename.
+
+
                 if ckpt.target_url == target_url:
                     return ckpt
             except Exception:
@@ -114,7 +114,7 @@ class ScanCheckpoint:
         except OSError:
             pass
 
-    # ── Introspection ─────────────────────────────────────────────────────
+
 
     def summary(self) -> str:
         age = time.time() - self.updated_at

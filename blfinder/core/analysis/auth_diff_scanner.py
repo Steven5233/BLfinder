@@ -88,13 +88,13 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Sensitivity classification
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Field name patterns → sensitivity score (0-100)
+
+
+
+
 _FIELD_SENSITIVITY: list[tuple[re.Pattern, int, str]] = [
-    # (pattern, score, category)
+
     (re.compile(r'\b(password|passwd|pwd|secret|private_key|api_secret)\b', re.I), 100, "CREDENTIAL"),
     (re.compile(r'\b(ssn|social_security|national_id|tax_id|sin)\b', re.I),        100, "PII_GOVERNMENT"),
     (re.compile(r'\b(credit_card|card_number|cvv|cvc|pan)\b', re.I),               100, "FINANCIAL"),
@@ -117,7 +117,7 @@ _FIELD_SENSITIVITY: list[tuple[re.Pattern, int, str]] = [
     (re.compile(r'\b(customer_id|account_id|user_id|profile_id)\b', re.I),         40,  "IDENTIFIER"),
 ]
 
-# Value patterns for detecting PII in values regardless of field name
+
 _VALUE_SENSITIVITY: list[tuple[re.Pattern, int, str]] = [
     (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'),                                          100, "SSN"),
     (re.compile(r'\b4[0-9]{12}(?:[0-9]{3})?\b'),                                    100, "VISA_PAN"),
@@ -137,23 +137,23 @@ SEVERITY_MEDIUM   = "MEDIUM"
 SEVERITY_LOW      = "LOW"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data models
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 @dataclass
 class FieldInfo:
     name:         str
     value:        Any
-    type_name:    str          # str / int / float / bool / list / dict / null
-    sensitivity:  int          # 0-100
-    category:     str          # PII / CREDENTIAL / FINANCIAL / INTERNAL / OTHER
-    path:         str          # JSON dot-path e.g. "user.address.street"
+    type_name:    str          
+    sensitivity:  int          
+    category:     str          
+    path:         str          
 
 
 @dataclass
 class DiffFinding:
-    diff_type:       str           # UNAUTH_LEAKED / UNAUTH_EXTRA / VALUE_EXPOSURE / etc.
+    diff_type:       str           
     field_path:      str
     field_info:      FieldInfo
     auth_value:      Any
@@ -167,9 +167,9 @@ class DiffFinding:
     method:          str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Schema extractor
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class SchemaExtractor:
     """
@@ -183,7 +183,7 @@ class SchemaExtractor:
         return fields
 
     def _walk(self, obj: Any, path: str, out: dict[str, FieldInfo], depth: int = 0):
-        if depth > 8:   # prevent runaway recursion on deeply nested objects
+        if depth > 8:   
             return
 
         if isinstance(obj, dict):
@@ -195,10 +195,10 @@ class SchemaExtractor:
                     self._walk(val, child_path, out, depth + 1)
 
         elif isinstance(obj, list):
-            # Analyse the first item as representative of the list schema
+
             if obj and isinstance(obj[0], dict):
                 self._walk(obj[0], f"{path}[0]", out, depth + 1)
-            # Also record list-level field
+
             if path:
                 info = self._classify_field(
                     path.split(".")[-1], obj, path
@@ -230,14 +230,14 @@ class SchemaExtractor:
         max_score = 0
         category  = "OTHER"
 
-        # Check field name
+
         for pattern, score, cat in _FIELD_SENSITIVITY:
             if pattern.search(name):
                 if score > max_score:
                     max_score = score
                     category  = cat
 
-        # Check value (string values only)
+
         if isinstance(value, str) and len(value) > 3:
             for pattern, score, cat in _VALUE_SENSITIVITY:
                 if pattern.search(value):
@@ -248,15 +248,15 @@ class SchemaExtractor:
         return max_score, category
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Diff engine
-# ─────────────────────────────────────────────────────────────────────────────
 
-# JWTs are re-issued fresh on nearly every call (unique jti/iat/exp), so a
-# raw string diff on a JWT field will almost always report "different" even
-# when it's the exact same identity/session. Decode both tokens and compare
-# only the claims that actually indicate a different identity or privilege
-# level was disclosed — ignore claims that vary by design on every issuance.
+
+
+
+
+
+
+
+
 _JWT_VOLATILE_CLAIMS = {"iat", "exp", "nbf", "jti", "nonce"}
 _JWT_IDENTITY_CLAIMS = {
     "sub", "uid", "user_id", "userId", "email", "role", "roles",
@@ -314,7 +314,7 @@ class DiffEngine:
         auth_keys   = set(auth_schema.keys())
         unauth_keys = set(unauth_schema.keys())
 
-        # Type 2: UNAUTH_LEAKED_FIELDS — in both → leak
+
         both = auth_keys & unauth_keys
         for path in both:
             auth_field   = auth_schema[path]
@@ -323,14 +323,14 @@ class DiffEngine:
             if auth_field.sensitivity < self.min_sensitivity:
                 continue
 
-            # A null/empty value can't be an exposure or a leak — nothing
-            # was actually disclosed, so skip before diffing/flagging it.
+
+
             if self._is_empty(unauth_field.value) and self._is_empty(auth_field.value):
                 continue
             if self._is_empty(unauth_field.value):
                 continue
 
-            # Type 4: VALUE_EXPOSURE — same field, different/more-complete value
+
             if auth_field.category == "JWT" and unauth_field.category == "JWT":
                 jwt_diff   = _jwt_identity_differs(auth_field.value, unauth_field.value)
                 value_diff = (
@@ -365,7 +365,7 @@ class DiffEngine:
                     method=method,
                 ))
             else:
-                # Same value in both — this is a leak if field is sensitive
+
                 findings.append(DiffFinding(
                     diff_type="UNAUTH_LEAKED_FIELD",
                     field_path=path,
@@ -393,7 +393,7 @@ class DiffEngine:
                     method=method,
                 ))
 
-        # Type 3: UNAUTH_EXTRA_FIELDS — in no-auth but NOT in auth
+
         extra = unauth_keys - auth_keys
         for path in extra:
             unauth_field = unauth_schema[path]
@@ -424,12 +424,12 @@ class DiffEngine:
                 method=method,
             ))
 
-        # Type 6: COUNT_EXPOSURE — compare list lengths
+
         count_diff = self._check_count_exposure(auth_data, unauth_data, endpoint, method)
         if count_diff:
             findings.append(count_diff)
 
-        # Type 7: ROLE_ESCALATION — privilege fields with elevated values
+
         for path in unauth_keys:
             fi = unauth_schema[path]
             if fi.category == "PRIVILEGE" and fi.sensitivity >= 60:
@@ -483,9 +483,9 @@ class DiffEngine:
             if f1.sensitivity < self.min_sensitivity:
                 continue
 
-            # Values differ between users → possible IDOR data leak
+
             if self._value_differs(f1.value, f2.value):
-                # Only flag if the field is a user-identifying type
+
                 if f1.category in ("PII", "PII_GOVERNMENT", "CREDENTIAL", "FINANCIAL"):
                     findings.append(DiffFinding(
                         diff_type="CROSS_USER_DATA_LEAK",
@@ -515,7 +515,7 @@ class DiffEngine:
 
         return findings
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+
 
     @staticmethod
     def _severity(sensitivity: int) -> str:
@@ -540,7 +540,7 @@ class DiffEngine:
         if a is None or b is None:  return True
         if type(a) != type(b):      return True
         if isinstance(a, str):
-            # Ignore whitespace / case for comparison
+
             return a.strip().lower() != b.strip().lower()
         return a != b
 
@@ -551,7 +551,7 @@ class DiffEngine:
         if isinstance(value, bool): return str(value).lower()
         s = str(value)
         if len(s) > max_len:
-            # Redact middle of long values (tokens, keys)
+
             return s[:8] + "..." + s[-4:]
         return s
 
@@ -591,7 +591,7 @@ class DiffEngine:
         if unauth_count <= auth_count:
             return None
         if unauth_count - auth_count < 2:
-            return None  # noise
+            return None  
 
         return DiffFinding(
             diff_type="COUNT_EXPOSURE",
@@ -619,9 +619,9 @@ class DiffEngine:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main scanner class
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class AuthDiffScanner:
     """
@@ -658,7 +658,7 @@ class AuthDiffScanner:
 
         ev = self._scanner._new_evidence()
 
-        # ── Authenticated request ─────────────────────────────────────────────
+
         auth_status, auth_hdrs, auth_body, _ = await self._scanner._req_ev(
             "baseline", ev, method, url,
             req_body=body if body else None,
@@ -667,23 +667,23 @@ class AuthDiffScanner:
         )
 
         if auth_status == 0 or auth_status >= 500:
-            return findings  # endpoint not reachable
+            return findings  
 
         auth_data   = self._try_parse(auth_body)
         if auth_data is None:
-            return findings  # non-JSON — skip
+            return findings  
 
         auth_schema = self._extractor.extract(auth_data, url)
         if not auth_schema:
-            return findings  # no fields to diff
+            return findings  
 
-        # ── Unauthenticated request ───────────────────────────────────────────
+
         unauth_status, _, unauth_body, _ = await self._scanner._req_ev(
             "no_auth", ev, method, url,
             req_body=body if body else None,
             params=params if params else None,
-            token_override="",   # explicitly no token
-            cookies_override={}, # explicitly no cookies — must be a true anonymous request
+            token_override="",   
+            cookies_override={}, 
         )
 
         if unauth_status == 0:
@@ -691,7 +691,7 @@ class AuthDiffScanner:
 
         unauth_data = self._try_parse(unauth_body)
 
-        # ── Auth vs no-auth diff ──────────────────────────────────────────────
+
         if unauth_data is not None and unauth_status in (200, 201):
             unauth_schema = self._extractor.extract(unauth_data, url)
             diff_results  = self._diff_eng.diff(
@@ -702,7 +702,7 @@ class AuthDiffScanner:
             for dr in diff_results:
                 findings.append(self._to_finding(dr, "auth_diff", ev=ev))
 
-        # ── Cross-user diff (when second token available) ─────────────────────
+
         if token2 and token2 != token1:
             user2_status, _, user2_body, _ = await self._scanner._req_ev(
                 "cross_user", ev, method, url,
@@ -723,7 +723,7 @@ class AuthDiffScanner:
 
         return findings
 
-    # ── Batch scan ────────────────────────────────────────────────────────────
+
 
     async def scan_all(
         self,
@@ -754,7 +754,7 @@ class AuthDiffScanner:
             if isinstance(r, list):
                 all_findings.extend(r)
 
-        # Deduplicate by (endpoint, field_path, diff_type)
+
         seen:   set[str]   = set()
         unique: list[dict] = []
         for f in all_findings:
@@ -768,7 +768,7 @@ class AuthDiffScanner:
 
         return unique
 
-    # ── Conversion to Finding-compatible dict ─────────────────────────────────
+
 
     def _to_finding(self, dr: DiffFinding, source: str, ev: "EvidenceCapture | None" = None) -> dict:
         """
@@ -838,7 +838,7 @@ class AuthDiffScanner:
             "confidence":  min(100, dr.sensitivity + 10),
             "endpoint":    dr.endpoint,
             "parameter":   dr.field_path,
-            # Extra metadata for the chained vulnerability engine
+
             "_auth_diff":  {
                 "diff_type":     dr.diff_type,
                 "field_path":    dr.field_path,

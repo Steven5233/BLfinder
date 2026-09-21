@@ -55,10 +55,10 @@ from urllib.parse import urlparse, urlunparse, urljoin
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -75,11 +75,11 @@ except ImportError:
 from ..models import DiscoveredEndpoint, DiscoveryConfig, SOURCE_WORDLIST
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Field-level inference helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Fields that look like server-generated IDs — strip from write bodies
+
+
+
+
 _READONLY_FIELD_PATTERNS = re.compile(
     r'^(?:id|_id|uuid|created_at|updated_at|deleted_at|created|updated|'
     r'timestamp|version|etag|revision|seq|sequence|hash|checksum|'
@@ -87,14 +87,14 @@ _READONLY_FIELD_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# Fields that are almost always present in write bodies
+
 _ALWAYS_INCLUDE = frozenset({
     "name", "title", "email", "phone", "username", "password",
     "description", "type", "status", "role", "amount", "price",
     "quantity", "currency", "code", "value", "data",
 })
 
-# Type examples for JSON values
+
 _TYPE_EXAMPLES: dict[str, Any] = {
     int:   1,
     float: 1.0,
@@ -115,11 +115,11 @@ def _infer_example_value(key: str, current_val: Any) -> Any:
     """
     k = key.lower()
 
-    # If current value is a useful type, use its type for example generation
+
     if isinstance(current_val, bool):
         return True
     if isinstance(current_val, int):
-        # IDs look like integers — keep them as is for path testing
+
         if "id" in k:
             return 1
         return current_val if 0 <= current_val < 100000 else 1
@@ -130,7 +130,7 @@ def _infer_example_value(key: str, current_val: Any) -> Any:
     if isinstance(current_val, dict):
         return {}
 
-    # String field — use format hints
+
     if "email" in k:
         return "user@example.com"
     if "phone" in k or "mobile" in k:
@@ -156,7 +156,7 @@ def _infer_example_value(key: str, current_val: Any) -> Any:
     if "type" in k:
         return current_val if isinstance(current_val, str) else "standard"
 
-    # Default: use the current value if it's a short string, else "test"
+
     if isinstance(current_val, str) and len(current_val) < 50:
         return current_val
     return "test"
@@ -174,13 +174,13 @@ def _response_to_write_body(response_data: Any, depth: int = 0) -> dict:
 
     write_body: dict = {}
     for key, val in response_data.items():
-        # Skip read-only server fields
+
         if _is_readonly_field(key):
             continue
-        # Skip null values unless the key is in the always-include set
+
         if val is None and key.lower() not in _ALWAYS_INCLUDE:
             continue
-        # Recurse into nested objects (one level only)
+
         if isinstance(val, dict) and depth == 0:
             nested = _response_to_write_body(val, depth + 1)
             if nested:
@@ -199,7 +199,7 @@ def _infer_params_from_path(path: str) -> dict:
     params: dict = {}
     lp = path.lower()
 
-    # Pagination — almost every list endpoint
+
     if any(k in lp for k in (
         "list", "all", "users", "orders", "products", "items",
         "transactions", "payments", "accounts", "events", "logs",
@@ -207,15 +207,15 @@ def _infer_params_from_path(path: str) -> dict:
         params["limit"]  = 10
         params["offset"] = 0
 
-    # Search endpoints
+
     if "search" in lp or "suggest" in lp or "autocomplete" in lp:
         params["q"] = "test"
 
-    # Status filter
+
     if any(k in lp for k in ("orders", "transactions", "payments", "tasks", "jobs")):
         params["status"] = "active"
 
-    # Date range (reports, analytics, statements)
+
     if any(k in lp for k in ("report", "analytics", "stat", "statement", "export")):
         params["from"] = "2024-01-01"
         params["to"]   = "2024-12-31"
@@ -223,9 +223,9 @@ def _infer_params_from_path(path: str) -> dict:
     return params
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OPTIONS-based method discovery
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _probe_options(
     url: str,
@@ -257,9 +257,9 @@ async def _probe_options(
     return []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main enricher class
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class SchemaEnricher:
     """
@@ -289,27 +289,27 @@ class SchemaEnricher:
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
 
-        # ── Gap 1: copy schema_hint → body for spec-verified endpoints ────────
+
         spec_fixed = 0
         for ep in endpoints:
             if ep.schema_hint and not ep.body and ep.method in ("POST", "PUT", "PATCH"):
                 ep.body = dict(ep.schema_hint)
                 spec_fixed += 1
 
-        # ── Gap 3: add inferred query params where missing ────────────────────
+
         for ep in endpoints:
             if not ep.params and ep.method == "GET":
                 inferred = _infer_params_from_path(urlparse(ep.url).path)
                 if inferred:
                     ep.params = inferred
 
-        # ── OPTIONS method discovery for unknown-method endpoints ─────────────
+
         options_candidates = [
             ep for ep in endpoints
             if ep.method == "GET"
             and not ep.http_methods_allowed
             and ep.confidence >= 0.70
-        ][:30]   # cap at 30 OPTIONS probes
+        ][:30]   
 
         if options_candidates:
             options_results = await asyncio.gather(
@@ -323,8 +323,8 @@ class SchemaEnricher:
                 if isinstance(methods, list) and methods:
                     ep.http_methods_allowed = methods
 
-        # ── Gap 2: live GET → inferred write body ─────────────────────────────
-        # Only for POST/PUT/PATCH with empty body, not from wordlist, confidence ≥ 0.65
+
+
         live_candidates = [
             ep for ep in endpoints
             if ep.method in ("POST", "PUT", "PATCH")
@@ -332,18 +332,18 @@ class SchemaEnricher:
             and ep.source != SOURCE_WORDLIST
             and ep.confidence >= 0.65
             and "debug" not in ep.tags
-        ][:20]   # cap at 20 live enrichment probes
+        ][:20]   
 
         enriched_count = 0
 
         async def enrich_one(ep: DiscoveredEndpoint) -> None:
             nonlocal enriched_count
-            # Build the GET URL for the same resource
-            # POST /api/v1/orders → GET /api/v1/orders/1
+
+
             parsed = urlparse(ep.url)
             path   = parsed.path.rstrip("/")
 
-            # Try the endpoint itself (GET version)
+
             get_url = urlunparse(parsed._replace(
                 path=path, query="", fragment=""
             ))
@@ -355,7 +355,7 @@ class SchemaEnricher:
                     ssl=False,
                 ) as resp:
                     if resp.status not in (200, 201):
-                        # Try with /1 appended
+
                         get_url2 = get_url.rstrip("/") + "/1"
                         async with session.get(
                             get_url2, headers=headers,
@@ -375,11 +375,11 @@ class SchemaEnricher:
                     _blf_dbg("blfinder/core/discovery/layer5_dedup/schema_enricher.py#2", e)
                     return
 
-                # Handle list responses: use first item
+
                 if isinstance(data, list) and data:
                     data = data[0]
                 elif isinstance(data, dict):
-                    # Unwrap common envelope keys
+
                     for wrap_key in ("data", "result", "item", "record", "user",
                                      "order", "product", "account"):
                         if wrap_key in data and isinstance(data[wrap_key], dict):
@@ -396,7 +396,7 @@ class SchemaEnricher:
 
                 write_body = _response_to_write_body(data)
                 if write_body:
-                    write_body["_enriched"] = True   # marker for scanner
+                    write_body["_enriched"] = True   
                     ep.body         = write_body
                     ep.schema_hint  = {k: v for k, v in write_body.items()
                                        if k != "_enriched"}

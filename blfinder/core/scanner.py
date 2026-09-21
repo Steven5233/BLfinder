@@ -51,7 +51,7 @@ try:
 except ImportError:
     _HAS_FIELD_TYPING = False
 
-# ── Phase 1 imports ───────────────────────────────────────────────────────────
+
 try:
     from .analysis.semantic_diff import SemanticDiff
     from .analysis.field_extractor import build_volatile_map, VolatileFieldExtractor
@@ -90,7 +90,7 @@ try:
 except ImportError:
     _HAS_FLOWS = False
 
-# ── Phase 2 imports ───────────────────────────────────────────────────────────
+
 try:
     from .evidence.capture import EvidenceCapture, EvidencePackage
     from .evidence.http_recorder import HTTPRecorder
@@ -98,7 +98,7 @@ try:
 except ImportError:
     _HAS_EVIDENCE = False
 
-# ── Phase 3 imports ───────────────────────────────────────────────────────────
+
 try:
     from .validation.endpoint_validator import (
         EndpointValidator, ValidationConfig, ValidationResult,
@@ -122,7 +122,7 @@ try:
 except ImportError:
     _HAS_JS_EXTRACT = False
 
-# ── Phase 4 imports ───────────────────────────────────────────────────────────
+
 try:
     from .modules.idor_mass_enum import IDORMassEnumerator
     _HAS_IDOR_ENUM = True
@@ -195,14 +195,14 @@ try:
 except ImportError:
     _HAS_CLASSIFIER = False
 
-# ── Phase 5 imports ───────────────────────────────────────────────────────────
+
 try:
     from .tui.live_dashboard import DashboardState, LiveDashboard
     _HAS_TUI = True
 except ImportError:
     _HAS_TUI = False
 
-# ── Phase 5+: Deep Discovery Engine ──────────────────────────────────────────
+
 try:
     from .discovery.engine import DeepDiscoveryEngine
     from .discovery.models import DiscoveryConfig
@@ -211,17 +211,17 @@ except ImportError:
     _HAS_DEEP_DISCOVERY = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WEAK-1 FIX: Extended ID pattern matching for IDOR
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _IDOR_ID_PATTERNS: list[re.Pattern] = [
-    re.compile(r'^\d{1,15}$'),                                                              # plain numeric
-    re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I), # UUID v4
-    re.compile(r'^[0-9a-f]{24}$', re.I),                                                    # MongoDB ObjectID
-    re.compile(r'^[a-z]{2,4}_[A-Za-z0-9]{10,}$'),                                          # Stripe-format
-    re.compile(r'^[0-9A-Za-z]{22}$'),                                                       # Spotify/base62
-    re.compile(r'^[0-9a-f]{12,40}$', re.I),                                                 # hex hash
+    re.compile(r'^\d{1,15}$'),                                                              
+    re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I), 
+    re.compile(r'^[0-9a-f]{24}$', re.I),                                                    
+    re.compile(r'^[a-z]{2,4}_[A-Za-z0-9]{10,}$'),                                          
+    re.compile(r'^[0-9A-Za-z]{22}$'),                                                       
+    re.compile(r'^[0-9a-f]{12,40}$', re.I),                                                 
 ]
 _NUMERIC_ONLY = re.compile(r'^\d{1,15}$')
 _IDOR_SKIP_WORDS = frozenset({
@@ -278,9 +278,9 @@ def _generate_id_variants(segment: str) -> list[str]:
     return list(dict.fromkeys(v for v in variants if v and v != segment))[:5]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WEAK-2 FIX: Dynamic mass assignment field discovery
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _PRIVILEGE_PATTERNS = [
     re.compile(r'^is_', re.I),        re.compile(r'^has_', re.I),
@@ -293,11 +293,11 @@ _PRIVILEGE_PATTERNS = [
 ]
 
 
-# Word-boundary patterns for _response_indicates_success. Replaces naive
-# bare substring checks (e.g. "id" matching inside "paid"/"guide"/"avoid",
-# "true" matching inside prose, "token" matching CSRF-token mentions
-# unrelated to auth outcome) which were producing false success/failure
-# reads on ordinary response bodies.
+
+
+
+
+
 _FAILURE_INDICATOR_PATTERNS = [
     re.compile(r'\berror\b', re.I),        re.compile(r'\binvalid\b', re.I),
     re.compile(r'\bfailed\b', re.I),       re.compile(r'\bunauthorized\b', re.I),
@@ -315,8 +315,8 @@ _SUCCESS_INDICATOR_PATTERNS = [
     re.compile(r'\baccepted\b', re.I),     re.compile(r'"?\bok\b"?\s*[,:}]', re.I),
     re.compile(r'"order_id"', re.I),       re.compile(r'"transaction_id"', re.I),
     re.compile(r'"payment_id"', re.I),
-    # JSON-shaped id/token/true instead of bare substrings — requires the
-    # actual key or value position, not just the letters appearing anywhere.
+
+
     re.compile(r'"id"\s*:', re.I),         re.compile(r'"token"\s*:', re.I),
     re.compile(r':\s*true\b', re.I),
 ]
@@ -368,15 +368,15 @@ def _discover_dynamic_fields(response_body: str) -> list[tuple[str, Any]]:
     return discovered[:10]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WEAK-3 FIX: Extended race condition indicators (gambling/fintech added)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _RACE_INDICATORS = frozenset([
-    # Original keywords
+
     "redeem", "transfer", "withdraw", "claim", "checkout",
     "purchase", "buy", "confirm", "coupon", "reward", "spin",
-    # WEAK-3 additions — gambling / fintech
+
     "bet", "wager", "stake", "cashout", "cash-out", "cash_out",
     "bonus", "accrual", "bonus-accrual", "bonus_accrual",
     "settlement", "settle", "payout", "pay-out", "pay_out",
@@ -385,12 +385,12 @@ _RACE_INDICATORS = frozenset([
     "charge", "pay", "enroll", "subscribe", "activate",
 ])
 
-# RACE-FIX: URL-keyword gating alone misses everything that isn't REST-shaped —
-# GraphQL, single RPC endpoints, and actions encoded as a body field instead of
-# a path segment (e.g. POST /api/action with {"action": "redeem"}). These are
-# checked against the JSON body (keys AND string values) and against GraphQL
-# mutation/operation names so a single "/graphql" endpoint isn't skipped just
-# because the URL itself looks generic.
+
+
+
+
+
+
 _RACE_BODY_KEY_HINTS = frozenset([
     "action", "op", "operation", "type", "event", "intent", "command",
 ])
@@ -400,22 +400,22 @@ _GRAPHQL_MUTATION_HINTS = frozenset([
     "refund", "settle", "activate", "subscribe",
 ])
 
-# Keys whose values are treated as a resource/transaction identifier for the
-# distinct-identifier oracle: if a race burst produces N "successful" HTTP
-# responses but only ONE distinct id among them, that's most likely the same
-# transaction echoed back (idempotent handling, or a cache) — not proof of a
-# race. If it produces multiple *distinct* ids, that's direct proof multiple
-# separate mutations were actually created server-side.
+
+
+
+
+
+
 _IDENTIFIER_KEY_HINTS = (
     "id", "uuid", "transaction_id", "txn_id", "order_id", "orderid",
     "redemption_id", "receipt_id", "ticket_id", "coupon_id", "booking_id",
     "reference", "ref", "confirmation_id", "payment_id", "charge_id",
 )
 
-# Keys whose numeric values are worth diffing before/after a burst as a
-# secondary side-effect oracle (e.g. wallet balance actually dropping by
-# 3x the unit price proves 3 withdrawals posted, regardless of what the
-# HTTP status codes said).
+
+
+
+
 _NUMERIC_SIGNAL_KEY_HINTS = (
     "balance", "credits", "remaining", "stock", "quantity", "qty",
     "points", "wallet", "available", "inventory", "uses_left",
@@ -506,9 +506,9 @@ def _find_numeric_signals(body: str) -> dict:
     return signals
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WEAK-4 FIX: Cloudflare challenge detection helpers
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _CF_CHALLENGE_SIGNALS = (
     "just a moment",
@@ -534,7 +534,7 @@ def _is_cf_challenge(status: int, headers: dict, body: str) -> bool:
     return any(sig in body_lower for sig in _CF_CHALLENGE_SIGNALS)
 
 
-# ── User-Agent pool ───────────────────────────────────────────────────────────
+
 UA_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "Chrome/124.0.0.0 Safari/537.36",
@@ -550,7 +550,7 @@ UA_POOL = [
 ]
 
 
-# ── Adaptive Rate Limiter ─────────────────────────────────────────────────────
+
 class AdaptiveRateLimiter:
     def __init__(self, base_delay: float = 0.3):
         self.base_delay       = base_delay
@@ -587,7 +587,7 @@ class AdaptiveRateLimiter:
                 self.delays[domain] = max(self.base_delay, current * 0.85)
 
 
-# ── Discovery config builder ──────────────────────────────────────────────────
+
 def _build_discovery_config(scan_config: "ScanConfig") -> Optional["DiscoveryConfig"]:
     if not _HAS_DEEP_DISCOVERY:
         return None
@@ -648,9 +648,9 @@ def _merge_discovered(
     return existing, added
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# BLFScanner — v3.1 Phase 5+ Complete + Fixed
-# ═════════════════════════════════════════════════════════════════════════════
+
+
+
 class BLFScanner:
 
     def __init__(self, config: ScanConfig):
@@ -665,23 +665,23 @@ class BLFScanner:
         self.discovered_endpoints: list[dict] = []
         self._seen_findings: set = set()
 
-        # Attack targeting: per-endpoint type-validation posture, shared
-        # across price/quantity/mass-assignment modules so each endpoint
-        # is calibrated once instead of re-probed by every module. Also
-        # dedupes the fixed admin-path probe list to once per domain
-        # instead of once per discovered endpoint.
+
+
+
+
+
         self._posture_cache = PostureCache() if _HAS_FIELD_TYPING else None
         self._admin_paths_probed: set[str] = set()
 
-        # Core helpers
+
         self.confidence_engine = ConfidenceEngine()
         self.poc_generator     = PoCGenerator(config)
         self._verifier: Optional[FindingVerifier] = None
 
-        # Resume / checkpointing — only active when the CLI sets a path.
-        # See core/checkpoint.py: persists per-endpoint progress + findings
-        # to disk as each endpoint finishes, so an interrupted scan can
-        # resume with --resume instead of restarting from endpoint #1.
+
+
+
+
         self._checkpoint: Optional[ScanCheckpoint] = None
         if getattr(config, "checkpoint_path", ""):
             self._checkpoint = ScanCheckpoint.load_or_create(
@@ -690,7 +690,7 @@ class BLFScanner:
             if getattr(config, "resume", False) and self._checkpoint.completed:
                 print(f"[*] Resuming: {self._checkpoint.summary()}")
 
-        # Phase 1
+
         self._session_mgr:   Optional[SessionManager]   = None
         self._blind_idor:    Optional[BlindIDORScanner]  = None
         self._timing_oracle: Optional[TimingOracle]      = None
@@ -698,7 +698,7 @@ class BLFScanner:
         self._volatile_extractors: dict[str, Any] = {}
         self._baseline_samples:    dict[str, list[str]] = defaultdict(list)
 
-        # Phase 3
+
         self._endpoint_validator:   Optional[EndpointValidator]  = None
         self._response_classifier:  Optional[ResponseClassifier] = None
         self._classified_responses: dict[str, ClassifiedResponse] = {}
@@ -706,7 +706,7 @@ class BLFScanner:
         self._js_secrets:     Optional[JSExtractionResult]  = None
         self._skipped_endpoints: list[str] = []
 
-        # Phase 4
+
         self._idor_enumerator: Optional[IDORMassEnumerator] = None
         self._gql_deep:        Optional[GraphQLDeepScanner] = None
         self._ws_scanner:      Optional[WebSocketScanner]   = None
@@ -721,16 +721,16 @@ class BLFScanner:
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
 
-        # Phase 5
+
         self._dashboard_state:          Optional[DashboardState] = None
         self._findings_queue:           Optional[asyncio.Queue]  = None
         self._profile_skip_modules:     set[str]  = set()
         self._profile_priority_modules: list[str] = []
 
-        # Phase 5+: deep discovery
+
         self._discovery_engine: Optional[DeepDiscoveryEngine] = None
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
 
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(
@@ -740,14 +740,14 @@ class BLFScanner:
         self.session   = aiohttp.ClientSession(connector=connector, timeout=timeout)
         self._verifier = FindingVerifier(self, self.config)
 
-        # RACE-FIX: the main session caps concurrent connections to a single
-        # host at 5 (limit_per_host=5). That's fine for normal scanning
-        # (don't hammer the target) but it silently *serializes* any race
-        # condition burst above 5 requests into sequential batches — the
-        # scanner would ask for 15/20/30 "concurrent" requests and the
-        # connector would queue most of them, defeating the entire point of
-        # the test. Race bursts get their own connector with no per-host
-        # ceiling, used only for the short-lived barrage itself.
+
+
+
+
+
+
+
+
         burst_connector = aiohttp.TCPConnector(
             ssl=self.config.verify_ssl, limit=0, limit_per_host=0
         )
@@ -755,7 +755,7 @@ class BLFScanner:
             connector=burst_connector, timeout=timeout
         )
 
-        # Phase 1
+
         if _HAS_BLIND_IDOR:
             self._blind_idor = BlindIDORScanner(self)
         if _HAS_TIMING:
@@ -766,12 +766,12 @@ class BLFScanner:
             self._session_mgr = SessionManager(self.config, self.config.refresh_config)
             self._session_mgr.initialize(self.session)
 
-        # Phase 3
+
         if _HAS_VALIDATION:
             self._endpoint_validator  = EndpointValidator(self, ValidationConfig())
             self._response_classifier = ResponseClassifier()
 
-        # Phase 4
+
         if _HAS_IDOR_ENUM:
             self._idor_enumerator = IDORMassEnumerator(self)
         if _HAS_GQL_DEEP:
@@ -791,19 +791,19 @@ class BLFScanner:
         if _HAS_SSRF and getattr(self.config, "run_ssrf", False):
             self._ssrf_scanner = SSRFScanner(self)
         if _HAS_CSRF:
-            # Always instantiated: CSRFScanner internally gates its own
-            # active-replay behavior behind config.run_csrf and otherwise
-            # only performs passive, read-only hardening-gap detection.
+
+
+
             self._csrf_scanner = CSRFScanner(self)
         if _HAS_SOURCE_SCAN and getattr(self.config, "run_source_scan", False):
             self._source_scanner = SourceCodeScanner(self)
         if _HAS_CLASSIFIER:
             self._classifier = BusinessClassifier()
 
-        # Phase 5
+
         self._findings_queue = asyncio.Queue()
 
-        # Phase 5+: deep discovery engine
+
         if _HAS_DEEP_DISCOVERY and not getattr(self.config, "no_deep_discovery", False):
             self._discovery_engine = DeepDiscoveryEngine(
                 verbose=self.config.verbose
@@ -817,7 +817,7 @@ class BLFScanner:
         if getattr(self, "_burst_session", None):
             await self._burst_session.close()
 
-    # ── Phase 5: Profile + Dashboard ─────────────────────────────────────────
+
 
     def apply_profile(self, profile: dict):
         settings = profile.get("settings", {})
@@ -856,7 +856,7 @@ class BLFScanner:
             1 for r in self.request_log if r.get("status") == 429
         )
 
-    # ── Request infrastructure ────────────────────────────────────────────────
+
 
     @staticmethod
     def _basic_auth_value(sid: str, secret: str) -> str:
@@ -964,7 +964,7 @@ class BLFScanner:
                     "elapsed": round(elapsed, 3),
                 })
 
-                # WEAK-4 FIX: Cloudflare challenge detection
+
                 if _is_cf_challenge(resp.status, resp_hdrs, body):
                     _cf_challenge_count += 1
                     if _cf_challenge_count >= _CF_WARN_THRESHOLD and not _cf_warned:
@@ -1007,7 +1007,7 @@ class BLFScanner:
         except Exception as e:
             return 0, {}, f"ERROR: {str(e)[:100]}", time.time() - start
 
-    # ── Evidence helpers ──────────────────────────────────────────────────────
+
 
     def _new_evidence(self) -> "EvidenceCapture | None":
         if not _HAS_EVIDENCE:
@@ -1068,12 +1068,12 @@ class BLFScanner:
 
     def _attach(self, f: Finding, pkg: "EvidencePackage | None") -> Finding:
         if pkg is not None:
-            f.evidence_package = pkg  # type: ignore[attr-defined]
+            f.evidence_package = pkg  
             if pkg.summary:
                 f.evidence = pkg.summary
         return f
 
-    # ── Core utilities ────────────────────────────────────────────────────────
+
 
     def _try_parse_json(self, body: str) -> dict | list:
         try:
@@ -1171,7 +1171,7 @@ class BLFScanner:
            if the endpoint is permissive, a broader type-breaking set.
         """
         if not _HAS_FIELD_TYPING or self._posture_cache is None:
-            return [0, 0.01, -1, -100, "0", 1]  # legacy fallback
+            return [0, 0.01, -1, -100, "0", 1]  
 
         ftype = infer_field_type(key, original)
         posture = self._posture_cache.get(method, url)
@@ -1186,13 +1186,13 @@ class BLFScanner:
                 rejected = status in (400, 401, 403, 405, 409, 415, 422) or status == 0
                 self._posture_cache.record_calibration(method, url, canary_rejected=rejected)
                 if not rejected and not posture.weak_validation_finding_emitted:
-                    # The endpoint accepted a value with the wrong type
-                    # entirely for this field — that's a real, separately
-                    # reportable weak-input-validation signal, not just
-                    # plumbing for the payload generator.
+
+
+
+
                     posture.weak_validation_finding_emitted = True
                     self._flag_weak_type_validation(url, method, key, canary_val, status)
-                break  # one canary probe is enough to calibrate
+                break  
 
         return generate_payloads(ftype, original, permissive=not posture.strict)
 
@@ -1229,7 +1229,7 @@ class BLFScanner:
             if f.confidence >= self.config.min_confidence:
                 self.findings.append(f)
         except Exception:
-            pass  # never let telemetry-style finding creation break the scan
+            pass  
 
     def _finalize_finding(
         self,
@@ -1254,7 +1254,7 @@ class BLFScanner:
                     self._baseline_samples[url], endpoint=url
                 )
 
-    # ── Smart Discovery (legacy fallback) ─────────────────────────────────────
+
 
     async def smart_discover(self, seed_url: str) -> list[dict]:
         """
@@ -1370,7 +1370,7 @@ class BLFScanner:
             pass
         return endpoints
 
-    # ── Phase 3: Recon ────────────────────────────────────────────────────────
+
 
     async def _run_recon(self):
         target_domain = urlparse(self.config.target_url).netloc
@@ -1459,7 +1459,7 @@ class BLFScanner:
             findings.append(f)
         return findings
 
-    # ── Phase 4: Attack Surface Expansion ─────────────────────────────────────
+
 
     async def _run_phase4_scans(self, endpoints: list[dict]) -> list[Finding]:
         findings: list[Finding] = []
@@ -1535,7 +1535,7 @@ class BLFScanner:
 
         return findings
 
-    # ── Main Runner ───────────────────────────────────────────────────────────
+
 
     def _write_dropped_findings(self, dropped: list) -> None:
         """
@@ -1580,11 +1580,11 @@ class BLFScanner:
         if self._dashboard_state:
             self._dashboard_state.total_endpoints = len(endpoints)
 
-        # ── Phase 3: Recon ────────────────────────────────────────────────────
+
         if getattr(self.config, "run_recon", False):
             await self._run_recon()
 
-        # ── Deep Discovery Engine (Phase 5+) ──────────────────────────────────
+
         if self.config.smart_discovery:
             if (
                 self._discovery_engine is not None
@@ -1614,7 +1614,7 @@ class BLFScanner:
                             import traceback
                             traceback.print_exc()
             else:
-                # Legacy smart_discover fallback
+
                 extra    = await self.smart_discover(self.config.target_url)
                 existing = {(e["url"], e.get("method", "GET")) for e in endpoints}
                 for ep in extra:
@@ -1627,7 +1627,7 @@ class BLFScanner:
             if self._dashboard_state:
                 self._dashboard_state.total_endpoints = len(endpoints)
 
-        # ── Phase 3: Inject subdomain endpoints ───────────────────────────────
+
         if self._subdomain_map:
             sub_eps  = self._subdomain_map.to_endpoints()
             existing = {(e["url"], e.get("method", "GET")) for e in endpoints}
@@ -1643,13 +1643,13 @@ class BLFScanner:
                 if self._dashboard_state:
                     self._dashboard_state.total_endpoints = len(endpoints)
 
-        # ── Phase 4: Build attack plan ────────────────────────────────────────
+
         if _HAS_CLASSIFIER and self._classifier:
             self._attack_plan = self._classifier.build_plan(endpoints)
             if getattr(self.config, "print_attack_plan", False):
                 self._attack_plan.print_report(verbose=self.config.verbose)
 
-        # ── Phase 1: Flow attacks ─────────────────────────────────────────────
+
         flow_findings: list[Finding] = []
         if _HAS_FLOWS and self._flow_replayer and getattr(
             self.config, "run_flows", False
@@ -1659,16 +1659,16 @@ class BLFScanner:
             if self._checkpoint:
                 self._checkpoint.add_findings(flow_findings)
 
-        # ── Phase 1: OAuth tests ──────────────────────────────────────────────
+
         oauth_findings: list[Finding] = []
         if _HAS_OAUTH and getattr(self.config, "oauth_config", None):
             oauth_findings = await self._run_oauth_tests()
             if self._checkpoint:
                 self._checkpoint.add_findings(oauth_findings)
 
-        # ── Standard endpoint scan ────────────────────────────────────────────
-        # RESUME: skip endpoints already completed in a prior (interrupted)
-        # run of this same checkpoint, when --resume is set.
+
+
+
         skipped_resumed = 0
         if self._checkpoint and getattr(self.config, "resume", False):
             filtered = []
@@ -1689,16 +1689,16 @@ class BLFScanner:
                 )
 
         async def _run_and_checkpoint(url, method, body, params, meta):
-            # CHECKPOINT-FIX: previously all endpoint tasks were fired via a
-            # single asyncio.gather() and only assembled into `raw` after
-            # every task finished — if the scan was interrupted partway
-            # through (Ctrl+C, dropped connection, killed process), nothing
-            # completed so far was ever persisted. Each task now checkpoints
-            # itself the moment IT finishes, independent of its siblings —
-            # asyncio.gather still runs them concurrently, but this callback
-            # fires as soon as this specific endpoint's checks return, so
-            # partial progress survives an interruption anywhere else in
-            # the batch.
+
+
+
+
+
+
+
+
+
+
             ep_findings = await self._run_endpoint_checks(url, method, body, params, meta=meta)
             if self._checkpoint:
                 self._checkpoint.mark_done(url, method, ep_findings)
@@ -1722,18 +1722,18 @@ class BLFScanner:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         raw: list[Finding] = list(flow_findings) + list(oauth_findings)
-        # RESUME: merge in findings carried over from already-completed
-        # endpoints (this run's skipped ones, or a prior interrupted run's).
+
+
         if self._checkpoint:
             raw.extend(self._checkpoint.findings)
         for r in results:
             if isinstance(r, list):
                 raw.extend(r)
 
-        # GraphQL baseline module
+
         raw.extend(await self._check_graphql_idor())
 
-        # Phase 4: Attack surface expansion
+
         if any([
             getattr(self.config, "run_graphql_deep", False),
             getattr(self.config, "run_websocket",    False),
@@ -1745,11 +1745,11 @@ class BLFScanner:
             raw.extend(phase4)
             print(f"  [+] Phase 4: {len(phase4)} additional findings\n")
 
-        # Phase 3: JS secrets
+
         if self._js_secrets:
             raw.extend(self._js_secrets_to_findings())
 
-        # Filter by confidence
+
         above   = [
             f for f in raw
             if getattr(f, "confidence", 0) >= self.config.min_confidence
@@ -1761,7 +1761,7 @@ class BLFScanner:
                 f"(< {self.config.min_confidence}%)"
             )
 
-        # Log validation stats
+
         if _HAS_VALIDATION and self._endpoint_validator and self._skipped_endpoints:
             stats = self._endpoint_validator.get_stats()
             print(
@@ -1773,7 +1773,7 @@ class BLFScanner:
                 f"{stats.get('not_graphql',0)} not-graphql)"
             )
 
-        # Re-verify (skip entirely with --no-verify)
+
         if getattr(self.config, "skip_verification", False):
             print(f"  [*] Skipping re-verification (--no-verify): keeping all {len(above)} findings as-is")
             verified = above
@@ -1781,11 +1781,11 @@ class BLFScanner:
             print(f"[*] Verifying {len(above)} findings...")
             verified = await self._verifier.verify_all(above, self.base_responses)
 
-            # Never let a re-verification drop be silent: anything present in
-            # `above` but missing from `verified` failed re-test and was
-            # removed — write those out so a genuine finding that the
-            # verifier got wrong isn't gone for good, just moved to a file
-            # for manual review.
+
+
+
+
+
             if len(verified) < len(above):
                 verified_keys = {
                     hashlib.md5(f"{f.title}{f.evidence}".encode()).hexdigest() for f in verified
@@ -1796,7 +1796,7 @@ class BLFScanner:
                 ]
                 self._write_dropped_findings(dropped_findings)
 
-        # Deduplicate
+
         seen:   set[str]      = set()
         unique: list[Finding] = []
         for f in verified:
@@ -1812,15 +1812,15 @@ class BLFScanner:
             if self._findings_queue:
                 await self._findings_queue.put(f)
 
-        # CHECKPOINT-FIX: scan reached the end normally — clear the resume
-        # file so the next run of this target starts fresh instead of
-        # carrying over stale completed/finding state.
+
+
+
         if self._checkpoint:
             self._checkpoint.clear()
 
         return self.findings
 
-    # ── Endpoint check runner ─────────────────────────────────────────────────
+
 
     async def _run_endpoint_checks(
         self,
@@ -1832,14 +1832,14 @@ class BLFScanner:
     ) -> list[Finding]:
         findings: list[Finding] = []
 
-        # Phase 5: Dashboard update + pause support
+
         self._update_dashboard(endpoint=url)
         if self._dashboard_state:
             self._dashboard_state.scanned_endpoints += 1
             while self._dashboard_state.paused:
                 await asyncio.sleep(0.5)
 
-        # Phase 3: Validate endpoint
+
         is_graphql = any(seg in url.lower() for seg in ["/graphql", "/gql", "/query"])
         if _HAS_VALIDATION and self._endpoint_validator:
             val_report = await self._endpoint_validator.validate(
@@ -1851,7 +1851,7 @@ class BLFScanner:
                     print(f"  [SKIP] {url[:70]} — {val_report.summary}")
                 return findings
 
-        # Baseline request
+
         status, headers, base_body, elapsed = await self._request(
             method, url,
             json=body if body else None,
@@ -1867,14 +1867,14 @@ class BLFScanner:
         }
         self._record_baseline_sample(url, base_body)
 
-        # Phase 3: Classify response — moved ahead of the early
-        # security-misconfiguration audit below. Previously CORS/JWT/
-        # tenant-BOLA/security-headers findings were appended to `findings`
-        # BEFORE this classification ran, so a WAF block page or soft-404
-        # on this exact endpoint never suppressed or capped them — only the
-        # 21 core checks respected the classifier. Classifying first closes
-        # that gap and also skips the (otherwise wasted) probe requests
-        # those four modules would send against a dead endpoint.
+
+
+
+
+
+
+
+
         confidence_cap = 100
         classified = None
         if _HAS_VALIDATION and self._response_classifier:
@@ -1903,18 +1903,18 @@ class BLFScanner:
                     f"(cap={confidence_cap}%)"
                 )
 
-        # Security misconfiguration audit — cheap, header-only checks using
-        # the response already in hand; deduplicated per-host inside the
-        # modules so this never spams the same finding across endpoints.
-        # All four gated behind profile skip_modules so --profile stealth
-        # (or a custom profile) can actually disable the noisier ones —
-        # CORS and JWT confusion send abnormal-looking headers (spoofed
-        # Origin, forged/malformed Authorization) that are exactly the
-        # pattern a WAF is tuned to flag, so they're worth being able to
-        # turn off independently of the 21 core business-logic checks.
-        # Only reached once we know (above) this endpoint wasn't suppressed;
-        # their findings still go through the same confidence_cap as every
-        # other module's output, applied in the loop further down.
+
+
+
+
+
+
+
+
+
+
+
+
         early_skip = self._profile_skip_modules
         early_findings: list[Finding] = []
         if _HAS_SEC_HEADERS and self._sec_header_auditor and "security_headers" not in early_skip:
@@ -1951,17 +1951,17 @@ class BLFScanner:
                 except asyncio.QueueFull:
                     pass
 
-        # Phase 4: Harvest IDs
+
         if _HAS_IDOR_ENUM and self._idor_enumerator:
             self._idor_enumerator.harvest_ids(base_body)
 
-        # Build skip set from profile + classifier
+
         skip_set: set[str] = set(self._profile_skip_modules)
         if _HAS_CLASSIFIER and self._classifier:
             ep_profile = self._classifier.classify(url, body)
             skip_set.update(ep_profile.skip_modules)
 
-        # ── All 21 detection modules ──────────────────────────────────────────
+
         all_checks = [
             ("price_manipulation",   self._check_price_manipulation(url, method, body, params, status, base_body)),
             ("negative_quantity",    self._check_quantity_negative(url, method, body, params, status, base_body)),
@@ -2009,11 +2009,11 @@ class BLFScanner:
 
         return findings
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # MODULES 1–21
-    # ═════════════════════════════════════════════════════════════════════════
 
-    # MODULE 1 — Price Manipulation
+
+
+
+
     async def _check_price_manipulation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         price_keys = [
@@ -2036,13 +2036,13 @@ class BLFScanner:
         find_price_fields(body, price_keys, price_fields)
 
         for field_path, key, original in price_fields:
-            # ── Attack-targeting gate ────────────────────────────────────
-            # Name-substring matching ("order_total_id" contains "total")
-            # can catch identifier fields that aren't actually tamperable
-            # prices. Skip anything the type engine says isn't a real
-            # numeric/monetary field for this attack class — that request
-            # budget is better spent on fields that can actually confirm
-            # or refute a business-logic bug.
+
+
+
+
+
+
+
             if _HAS_FIELD_TYPING and not is_attack_relevant("price_manipulation", key, original):
                 continue
 
@@ -2103,7 +2103,7 @@ class BLFScanner:
                 break
         return findings
 
-    # MODULE 2 — Negative Quantity
+
     async def _check_quantity_negative(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         qty_keys = ["quantity", "qty", "count", "units", "items", "amount", "number", "stock"]
@@ -2111,9 +2111,9 @@ class BLFScanner:
             if key not in body:
                 continue
             original = body[key]
-            # Same relevance gate as price_manipulation: skip fields that
-            # match the name but aren't actually a tamperable numeric
-            # quantity (e.g. "items" holding a list, not a count).
+
+
+
             if _HAS_FIELD_TYPING and not is_attack_relevant("negative_quantity", key, original):
                 continue
             tampered_values = await self._targeted_payloads_for(
@@ -2128,9 +2128,9 @@ class BLFScanner:
                     continue
                 if not self._response_indicates_success(resp_body, status):
                     continue
-                # The posture cache already ran an equivalent canary probe
-                # for this endpoint/field via _targeted_payloads_for, so
-                # this module no longer needs its own separate one.
+
+
+
                 pkg = self._build_pkg(ev, title=f"Negative Quantity — {key}={tampered}",
                                       endpoint=url, vuln_type="Negative Quantity", confidence=80)
                 f = Finding(
@@ -2153,7 +2153,7 @@ class BLFScanner:
                 break
         return findings
 
-    # MODULE 3 — IDOR / BOLA  [WEAK-1 FIX: extended ID patterns]
+
     async def _check_idor_bola(self, url, method, body, params, base_status, base_body, resp_headers) -> list[Finding]:
         findings: list[Finding] = []
         parsed        = urlparse(url)
@@ -2162,7 +2162,7 @@ class BLFScanner:
         for seg_idx, segment in enumerate(path_segments):
             if not segment:
                 continue
-            # WEAK-1 FIX: use extended _is_id_segment instead of ^\d{1,12}$ only
+
             if not _is_id_segment(segment):
                 continue
             original_id = segment
@@ -2237,17 +2237,17 @@ class BLFScanner:
             s_na, _, rb_na, _ = await self._req_ev("attack", ev_na, method, url,
                                                     req_body=body if body else None, token_override="")
             if s_na in (200, 201) and self._response_indicates_success(rb_na, s_na):
-                # This decides whether to report a CRITICAL "Missing
-                # Authentication" finding — raw string similarity is the
-                # wrong tool here. Two JSON error/wrapper responses can
-                # share >70% of their bytes (common envelope keys,
-                # boilerplate) while containing completely different
-                # actual data, or two genuinely-identical-data responses
-                # can score under 0.7 purely from key reordering or a
-                # volatile field. Both failure directions matter for a
-                # CRITICAL finding: false positive burns credibility on
-                # a HackerOne submission, false negative silently drops
-                # a real missing-auth bug.
+
+
+
+
+
+
+
+
+
+
+
                 if _HAS_SEMANTIC:
                     is_same = not SemanticDiff.compare(
                         base_body[:2000], rb_na[:2000], threshold=0.15
@@ -2281,15 +2281,15 @@ class BLFScanner:
                         findings.append(f)
         return findings
 
-    # MODULE 4 — BOPLA
+
     async def _check_bopla(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        # Field-expansion probes (?expand=all, ?fields=*, ...) only mean
-        # something against a GET representation, and only against an
-        # actual API route — firing them at a write-only endpoint or a
-        # static asset URL that slipped into the discovered-endpoint list
-        # can only ever echo the same fixed response, wasting 6 requests
-        # per endpoint for zero possible signal.
+
+
+
+
+
+
         if method.upper() not in ("GET", "HEAD"):
             return findings
         if _HAS_FIELD_TYPING and is_non_api_path(url):
@@ -2352,7 +2352,7 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 5 — Workflow Bypass
+
     async def _check_workflow_bypass(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         parsed = urlparse(url)
@@ -2451,14 +2451,14 @@ class BLFScanner:
                     findings.append(f)
         return findings
 
-    # MODULE 6 — Mass Assignment  [WEAK-2 FIX: dynamic field discovery]
+
     async def _check_mass_assignment(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        # Mass assignment is a write-path bug class — injecting privileged
-        # fields into a GET request's (nonexistent or ignored) body can't
-        # demonstrate anything, since GET bodies are routinely dropped
-        # before they reach a deserializer. Restricting to write verbs
-        # cuts pure-noise requests without losing any real coverage.
+
+
+
+
+
         if not isinstance(body, dict) or method.upper() not in ("POST", "PUT", "PATCH"):
             return findings
         privileged_keys = [
@@ -2513,7 +2513,7 @@ class BLFScanner:
         if findings:
             return findings
 
-        # WEAK-2 FIX: dynamic field discovery from live 200 response
+
         if base_body and base_status in (200, 201):
             for key, inject_val in _discover_dynamic_fields(base_body):
                 if key in body:
@@ -2569,18 +2569,18 @@ class BLFScanner:
                     findings.append(f)
         return findings
 
-    # MODULE 7 — Privilege Escalation / BFLA
+
     async def _check_privilege_escalation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         parsed = urlparse(url)
         base   = f"{parsed.scheme}://{parsed.netloc}"
 
-        # This probe list is domain-scoped, not endpoint-scoped — /admin
-        # on a given host is the same target no matter which of the
-        # host's 200 discovered endpoints triggered this check. Without
-        # this cache, a scan of N endpoints on one domain fires these 10
-        # paths × 2 tokens N times each: identical requests, identical
-        # findings, N-fold duplication for zero extra signal.
+
+
+
+
+
+
         if base in self._admin_paths_probed:
             return findings
         self._admin_paths_probed.add(base)
@@ -2673,13 +2673,13 @@ class BLFScanner:
                     findings.append(f)
         return findings
 
-    # MODULE 8 — Coupon Abuse
+
     async def _check_coupon_stacking(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        # Coupon stacking mutates a request body field — meaningless
-        # against GET (no body to stack in) and meaningless if the
-        # matched field isn't actually a code-shaped value (e.g. a
-        # boolean "promo_active" flag matched by name-substring "promo").
+
+
+
+
         if not isinstance(body, dict) or method.upper() not in ("POST", "PUT", "PATCH"):
             return findings
         coupon_keys = ["coupon", "coupon_code", "promo_code", "discount_code", "voucher", "promo"]
@@ -2732,7 +2732,7 @@ class BLFScanner:
                     findings.append(f)
         return findings
 
-    # MODULE 9 — Time Logic Bypass
+
     async def _check_time_logic_bypass(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         time_keys = [
@@ -2789,7 +2789,7 @@ class BLFScanner:
                     break
         return findings
 
-    # MODULE 10 — Integer Overflow
+
     async def _check_integer_overflow(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         numeric_keys = [
@@ -2797,13 +2797,13 @@ class BLFScanner:
             if isinstance(v, (int, float)) and not isinstance(v, bool)
         ]
         for key in numeric_keys:
-            # Overflowing a foreign-key/PK field (matched here only
-            # because it happens to be numeric) doesn't test integer
-            # overflow — it tests whether that ID exists, which is
-            # IDOR/BOLA's job with proper cross-user comparison, not a
-            # blind overflow probe that will just 404/mismatch and get
-            # mislabeled as an overflow finding if it happens to land on
-            # someone else's record.
+
+
+
+
+
+
+
             if _HAS_FIELD_TYPING and not is_attack_relevant("integer_overflow", key, body[key]):
                 continue
             for val in [2**31 - 1, 2**63 - 1, -2**31, 9999999999]:
@@ -2880,16 +2880,16 @@ class BLFScanner:
                     pass
         return findings
 
-    # MODULE 11 — Hidden Parameter Disclosure
+
     async def _check_hidden_parameter_disclosure(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        # This module probes debug/verbose-style query params by issuing
-        # GET requests. For an endpoint that's only ever exercised as
-        # POST/PUT/PATCH/DELETE, forcing it through GET usually just
-        # tests routing (404/405) rather than hidden-parameter behavior —
-        # burning 8 requests per endpoint for a question this module
-        # can't actually answer there. Restrict to endpoints that are
-        # genuinely GET-shaped.
+
+
+
+
+
+
+
         if method.upper() not in ("GET", "HEAD"):
             return findings
         probes = {
@@ -2950,7 +2950,7 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 12 — State Machine Abuse
+
     async def _check_state_machine_abuse(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         state_map = {
@@ -3008,8 +3008,8 @@ class BLFScanner:
                 break
         return findings
 
-    # MODULE 13 — Race Condition  [WEAK-3 FIX: extended indicators]
-    # ── Race-condition primitives (shared with FlowReplayer) ──────────────────
+
+
 
     async def _burst_request(
         self, method: str, url: str, json_body=None, params=None,
@@ -3117,14 +3117,14 @@ class BLFScanner:
         findings: list[Finding] = []
         if method not in ("POST", "PUT", "PATCH"):
             return findings
-        # RACE-FIX: body/GraphQL-aware trigger, not just a URL substring match
+
         if not _looks_like_mutating_action(url, body, params):
             return findings
 
-        # Progressive concurrency sweep: start small so lightweight targets
-        # aren't unnecessarily hammered, escalate only if the smaller wave
-        # didn't already prove a race. Each wave's timing also gives us a
-        # rough sense of the race window for the evidence writeup.
+
+
+
+
         waves = [5, 15, 30]
         analysis = None
         winning_wave = 0
@@ -3145,13 +3145,13 @@ class BLFScanner:
         distinct_ids   = analysis["distinct_ids"]
         numeric_samples = analysis["numeric_samples"]
 
-        # Oracle-based confidence tiering:
-        #  - multiple DISTINCT identifiers among successes = confirmed
-        #    double-processing (strongest possible evidence)
-        #  - no identifiers to compare but numeric signals diverge across
-        #    successful responses = corroborating evidence of real state change
-        #  - otherwise (same id repeated, e.g. idempotency key working as
-        #    intended) = still worth flagging, but at lower confidence
+
+
+
+
+
+
+
         if len(distinct_ids) > 1:
             oracle_note = (
                 f"{len(distinct_ids)} DISTINCT resource identifiers were returned "
@@ -3185,11 +3185,11 @@ class BLFScanner:
 
         single_status, _, _, _ = await self._request(method, url, json=body)
 
-        # Optional second wave from a different authenticated account, if
-        # configured — catches locks that are scoped per-session/per-token
-        # rather than globally per-resource (e.g. a coupon capped "once per
-        # account" in code, but the cap is checked against the caller's own
-        # session state instead of a shared counter).
+
+
+
+
+
         cross_account_note = ""
         second_token = getattr(self.config, "second_user_token", "") or ""
         if second_token:
@@ -3236,18 +3236,18 @@ class BLFScanner:
             owasp="API4:2023 Unrestricted Resource Consumption",
             confirmed=oracle_confirmed, endpoint=url,
         )
-        # RACE-FIX: `_finalize_finding` routes through the generic
-        # ConfidenceEngine, which is a diff-based scorer built for comparing
-        # a baseline response against a tampered one. It isn't meaningful
-        # evidence for a burst/race finding — there's no single "tampered
-        # body" — and feeding it two empty strings was actively harmful:
-        # SequenceMatcher("", "").ratio() == 1.0, which the engine reads as
-        # "responses nearly identical" and applies a -15 penalty, while the
-        # empty tampered body also produces zero success-token hits. Those
-        # two effects alone were enough to sink most race findings below
-        # min_confidence and silently drop them before they ever reached a
-        # report — this bug pre-dates this rewrite too. Race findings now
-        # get their confidence directly from the oracle instead.
+
+
+
+
+
+
+
+
+
+
+
+
         if len(distinct_ids) > 1:
             f.confidence = 90
         elif numeric_samples and len({tuple(sorted(n.items())) for n in numeric_samples}) > 1:
@@ -3263,7 +3263,7 @@ class BLFScanner:
             findings.append(f)
         return findings
 
-    # MODULE 14 — JWT Manipulation
+
     async def _check_jwt_manipulation(self, url, method, body, params, base_status, base_body, resp_headers) -> list[Finding]:
         findings: list[Finding] = []
         token = self.config.auth_token
@@ -3330,7 +3330,7 @@ class BLFScanner:
                     findings.append(f)
         return findings
 
-    # MODULE 15 — Account Enumeration
+
     async def _check_account_enumeration(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         if method != "POST":
@@ -3381,18 +3381,18 @@ class BLFScanner:
         times        = [r[3] for r in ev_results]
         timing_delta = max(times) - min(times)
         if timing_delta > 0.20:
-            # CONFIDENCE-FIX: same architectural bug as the race-condition
-            # finding — this evidence is a TIMING delta, not a body/status
-            # diff, but it was being scored by the same diff-based engine.
-            # Proven empirically: feeding it the realistic case (identical
-            # generic error bodies, which is *why* timing is the only
-            # remaining oracle) scores confidence=0, because the engine
-            # reads "responses nearly identical" as a penalty — punishing
-            # this finding for the exact condition it exists to detect.
-            # Confidence now comes from the timing signal itself: repeat
-            # the measurement a couple more times and check the SAME input
-            # is reliably slower each time (direction-consistent), not just
-            # a one-off scheduling/network jitter blip on this one sample.
+
+
+
+
+
+
+
+
+
+
+
+
             confirm_deltas = [timing_delta]
             consistent = True
             first_slower_was_val0 = times[0] > times[1]
@@ -3416,7 +3416,7 @@ class BLFScanner:
             elif consistent:
                 confidence = 55
             else:
-                confidence = 30  # direction flips between runs — likely just jitter
+                confidence = 30  
 
             f = Finding(
                 title=f"Account Enumeration — timing oracle ({avg_delta:.2f}s avg delta)",
@@ -3446,7 +3446,7 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 16 — Limit / Offset Manipulation
+
     async def _check_limit_offset_manipulation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         if method.upper() not in ("GET", "HEAD"):
@@ -3465,11 +3465,11 @@ class BLFScanner:
 
         base_data  = self._try_parse_json(base_body)
         base_count = _count(base_data)
-        # This module tests whether a server-side page-size cap can be
-        # bypassed. That question only makes sense against a paginated
-        # collection response in the first place — a single-object GET
-        # (e.g. /users/42) has no "records" to over-fetch, so probing it
-        # with limit=99999 can't produce a meaningful result either way.
+
+
+
+
+
         is_collection = isinstance(base_data, list) or base_count > 0
         if not is_collection:
             return findings
@@ -3526,7 +3526,7 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 17 — Soft Delete Bypass
+
     async def _check_soft_delete_bypass(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         if method.upper() not in ("GET", "HEAD"):
@@ -3577,13 +3577,13 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 18 — HTTP Method Override
+
     async def _check_http_method_override(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
-        # Overriding to DELETE only tests something new when the
-        # endpoint's real method isn't already DELETE, and only against
-        # an actual API route — a static asset URL can't have method
-        # semantics to override.
+
+
+
+
         if method.upper() == "DELETE":
             return findings
         if _HAS_FIELD_TYPING and is_non_api_path(url):
@@ -3634,7 +3634,7 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 19 — Parameter Pollution
+
     async def _check_parameter_pollution(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
         if not params:
@@ -3643,12 +3643,12 @@ class BLFScanner:
             return findings
         for key, val in list(params.items())[:3]:
             parsed   = urlparse(url)
-            # A duplicate value that doesn't share the original's type
-            # shape (e.g. dropping "999999" next to a UUID param) mostly
-            # just proves the framework rejects malformed input, not how
-            # it resolves two genuinely duplicated parameters — pick a
-            # same-shaped second value so a first/last/concat difference
-            # in behavior actually has a chance to show up.
+
+
+
+
+
+
             dup_val = pollution_probe_value(key, val) if _HAS_FIELD_TYPING else "999999"
             test_url = urlunparse(
                 parsed._replace(query=f"{key}={val}&{key}={dup_val}")
@@ -3683,7 +3683,7 @@ class BLFScanner:
                 findings.append(f)
         return findings
 
-    # MODULE 20 — Blind IDOR
+
     async def _check_blind_idor(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         if not _HAS_BLIND_IDOR or not self._blind_idor:
             return []
@@ -3743,7 +3743,7 @@ class BLFScanner:
             findings.append(f)
         return findings
 
-    # MODULE 21 — GraphQL (baseline)
+
     async def _check_graphql_idor(self) -> list[Finding]:
         findings: list[Finding] = []
         parsed = urlparse(self.config.target_url)
@@ -3862,7 +3862,7 @@ class BLFScanner:
                     break
         return findings
 
-    # ── Phase 1: Flow attacks + OAuth ─────────────────────────────────────────
+
 
     async def _run_flow_attacks(self) -> list[Finding]:
         if not _HAS_FLOWS or not self._flow_replayer:
@@ -3882,16 +3882,16 @@ class BLFScanner:
                         steps, base_url=base_url
                     )
                 )
-                # State-machine class of bugs: full pairwise transition
-                # fuzzing (forward skips AND backward/replay transitions),
-                # not just the linear skip-ahead above.
+
+
+
                 findings.extend(
                     await self._flow_replayer.attack_state_transitions(
                         steps, base_url=base_url
                     )
                 )
-                # Cross-object/cross-account state confusion: run two flow
-                # instances and swap extracted identifiers between them.
+
+
                 second_token = getattr(self.config, "second_user_token", "") or None
                 findings.extend(
                     await self._flow_replayer.attack_cross_instance_confusion(
@@ -3986,7 +3986,7 @@ class BLFScanner:
         return findings
 
 
-# ── Module-level helper ───────────────────────────────────────────────────────
+
 
 def _url_basename(url: str) -> str:
     path = urlparse(url).path

@@ -59,9 +59,9 @@ _TENANT_PATH_KEYWORDS = (
     "tenant", "tenants", "workspace", "workspaces",
     "company", "companies", "team", "teams",
 )
-# Included but treated as lower-confidence context — "account" is often just
-# "my account", not a multi-tenant boundary, so it rides along rather than
-# being a primary trigger.
+
+
+
 _TENANT_PATH_KEYWORDS_SOFT = ("account", "accounts")
 
 _TENANT_QUERY_KEY_RE = re.compile(
@@ -89,22 +89,22 @@ class TenantBOLAScanner:
         self._resp_ok = getattr(scanner, "_response_indicates_success", None)
         self._second_token = getattr(self._config, "second_user_token", "") or ""
         self._harvested_ids: set[str] = set()
-        self._reported: set[tuple] = set()   # (normalised_path, location_signature)
+        self._reported: set[tuple] = set()   
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def check(self, url: str, method: str, status: int, body: str) -> list[Finding]:
         findings: list[Finding] = []
         self._harvest_ids(body)
 
         if status not in (200, 201) or not self._looks_ok(body, status):
-            return findings  # nothing successful here to test cross-tenant leakage against
+            return findings  
 
         locations = self._find_tenant_locations(url)
         if not locations:
             return findings
 
-        for loc in locations[:3]:   # cap per-URL work
+        for loc in locations[:3]:   
             key = (self._normalise_path(url), loc["signature"])
             if key in self._reported:
                 continue
@@ -122,7 +122,7 @@ class TenantBOLAScanner:
 
         return findings
 
-    # ── Technique 1: cross-account confirmation ─────────────────────────────
+
 
     async def _test_cross_account(self, url, method, base_body, loc):
         try:
@@ -168,7 +168,7 @@ class TenantBOLAScanner:
             ),
         )
 
-    # ── Technique 2: same-token org-ID swap ─────────────────────────────────
+
 
     async def _test_same_token_swap(self, url, method, base_body, loc):
         candidates = self._build_candidates(loc)
@@ -187,7 +187,7 @@ class TenantBOLAScanner:
             if not self._looks_ok(body2, status2):
                 continue
             if not self._differs_meaningfully(base_body, body2):
-                continue  # likely the param was ignored and same data came back
+                continue  
 
             return self._build(
                 test_url, method, loc,
@@ -223,7 +223,7 @@ class TenantBOLAScanner:
             )
         return None
 
-    # ── Location detection ───────────────────────────────────────────────────
+
 
     def _find_tenant_locations(self, url: str) -> list[dict]:
         locations = []
@@ -248,8 +248,8 @@ class TenantBOLAScanner:
                     "value": value, "signature": f"query:{key.lower()}",
                 })
 
-        # Prioritise hard keywords (org/tenant/workspace/company/team) over
-        # the soft "account" match so we don't burn the per-URL cap on noise.
+
+
         locations.sort(key=lambda l: l["keyword"] in _TENANT_PATH_KEYWORDS_SOFT)
         return locations
 
@@ -275,7 +275,7 @@ class TenantBOLAScanner:
             if value != "1":
                 candidates.append("1")
 
-        # De-dupe while preserving order, cap total probes for this location
+
         seen = set()
         deduped = []
         for c in candidates:
@@ -305,14 +305,14 @@ class TenantBOLAScanner:
     def _differs_meaningfully(self, base: str, other: str, threshold: float = 0.08) -> bool:
         if not base or not other:
             return bool(other and not base)
-        # Confirms cross-tenant object access: does another tenant's
-        # response actually contain different data, or just differ in
-        # incidental bytes (timestamps, key order)? Raw string similarity
-        # answers the wrong question here — two different tenants' records
-        # sharing the same JSON schema can be >90% byte-identical (shared
-        # field names, boilerplate) while the actual owned data differs
-        # completely, which is exactly the BOLA signal this is meant to
-        # catch. Semantic diff scores the real data, not the envelope.
+
+
+
+
+
+
+
+
         if _HAS_SEMANTIC_DIFF:
             try:
                 sim = SemanticDiff.compare(base[:4000], other[:4000]).semantic_similarity
@@ -332,7 +332,7 @@ class TenantBOLAScanner:
             s in lower for s in ("unauthorized", "forbidden", "not found", "error")
         )
 
-    # ── Finding construction ────────────────────────────────────────────────
+
 
     def _build(
         self, url, method, loc, title, severity, confidence, technique,

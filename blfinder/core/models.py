@@ -18,13 +18,13 @@ class Severity(str, Enum):
 @dataclass
 class ProofOfConcept:
     """Structured PoC with multiple reproduction formats."""
-    summary: str                     # One-line summary of what was proven
-    curl_command: str                # Ready-to-run curl command
-    python_script: str               # Standalone Python script
-    burp_request: str                # Raw HTTP request for Burp Repeater
-    expected_result: str             # What the tester should observe
-    steps: list[str] = field(default_factory=list)   # Manual reproduction steps
-    video_note: str = ""             # Notes for screen recording
+    summary: str                     
+    curl_command: str                
+    python_script: str               
+    burp_request: str                
+    expected_result: str             
+    steps: list[str] = field(default_factory=list)   
+    video_note: str = ""             
 
 
 @dataclass
@@ -41,8 +41,8 @@ class Finding:
     cwe: str = ""
     cvss: float = 0.0
     owasp: str = ""
-    confirmed: bool = False          # Re-verified, not just heuristic
-    confidence: int = 0              # 0–100
+    confirmed: bool = False          
+    confidence: int = 0              
     confidence_reasons: list[str] = field(default_factory=list)
     false_positive_checks: list[str] = field(default_factory=list)
     endpoint: str = ""
@@ -77,10 +77,10 @@ class ScanConfig:
     respect_robots: bool = False
     verbose: bool = False
     output_dir: str = "."
-    # Resume / checkpointing
-    checkpoint_path: str = ""        # Set by CLI; empty disables checkpointing
-    resume: bool = False             # If True, skip endpoints already in the checkpoint
-    # FP reduction settings
-    confirmation_attempts: int = 2   # Re-verify N times before reporting
-    similarity_threshold: float = 0.15  # Min response diff to flag IDOR
-    min_confidence: int = 40         # Skip findings below this confidence
+
+    checkpoint_path: str = ""        
+    resume: bool = False             
+
+    confirmation_attempts: int = 2   
+    similarity_threshold: float = 0.15  
+    min_confidence: int = 40         

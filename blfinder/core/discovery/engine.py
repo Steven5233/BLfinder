@@ -66,7 +66,7 @@ from .layer5_dedup.soft404_filter import Soft404Filter
 from .layer5_dedup.scorer import score_and_sort, build_source_count_map
 from .layer5_dedup.schema_enricher import SchemaEnricher
 
-# Layer runners — all optional-import safe
+
 try:
     from .layer1_surface.robots_parser import RobotsParser
     _HAS_ROBOTS = True
@@ -104,9 +104,9 @@ except ImportError:
     _HAS_HEADLESS = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Seed endpoints loader
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _seed_to_discovered(seed_list: list[dict], target_url: str) -> list[DiscoveredEndpoint]:
     """
@@ -126,7 +126,7 @@ def _seed_to_discovered(seed_list: list[dict], target_url: str) -> list[Discover
             body=ep_dict.get("body", {}),
             params=ep_dict.get("params", {}),
             source=SOURCE_SEED,
-            confidence=0.85,   # user-supplied = high confidence
+            confidence=0.85,   
             priority=2,
             normalised_template=tmpl,
             id_params=extract_id_params(urlparse(url).path),
@@ -137,9 +137,9 @@ def _seed_to_discovered(seed_list: list[dict], target_url: str) -> list[Discover
     return eps
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Engine
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class DeepDiscoveryEngine:
     """
@@ -179,13 +179,13 @@ class DeepDiscoveryEngine:
 
         print(f"[*] Deep Discovery Engine — target: {target_url}")
 
-        # ── Seed endpoints ────────────────────────────────────────────────────
+
         if seed_endpoints:
             seeded = _seed_to_discovered(seed_endpoints, target_url)
             all_endpoints.extend(seeded)
             print(f"  [seed] {len(seeded)} user-supplied endpoints")
 
-        # ── Layer 1 + 2: parallel (both read-only) ────────────────────────────
+
         layer12_tasks = []
         layer12_names = []
 
@@ -227,7 +227,7 @@ class DeepDiscoveryEngine:
                     if self.verbose or result.endpoints:
                         print(f"  {result.summary()}")
 
-        # ── Layer 3: headless (opt-in) ────────────────────────────────────────
+
         if config.use_headless and _HAS_HEADLESS:
             t0 = time.time()
             try:
@@ -248,14 +248,14 @@ class DeepDiscoveryEngine:
                 "               playwright install chromium"
             )
 
-        # ── Layer 4: wordlist + version permuter ──────────────────────────────
-        # These benefit from knowing what Layer 1+2 found (context seeding)
+
+
         discovered_paths = [
             urlparse(ep.url).path
             for ep in all_endpoints
             if ep.url.startswith("http")
         ]
-        baseline_bodies: list[str] = []  # populated by scanner later
+        baseline_bodies: list[str] = []  
 
         layer4_tasks  = []
         layer4_names  = []
@@ -295,17 +295,17 @@ class DeepDiscoveryEngine:
                     if self.verbose or result.endpoints:
                         print(f"  {result.summary()}")
 
-        # ── Layer 5: dedup → soft-404 → score → enrich ────────────────────────
+
         print(
             f"  [layer5] processing {len(all_endpoints)} raw endpoints..."
         )
         t0 = time.time()
 
-        # 5a — normalise + dedup (template-based)
+
         all_endpoints = _dedup(all_endpoints)
         print(f"  [layer5] after dedup: {len(all_endpoints)} unique endpoints")
 
-        # 5b — soft-404 filter
+
         soft404 = Soft404Filter(verbose=self.verbose)
         await soft404.build_profile(target_url, session, config)
         kept, dropped = await soft404.filter_endpoints(
@@ -315,23 +315,23 @@ class DeepDiscoveryEngine:
             print(f"  [layer5] soft-404 filter: dropped {len(dropped)}")
         all_endpoints = kept
 
-        # 5c — build source-count map for corroboration scoring
+
         sc_map = build_source_count_map(all_endpoints)
 
-        # 5d — identify catch-all domains
+
         ca_domains: set[str] = set()
         for domain, profile in soft404._profiles.items():
             if profile.is_catch_all:
                 ca_domains.add(domain)
 
-        # 5e — score + sort
+
         all_endpoints = score_and_sort(
             all_endpoints,
             source_count_map=sc_map,
             catch_all_domains=ca_domains,
         )
 
-        # 5f — schema enrichment (fills empty bodies for write endpoints)
+
         enricher = SchemaEnricher(verbose=self.verbose)
         all_endpoints = await enricher.enrich(
             all_endpoints, session, config, auth_token=config.auth_token
@@ -339,25 +339,25 @@ class DeepDiscoveryEngine:
 
         self._layer_timing["layer5"] = time.time() - t0
 
-        # ── Build the final priority queue ────────────────────────────────────
+
         queue = EndpointQueue()
         for ep in all_endpoints:
             queue.push(ep)
 
-        # ── Optional: save to disk ────────────────────────────────────────────
+
         if config.save_discovery_path:
             self._save(all_endpoints, config.save_discovery_path)
 
-        # ── Summary ───────────────────────────────────────────────────────────
+
         total_elapsed = time.time() - grand_start
         queue.print_stats()
         self._print_timing(total_elapsed)
 
         return queue
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Helpers
-    # ─────────────────────────────────────────────────────────────────────────
+
+
+
 
     def _save(self, endpoints: list[DiscoveredEndpoint], path: str) -> None:
         """Save discovered endpoints to JSON for reuse with --import-save."""
@@ -395,9 +395,9 @@ class DeepDiscoveryEngine:
             print(f"    {layer:<20} {t:.1f}s")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Deduplication (template-based)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _dedup(endpoints: list[DiscoveredEndpoint]) -> list[DiscoveredEndpoint]:
     """
@@ -405,7 +405,7 @@ def _dedup(endpoints: list[DiscoveredEndpoint]) -> list[DiscoveredEndpoint]:
     When duplicates exist, keep the one with the highest confidence.
     Merge tags and source info from all copies.
     """
-    # Group by dedup key
+
     groups: dict[str, list[DiscoveredEndpoint]] = {}
     for ep in endpoints:
         _, tmpl = normalise_url(ep.url)
@@ -419,10 +419,10 @@ def _dedup(endpoints: list[DiscoveredEndpoint]) -> list[DiscoveredEndpoint]:
             result.append(group[0])
             continue
 
-        # Pick the highest-confidence representative
+
         best = max(group, key=lambda e: e.confidence)
 
-        # Merge metadata from all copies into the best
+
         all_tags:    set[str]   = set(best.tags)
         all_sources: list[str]  = [best.source]
         for other in group:
@@ -430,23 +430,23 @@ def _dedup(endpoints: list[DiscoveredEndpoint]) -> list[DiscoveredEndpoint]:
                 continue
             all_tags.update(other.tags)
             all_sources.append(other.source)
-            # Inherit spec/live verification from any copy
+
             if other.spec_verified:
                 best.spec_verified = True
             if other.live_verified:
                 best.live_verified = True
-            # Inherit schema from any copy that has one
+
             if other.schema_hint and not best.schema_hint:
                 best.schema_hint = other.schema_hint
             if other.body and not best.body:
                 best.body = other.body
-            # Inherit id_params
+
             for ip in other.id_params:
                 if ip not in best.id_params:
                     best.id_params.append(ip)
 
         best.tags = list(all_tags)
-        # Annotate source with count of corroborating sources
+
         if len(all_sources) > 1:
             best.raw_source_evidence = (
                 f"[{len(all_sources)} sources: "

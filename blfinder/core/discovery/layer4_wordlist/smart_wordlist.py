@@ -35,10 +35,10 @@ from urllib.parse import urljoin, urlparse
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -59,10 +59,10 @@ from ..models import (
 from ..layer5_dedup.normaliser import normalise_url, extract_id_params, dedup_key
 
 
-# ── Tiered base wordlist ──────────────────────────────────────────────────────
-# Depth 1: high-signal universal paths (~200)
+
+
 _BASE_DEPTH1 = [
-    # Core REST resource names
+
     "users","user","accounts","account","profile","profiles",
     "me","self","session","sessions","auth","login","logout",
     "register","signup","token","tokens","refresh",
@@ -73,7 +73,7 @@ _BASE_DEPTH1 = [
     "health","status","ping","metrics","info","version",
     "api","v1","v2","v3","internal","legacy","beta","public",
     "graphql","rpc","ws","websocket",
-    # Common sub-paths
+
     "list","all","detail","details","create","update","delete","remove",
     "upload","download","export","import","batch","bulk","sync",
     "notifications","notification","events","event","webhooks","webhook",
@@ -98,7 +98,7 @@ _BASE_DEPTH1 = [
     "2fa","mfa","otp","totp","backup","recover","recovery",
 ]
 
-# Depth 2: adds common sub-resource paths (~500 total with depth 1)
+
 _BASE_DEPTH2 = _BASE_DEPTH1 + [
     "list","count","summary","overview","recent","latest","popular","featured",
     "activate","deactivate","enable","disable","lock","unlock","block","unblock",
@@ -134,7 +134,7 @@ _BASE_DEPTH2 = _BASE_DEPTH1 + [
     "public","private","protected","restricted","hidden","internal",
 ]
 
-# Depth 3: adds less common + framework-specific paths
+
 _BASE_DEPTH3 = _BASE_DEPTH2 + [
     "actuator","actuator/health","actuator/info","actuator/metrics",
     "actuator/env","actuator/beans","actuator/mappings",
@@ -168,7 +168,7 @@ _BASE_DEPTH3 = _BASE_DEPTH2 + [
     "token/refresh","token/revoke","token/validate","token/introspect",
 ]
 
-# Depth 4 and 5 add full OWASP and SecLists-inspired paths
+
 _BASE_DEPTH4 = _BASE_DEPTH3 + [
     f"api/v{i}" for i in range(1, 10)
 ] + [
@@ -193,7 +193,7 @@ _BASE_DEPTH4 = _BASE_DEPTH3 + [
     "v2/auth","v2/users","v2/orders","v2/payments","v2/admin",
 ]
 
-_BASE_DEPTH5 = _BASE_DEPTH4  # depth 5 relies on context expansion below
+_BASE_DEPTH5 = _BASE_DEPTH4  
 
 _DEPTH_TO_BASE = {
     1: _BASE_DEPTH1,
@@ -203,7 +203,7 @@ _DEPTH_TO_BASE = {
     5: _BASE_DEPTH5,
 }
 
-# Business-tag wordlist segments
+
 _TAG_SEGMENTS: dict[str, list[str]] = {
     "payment": [
         "payment","payments","pay","billing","invoice","invoices",
@@ -254,7 +254,7 @@ _TAG_SEGMENTS: dict[str, list[str]] = {
 }
 
 
-# ── Context seed extraction ───────────────────────────────────────────────────
+
 
 def _extract_domain_nouns(hostname: str) -> list[str]:
     """
@@ -262,7 +262,7 @@ def _extract_domain_nouns(hostname: str) -> list[str]:
     e.g. 'shop.example.com' → ['shop'], 'api.paymentco.io' → ['payment']
     """
     parts = hostname.lower().replace("-", ".").replace("_", ".").split(".")
-    # Remove generic TLDs and subdomains
+
     stop = {"www", "api", "app", "dev", "staging", "test", "beta",
             "prod", "com", "net", "org", "io", "co", "uk", "us", "eu"}
     nouns = [p for p in parts if p and p not in stop and len(p) > 2]
@@ -276,11 +276,11 @@ def _extract_body_key_paths(response_body: str) -> list[str]:
     """
     if not response_body:
         return []
-    # Extract all JSON keys
+
     keys = re.findall(r'"([a-z][a-z0-9_]{1,30})"', response_body.lower())
     paths: set[str] = set()
     for k in set(keys):
-        # Pluralise and use as a path
+
         base = k.rstrip("_id").rstrip("id").strip("_")
         if len(base) >= 3:
             paths.add(f"/{base}s")
@@ -301,7 +301,7 @@ def _build_wordlist(
     depth = max(1, min(5, config.wordlist_depth))
     words: set[str] = set(_DEPTH_TO_BASE[depth])
 
-    # Add domain nouns
+
     for noun in _extract_domain_nouns(hostname):
         words.add(noun)
         words.add(f"{noun}s")
@@ -310,27 +310,27 @@ def _build_wordlist(
         words.add(f"v1/{noun}")
         words.add(f"v1/{noun}s")
 
-    # Add business tag segments
+
     for tag in config.business_tags:
         for seg in _TAG_SEGMENTS.get(tag.lower(), []):
             words.add(seg)
 
-    # Add segments derived from already-discovered paths
+
     for path in discovered_paths:
         for seg in path.strip("/").split("/"):
             if seg and len(seg) >= 2 and not re.match(r'^\d+$', seg):
                 words.add(seg)
-                # Add common sub-resources
+
                 words.add(f"{seg}/list")
                 words.add(f"{seg}/search")
 
-    # Add paths derived from baseline response keys (depth 3+)
+
     if depth >= 3:
         for body in baseline_bodies[:5]:
             for path in _extract_body_key_paths(body):
                 words.add(path.lstrip("/"))
 
-    # Extract nouns from page title / meta description
+
     if page_html:
         title_m = re.search(r'<title[^>]*>(.*?)</title>', page_html, re.I | re.S)
         if title_m:
@@ -342,7 +342,7 @@ def _build_wordlist(
     return [w.strip("/") for w in sorted(words) if w and len(w) >= 2]
 
 
-# ── Soft-404 canary ───────────────────────────────────────────────────────────
+
 
 async def _get_canary_fingerprint(
     base: str, session: Any, timeout: int, headers: dict
@@ -379,21 +379,21 @@ def _is_real_api_response(
         return False
     if len(body) < 10:
         return False
-    # Soft-404 check
+
     if canary_hash:
         body_hash = hashlib.md5(body[:500].encode()).hexdigest()
         if body_hash == canary_hash:
             return False
-    # Reject pure HTML
+
     ct = content_type.lower()
     if "text/html" in ct and "<html" in body[:200].lower():
-        # Exception: if body also looks like JSON (some API gateways do this)
+
         if not body.strip().startswith("{") and not body.strip().startswith("["):
             return False
     return True
 
 
-# ── Main async class ──────────────────────────────────────────────────────────
+
 
 class SmartWordlist:
 
@@ -424,7 +424,7 @@ class SmartWordlist:
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
 
-        # Fetch root for context
+
         page_html = ""
         try:
             async with session.get(
@@ -439,14 +439,14 @@ class SmartWordlist:
             _blf_dbg("blfinder/core/discovery/layer4_wordlist/smart_wordlist.py#2", e)
             pass
 
-        # Establish soft-404 fingerprint
+
         canary_hash = await _get_canary_fingerprint(
             base, session, config.timeout_s, headers
         )
         if self.verbose:
             print(f"  [wordlist] canary hash: {canary_hash or 'n/a'}")
 
-        # Build wordlist
+
         wordlist = _build_wordlist(
             config,
             discovered_paths or [],
@@ -523,7 +523,7 @@ class SmartWordlist:
                 _blf_dbg("blfinder/core/discovery/layer4_wordlist/smart_wordlist.py#3", e)
                 return None
 
-        # Probe in concurrent batches (Termux-friendly: small batches)
+
         batch_size = 15
         for i in range(0, len(wordlist), batch_size):
             batch    = wordlist[i:i + batch_size]

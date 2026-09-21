@@ -51,36 +51,36 @@ class OAuthToken:
 @dataclass
 class OAuthConfig:
     """OAuth2 client configuration."""
-    token_url: str                          # e.g. https://auth.target.com/oauth/token
+    token_url: str                          
     client_id: str = ""
     client_secret: str = ""
     scope: str = ""
-    grant_type: str = "client_credentials"  # client_credentials | password | refresh_token
+    grant_type: str = "client_credentials"  
 
-    # For password grant
+
     username: str = ""
     password: str = ""
 
-    # For authorization_code grant
+
     auth_url: str = ""
     redirect_uri: str = "https://localhost/callback"
     use_pkce: bool = True
 
-    # For refresh
+
     refresh_token: str = ""
 
-    # Extra body params for non-standard implementations
+
     extra_params: dict = field(default_factory=dict)
 
-    # How to authenticate the client (header vs body)
-    client_auth_method: str = "header"      # "header" | "body"
+
+    client_auth_method: str = "header"      
 
 
 @dataclass
 class OAuthVulnFinding:
     """A vulnerability discovered during the OAuth2 flow."""
     title: str
-    severity: str                           # CRITICAL | HIGH | MEDIUM | LOW
+    severity: str                           
     description: str
     evidence: str
     recommendation: str
@@ -117,7 +117,7 @@ class OAuthHandler:
         self._token: OAuthToken | None = None
         self.findings: list[OAuthVulnFinding] = []
 
-    # ── Token Acquisition ─────────────────────────────────────────────────────
+
 
     async def get_token(self, session) -> OAuthToken | None:
         """
@@ -145,14 +145,14 @@ class OAuthHandler:
         if self._token and not self._token.is_expired():
             return self._token
         if self._token and self._token.refresh_token:
-            # Try refresh first
+
             refreshed = await self._do_refresh(session, self._token.refresh_token)
             if refreshed:
                 return refreshed
-        # Fall back to full re-auth
+
         return await self.get_token(session)
 
-    # ── Grant Type Implementations ────────────────────────────────────────────
+
 
     async def _client_credentials(self, session) -> OAuthToken | None:
         """OAuth2 client_credentials grant — machine-to-machine."""
@@ -170,7 +170,7 @@ class OAuthHandler:
         token = await self._post_token(session, body, headers)
 
         if token:
-            # Vulnerability: check if scope is over-granted
+
             self._check_scope_overgrant(token)
         return token
 
@@ -192,7 +192,7 @@ class OAuthHandler:
         token = await self._post_token(session, body, headers)
 
         if token:
-            # ROPC is deprecated in OAuth 2.1 — flag it
+
             self.findings.append(OAuthVulnFinding(
                 title="OAuth2 Password Grant (ROPC) in Use",
                 severity="MEDIUM",
@@ -235,11 +235,11 @@ class OAuthHandler:
         Note: This is for automated testing only — requires the auth URL
         to be accessible and pre-configured with test credentials.
         """
-        # Generate PKCE challenge
+
         code_verifier  = _generate_code_verifier()
         code_challenge = _generate_code_challenge(code_verifier)
 
-        # Build authorization URL
+
         state = _generate_state()
         auth_params = {
             "response_type":         "code",
@@ -252,28 +252,28 @@ class OAuthHandler:
         }
         auth_url = self.config.auth_url + "?" + urllib.parse.urlencode(auth_params)
 
-        # Test OAuth vulnerabilities in the authorization endpoint
+
         await self._test_auth_endpoint(session, auth_url, state)
 
-        # We can't complete the interactive flow automatically
-        # Return None and let the caller use a pre-obtained code
+
+
         if self.verbose:
             print(f"  [*] Auth URL built: {auth_url[:80]}...")
             print(f"  [*] PKCE verifier: {code_verifier[:20]}...")
         return None
 
-    # ── OAuth Vulnerability Tests ─────────────────────────────────────────────
+
 
     async def _test_auth_endpoint(self, session, auth_url: str, expected_state: str):
         """Test the authorization endpoint for common OAuth vulnerabilities."""
 
-        # Test 1: Missing state parameter
+
         no_state_url = re.sub(r'[&?]state=[^&]+', '', auth_url)
         try:
             async with session.get(no_state_url, allow_redirects=False, timeout=10) as resp:
                 if resp.status in (200, 302):
                     location = resp.headers.get("Location", "")
-                    # If redirect doesn't include state error, state validation is missing
+
                     if "error" not in location and "state" not in location.lower():
                         self.findings.append(OAuthVulnFinding(
                             title="OAuth2 Missing State Parameter Validation",
@@ -293,7 +293,7 @@ class OAuthHandler:
         except Exception:
             pass
 
-        # Test 2: Open redirect via redirect_uri manipulation
+
         if self.config.auth_url:
             evil_redirect = "https://evil.attacker.com/callback"
             evil_params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(auth_url).query))
@@ -329,7 +329,7 @@ class OAuthHandler:
         """
         extra_findings = []
 
-        # Test 1: Accept invalid client credentials
+
         body = {
             "grant_type":    "client_credentials",
             "client_id":     "invalid_client_xyz",
@@ -359,7 +359,7 @@ class OAuthHandler:
         except Exception:
             pass
 
-        # Test 2: Token endpoint allows GET requests (token in URL = logged)
+
         try:
             get_url = (
                 f"{self.config.token_url}?grant_type=client_credentials"
@@ -392,7 +392,7 @@ class OAuthHandler:
         self.findings.extend(extra_findings)
         return extra_findings
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+
 
     async def _post_token(
         self, session, body: dict, headers: dict
@@ -479,7 +479,7 @@ class OAuthHandler:
             ))
 
 
-# ── PKCE Helpers ──────────────────────────────────────────────────────────────
+
 
 def _generate_code_verifier(length: int = 64) -> str:
     """Generate a cryptographically random PKCE code verifier."""

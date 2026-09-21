@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 BLFinder v3.1 Phase 5+ — CLI Entry Point
 Complete platform with all phases integrated + Deep Discovery Engine.
@@ -104,8 +104,8 @@ import time
 from pathlib import Path
 
 
-# ── Banner ────────────────────────────────────────────────────────────────
-# Printed on every launch (including --help), before anything else runs.
+
+
 
 _BLFINDER_LOGO = r"""
 ██████╗ ██╗     ███████╗██╗███╗   ██╗██████╗ ███████╗██████╗
@@ -139,25 +139,25 @@ def print_banner() -> None:
     if no_color:
         accent = reset = dim = green = ""
     else:
-        accent = "\033[1;35m"   # purple accent, matches the HTML report's --accent
+        accent = "\033[1;35m"   
         green  = "\033[1;32m"
         dim    = "\033[2m"
         reset  = "\033[0m"
 
-    # Colour just the trailing "F" the way the HTML report logo does
-    # (BL<span class="critical">F</span>inder), by splitting the ASCII art
-    # at its vertical midpoint column-wise isn't practical for block glyphs,
-    # so the whole wordmark is rendered in the accent colour instead and the
-    # tagline/author lines carry the rest of the palette.
+
+
+
+
+
     print(f"{accent}{_BLFINDER_LOGO}{reset}")
     print(f"{dim}        {_BLFINDER_TAGLINE} · {_BLFINDER_VERSION_TAG}{reset}")
     print(f"{dim}        {_BLFINDER_SUBTAGLINE}{reset}")
     print(f"{green}        Developed by {_BLFINDER_AUTHOR}{reset}{dim} — {_BLFINDER_REPO}{reset}\n")
 
 
-# ── Discovery CLI-args integration (core/discovery/cli_args.py) ──────────────
-# These functions mirror the interface defined in cli_args.py so that the
-# module can be imported OR the logic lives here as a safe fallback.
+
+
+
 
 try:
     from core.discovery.cli_args import (
@@ -169,7 +169,7 @@ try:
 except ImportError:
     _HAS_CLI_ARGS = False
 
-    # ── Fallback implementations ─────────────────────────────────────────────
+
     def add_discovery_args(parser: argparse.ArgumentParser) -> None:
         """Add deep-discovery flags. Fallback when cli_args.py is absent."""
         grp = parser.add_argument_group(
@@ -281,7 +281,7 @@ except ImportError:
         else:
             config.discovery_tags = []
 
-        # If smart_discovery explicitly disabled, also disable deep discovery
+
         if not getattr(config, "smart_discovery", True):
             config.no_deep_discovery = True
 
@@ -304,9 +304,9 @@ except ImportError:
             config.use_headless = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Profile loader
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def load_profile(name: str) -> dict:
     """Load a scan profile from the profiles/ directory."""
@@ -344,7 +344,7 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
     """
     settings = dict(profile.get("settings", {}))
 
-    # Remove keys where the user supplied an explicit CLI override
+
     cli_defaults = {
         "rate_limit":       0.3,
         "min_confidence":   40,
@@ -360,9 +360,9 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
     for key, default in cli_defaults.items():
         attr = cli_attr_map[key]
         if getattr(args, attr, default) != default:
-            settings.pop(key, None)  # CLI override wins → drop profile value
+            settings.pop(key, None)  
 
-    # Boolean flags: if the user passed them on the CLI, enable in settings
+
     flag_map = [
         ("strict_validation", "strict_validation"),
         ("run_blind_idor",    "blind_idor"),
@@ -384,9 +384,9 @@ def merge_profile_with_args(profile: dict, args: argparse.Namespace) -> dict:
     return settings
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Argument parser
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def parse_args() -> argparse.Namespace:
     print_banner()
@@ -439,7 +439,7 @@ EXAMPLES:
 """,
     )
 
-    # ── Core ──────────────────────────────────────────────────────────────────
+
     core = p.add_argument_group("Core")
     core.add_argument("-t", "--target",    default="",   help="Target base URL")
     core.add_argument("-T", "--token",     default="",   help="Auth token for User 1")
@@ -523,7 +523,7 @@ EXAMPLES:
         help="Run discovery only, skip all attack modules",
     )
 
-    # ── Resume / Checkpointing ─────────────────────────────────────────────────
+
     resume_grp = p.add_argument_group("Resume / Checkpointing")
     resume_grp.add_argument(
         "--resume", action="store_true",
@@ -540,7 +540,7 @@ EXAMPLES:
         help="Disable incremental checkpointing entirely for this run",
     )
 
-    # ── Profile ───────────────────────────────────────────────────────────────
+
     prof = p.add_argument_group("Profile")
     prof.add_argument(
         "--profile", default="",
@@ -551,7 +551,7 @@ EXAMPLES:
         ),
     )
 
-    # ── Import ────────────────────────────────────────────────────────────────
+
     imp = p.add_argument_group("Traffic Import")
     imp.add_argument("--import-burp",       default="", metavar="FILE",  help="Import Burp Suite XML/JSON export")
     imp.add_argument("--import-har",        default="", metavar="FILE",  help="Import browser HAR file")
@@ -565,7 +565,7 @@ EXAMPLES:
         help="Save generated endpoints JSON to this path",
     )
 
-    # ── Database ──────────────────────────────────────────────────────────────
+
     db_grp = p.add_argument_group("Database / HackerOne")
     db_grp.add_argument("--db",         default="~/.blfinder.db",  help="SQLite database path")
     db_grp.add_argument(
@@ -581,7 +581,7 @@ EXAMPLES:
     db_grp.add_argument("--show-history", action="store_true", help="Print finding history from DB and exit")
     db_grp.add_argument("--search",     default="", metavar="QUERY", help="Search past findings and exit")
 
-    # ── Dashboard ─────────────────────────────────────────────────────────────
+
     dash = p.add_argument_group("Dashboard")
     dash.add_argument("--dashboard",    action="store_true", help="Enable live TUI dashboard during scan")
     dash.add_argument(
@@ -589,7 +589,7 @@ EXAMPLES:
         help="Force ANSI output even when curses is available",
     )
 
-    # ── Deep Discovery (layer flags) ──────────────────────────────────────────
+
     disc = p.add_argument_group(
         "Deep Discovery (layer pipeline)",
         description=(
@@ -620,14 +620,14 @@ EXAMPLES:
         help="Save deep-discovered endpoints JSON to this path (outer pipeline alias)",
     )
 
-    # ── Phase 5+: Deep Discovery Engine (inner, add_discovery_args) ───────────
-    # NOTE: add_discovery_args() adds --discovery-depth, --use-headless,
-    #       --headless-interact, --openapi-path, --proto-path,
-    #       --discovery-tags, --no-wordlist, --save-discovery,
-    #       --no-deep-discovery  into a named group.
+
+
+
+
+
     add_discovery_args(p)
 
-    # ── Phase 3: Recon ────────────────────────────────────────────────────────
+
     recon = p.add_argument_group("Recon")
     recon.add_argument("--recon",       action="store_true", help="Enable subdomain + JS recon phase")
     recon.add_argument("--recon-only",  action="store_true", help="Run recon and exit (no attack modules)")
@@ -749,7 +749,7 @@ EXAMPLES:
         ),
     )
 
-    # ── Phase 1: Flows ────────────────────────────────────────────────────────
+
     flows = p.add_argument_group("Flows / Auth")
     flows.add_argument(
         "--flow", action="append", default=[], metavar="TEMPLATE",
@@ -780,7 +780,7 @@ EXAMPLES:
         help="Baseline samples for blind oracle (default: 4)",
     )
 
-    # ── Phase 4: Attack Surface ───────────────────────────────────────────────
+
     atk = p.add_argument_group("Phase 4 — Attack Surface")
     atk.add_argument("--idor-range",          type=int, default=0,    help="IDOR enumeration range (0 = disabled)")
     atk.add_argument("--idor-harvest",        action="store_true",    help="Harvest IDs from responses for IDOR")
@@ -858,7 +858,7 @@ EXAMPLES:
         ),
     )
 
-    # ── Endpoint Enrichment ───────────────────────────────────────────────────
+
     enr = p.add_argument_group(
         "Endpoint Enrichment",
         description=(
@@ -891,7 +891,7 @@ EXAMPLES:
         help="Skip GET→POST method promotion during enrichment",
     )
 
-    # ── Output ────────────────────────────────────────────────────────────────
+
     out = p.add_argument_group("Output")
     out.add_argument("-o", "--output",  default=".",  help="Output directory (default: current dir)")
     out.add_argument("--html",          action="store_true", help="Generate HTML report")
@@ -904,9 +904,9 @@ EXAMPLES:
     return p.parse_args()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper functions
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def load_endpoints(path: str) -> list[dict]:
     """Load endpoints list from a JSON file. Returns [] on any error."""
@@ -917,7 +917,7 @@ def load_endpoints(path: str) -> list[dict]:
             data = json.load(f)
         if isinstance(data, list):
             return data
-        # Support {"endpoints": [...]} wrapper
+
         if isinstance(data, dict) and "endpoints" in data:
             return data["endpoints"]
         print(f"[!] Endpoints file has unexpected structure: {path}")
@@ -1016,7 +1016,7 @@ def load_cookie_file(path: str) -> dict:
                         cookies[str(name)] = str(value)
                 return cookies
         except json.JSONDecodeError:
-            pass  # fall through to plain-text/Netscape parsing below
+            pass  
 
     for line in stripped.splitlines():
         line = line.strip()
@@ -1092,7 +1092,7 @@ def build_flow_configs(args: argparse.Namespace, profile: dict) -> list:
         configs.append({"__template__": name})
     for flow_def in load_flow_file(args.flow_file):
         configs.append(flow_def)
-    # Profile flows only when CLI provided none
+
     if not args.flow and not args.flow_file:
         for name in profile.get("flows", []):
             configs.append({"__template__": name})
@@ -1147,9 +1147,9 @@ def build_discovery_config_from_args(args: argparse.Namespace, profile: dict):
 
     prof_disc = profile.get("discovery", {})
 
-    # WEAK-6 FIX: merge --business-tags and --discovery-tags; both flags
-    # seed the wordlist. Previously only --business-tags was read here,
-    # so --discovery-tags was silently dropped.
+
+
+
     business_tags: list[str] = []
     raw_bt = (
         args.business_tags
@@ -1161,23 +1161,23 @@ def build_discovery_config_from_args(args: argparse.Namespace, profile: dict):
     elif prof_disc.get("business_tags"):
         business_tags = prof_disc["business_tags"]
 
-    # Merge openapi_paths from both pipeline flags and engine flags
+
     openapi_paths: list[str] = list(args.openapi_paths or [])
     for p_path in prof_disc.get("openapi_paths", []):
         if p_path not in openapi_paths:
             openapi_paths.append(p_path)
 
-    # FIX (BUG-3): take the maximum of both depth flags so that setting
-    # either one works as the user expects.  getattr(..., default) is used
-    # so that if add_discovery_args() wasn't called (missing cli_args.py
-    # module) we still get a safe integer fallback.
+
+
+
+
     effective_depth = max(
         getattr(args, "discovery_depth", 2),
         getattr(args, "wordlist_depth",  2),
     )
 
-    # FIX (BUG-14): save path resolution — pick the first non-empty value
-    # with a clear precedence order: engine flag > outer flag.
+
+
     save_path = (
         getattr(args, "save_discovery",  "") or
         getattr(args, "discovery_save",  "") or
@@ -1252,9 +1252,9 @@ def import_traffic(args: argparse.Namespace) -> list[dict]:
     return imported
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DB-only commands
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def cmd_show_history(args: argparse.Namespace) -> None:
     """Print finding history from the database."""
@@ -1340,9 +1340,9 @@ async def cmd_export_h1(args: argparse.Namespace) -> None:
         print(f"[!] Database error: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Recon-only mode
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def run_recon_only(args: argparse.Namespace) -> None:
     """Run subdomain recon (and optionally JS secret extraction), then exit."""
@@ -1364,7 +1364,7 @@ async def run_recon_only(args: argparse.Namespace) -> None:
     connector = aiohttp.TCPConnector(ssl=not args.no_ssl_verify, limit=20)
     timeout   = aiohttp.ClientTimeout(total=args.timeout)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        # Subdomain recon
+
         try:
             from core.recon.subdomain_mapper import SubdomainMapper
             mapper = SubdomainMapper(verbose=args.verbose)
@@ -1404,7 +1404,7 @@ async def run_recon_only(args: argparse.Namespace) -> None:
         except ImportError:
             print("[!] SubdomainMapper not available")
 
-        # JS secret extraction
+
         if args.js_secrets:
             try:
                 from core.recon.js_secret_extractor import JSSecretExtractor
@@ -1423,9 +1423,9 @@ async def run_recon_only(args: argparse.Namespace) -> None:
                 print("[!] JSSecretExtractor not available")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Source-only fast path — SourceCodeScanner ONLY, nothing else
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def run_source_only(args: argparse.Namespace) -> int:
     """
@@ -1477,17 +1477,17 @@ async def run_source_only(args: argparse.Namespace) -> int:
         timeout        = args.timeout,
         verbose        = args.verbose,
     )
-    # Force-enable regardless of --source-scan/profile — this mode's whole
-    # point is running this module and only this module.
+
+
     config.run_source_scan = True
 
     findings = []
     scanner_error = None
 
     async with BLFScanner(config) as scanner:
-        # __aenter__ only instantiates SourceCodeScanner when
-        # config.run_source_scan is truthy, which we just forced above —
-        # but belt-and-braces in case that gating ever changes.
+
+
+
         if not getattr(scanner, "_source_scanner", None):
             scanner._source_scanner = SourceCodeScanner(scanner)
 
@@ -1503,10 +1503,10 @@ async def run_source_only(args: argparse.Namespace) -> int:
                 await scanner._source_scanner.check(target, "GET", status, headers, body)
             )
 
-            # Lightweight <script src="..."> extraction so Phase B (source
-            # map reconstruction) runs automatically without needing the
-            # full discovery/crawl engine — just one regex pass over the
-            # page we already fetched, no extra requests yet.
+
+
+
+
             import re as _re
             from urllib.parse import urljoin as _urljoin
             for m in _re.finditer(
@@ -1585,9 +1585,9 @@ async def run_source_only(args: argparse.Namespace) -> int:
     ) else 0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OTP-only fast path — OTPRateLimitScanner ONLY, nothing else
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def run_otp_scan(args: argparse.Namespace) -> int:
     """
@@ -1778,9 +1778,9 @@ async def run_otp_scan(args: argparse.Namespace) -> int:
     ) else 0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Deep Discovery pipeline (outer)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def run_deep_discovery(
     args: argparse.Namespace,
@@ -1804,10 +1804,10 @@ async def run_deep_discovery(
 
     print("[*] Deep Discovery — running multi-layer pipeline...")
 
-    discovered_paths: list[str] = []   # feed forward into wordlist layer
-    all_endpoints:    list      = []   # DiscoveredEndpoint objects
+    discovered_paths: list[str] = []   
+    all_endpoints:    list      = []   
 
-    # ── Layer 1: robots.txt + sitemap ────────────────────────────────────────
+
     if not args.no_robots:
         try:
             from core.discovery.layer1_surface.robots_parser import RobotsParser
@@ -1832,7 +1832,7 @@ async def run_deep_discovery(
         except Exception as e:
             print(f"  [L1:robots]   error: {e}")
 
-    # ── Layer 2a: JS AST + regex endpoint extraction ──────────────────────────
+
     if not args.no_js_ast:
         try:
             from core.discovery.layer2_static.js_ast_parser import JSASTParser
@@ -1854,7 +1854,7 @@ async def run_deep_discovery(
         except Exception as e:
             print(f"  [L2:js_ast]   error: {e}")
 
-    # ── Layer 2b: OpenAPI / Swagger / Postman spec probing ───────────────────
+
     if not args.no_openapi:
         try:
             from core.discovery.layer2_static.openapi_parser import OpenAPIParser
@@ -1876,7 +1876,7 @@ async def run_deep_discovery(
         except Exception as e:
             print(f"  [L2:openapi]  error: {e}")
 
-    # ── Layer 4a: Smart wordlist probing ──────────────────────────────────────
+
     if not getattr(args, "no_wordlist", False):
         try:
             from core.discovery.layer4_wordlist.smart_wordlist import SmartWordlist
@@ -1897,7 +1897,7 @@ async def run_deep_discovery(
         except Exception as e:
             print(f"  [L4:wordlist] error: {e}")
 
-    # ── Layer 4b: API version permutation ─────────────────────────────────────
+
     if not args.no_version_permute:
         try:
             from core.discovery.layer4_wordlist.version_permuter import VersionPermuter
@@ -1918,11 +1918,11 @@ async def run_deep_discovery(
         except Exception as e:
             print(f"  [L4:version]  error: {e}")
 
-    # ── Layer 5+: Hidden endpoint hunter ────────────────────────────────────
-    # Runs BEFORE dedup so discovered hidden paths are included in dedup pass.
-    # Finds: internal/admin/debug paths, framework-specific endpoints,
-    # mobile API paths, historical HackerOne corpus paths, path mutations,
-    # activation-param triggered endpoints, and HTTP method variants.
+
+
+
+
+
     try:
         from core.discovery.hidden_endpoint_hunter import run_hidden_hunter
 
@@ -1940,7 +1940,7 @@ async def run_deep_discovery(
             max_workers = 8,
         )
 
-        # Convert dicts to simple namespace objects so dedup layer handles them
+
         class _EP:
             def __init__(self, d):
                 self.url    = d["url"]
@@ -1963,7 +1963,7 @@ async def run_deep_discovery(
             import traceback
             traceback.print_exc()
 
-    # ── Layer 5: Normalise + dedup ────────────────────────────────────────────
+
     try:
         from core.discovery.layer5_dedup.normaliser import dedup_key
         seen_keys: set[str] = set()
@@ -1983,11 +1983,11 @@ async def run_deep_discovery(
     except Exception as e:
         print(f"  [L5:dedup]    error: {e}")
 
-    # Convert DiscoveredEndpoint → plain dicts for BLFScanner
+
     result_dicts: list[dict] = []
     for ep in all_endpoints:
-        # BUG-C FIX: preserve _meta/schema_hint so OpenAPI-sourced field
-        # schemas survive and reach the scanner attack modules.
+
+
         result_dicts.append({
             "url":    ep.url,
             "method": getattr(ep, "method", "GET"),
@@ -2001,7 +2001,7 @@ async def run_deep_discovery(
         f"{len(result_dicts)} unique endpoints found\n"
     )
 
-    # Optionally save discovered endpoints
+
     save_path = (
         getattr(discovery_cfg, "save_discovery_path", "")
         or getattr(args, "save_discovery", "")
@@ -2022,11 +2022,11 @@ async def run_deep_discovery(
     return result_dicts
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
 
-async def main() -> int:  # noqa: C901  (intentionally long — orchestration only)
+
+
+
+async def main() -> int:  
     args = parse_args()
 
     for _sid_flag, _secret_flag, _sid_val, _secret_val in [
@@ -2039,7 +2039,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             print(f"[!] {missing} is required when its SID/Secret pair partner is set — exiting.")
             return 1
 
-    # ── DB-only / utility commands ────────────────────────────────────────────
+
     if args.show_history:
         await cmd_show_history(args)
         return 0
@@ -2048,8 +2048,8 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         await cmd_search(args, args.search)
         return 0
 
-    # Note: --export-h1 is also a post-scan action; handled below after scan
-    # when used together with --target.  Pure export (no target) exits here.
+
+
     if args.export_h1 and not args.target:
         await cmd_export_h1(args)
         return 0
@@ -2064,7 +2064,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     if args.otp_scan:
         return await run_otp_scan(args)
 
-    # ── Require target for scanning ───────────────────────────────────────────
+
     if not args.target:
         print("[!] --target is required for scanning")
         print(
@@ -2073,7 +2073,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         )
         return 1
 
-    # ── Load profile ──────────────────────────────────────────────────────────
+
     profile: dict = {}
     if args.profile:
         profile = load_profile(args.profile)
@@ -2082,14 +2082,14 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
 
     merged_settings = merge_profile_with_args(profile, args) if profile else {}
 
-    # ── Import traffic ────────────────────────────────────────────────────────
+
     imported_endpoints = import_traffic(args)
 
-    # ── Build discovery configs ───────────────────────────────────────────────
-    # Outer pipeline config (run_deep_discovery)
+
+
     outer_disc_cfg = build_discovery_config_from_args(args, profile)
 
-    # ── Core imports ──────────────────────────────────────────────────────────
+
     try:
         from core.models  import ScanConfig
         from core.scanner import BLFScanner
@@ -2104,7 +2104,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         print("[!] Ensure the core/ package is on your PYTHONPATH")
         return 1
 
-    # ── Build ScanConfig ──────────────────────────────────────────────────────
+
     config = ScanConfig(
         target_url            = args.target.rstrip("/"),
         auth_token            = args.token,
@@ -2126,16 +2126,16 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         fuzz_depth            = merged_settings.get("fuzz_depth", args.fuzz_depth),
         output_dir            = args.output,
         verbose               = args.verbose,
-        no_auth_check         = not getattr(args, "skip_unauth", False),  # BUG-F FIX
+        no_auth_check         = not getattr(args, "skip_unauth", False),  
         min_confidence        = merged_settings.get("min_confidence", args.min_confidence),
         confirmation_attempts = merged_settings.get("confirm_attempts", args.confirm_attempts),
         resume                = args.resume,
     )
 
-    # ── Resume / Checkpointing ────────────────────────────────────────────────
-    # Set up the checkpoint path before anything else touches the scanner, so
-    # incremental per-endpoint progress is captured from the very first
-    # endpoint even if the scan is interrupted a few seconds in.
+
+
+
+
     if not args.no_checkpoint:
         os.makedirs(args.output, exist_ok=True)
         from core.checkpoint import ScanCheckpoint, checkpoint_path_for
@@ -2154,9 +2154,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                     "this target — starting a fresh scan"
                 )
         else:
-            # Not resuming: any leftover checkpoint from a prior interrupted
-            # run of this same target is stale relative to this run's intent
-            # (fresh scan), so start clean rather than silently reusing it.
+
+
+
             if os.path.exists(config.checkpoint_path):
                 try:
                     os.remove(config.checkpoint_path)
@@ -2165,10 +2165,10 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     else:
         config.checkpoint_path = ""
 
-    # ── Apply discovery args (engine-level flags → ScanConfig) ────────────────
+
     apply_discovery_args(args, config)
 
-    # ── Phase 3: Recon ────────────────────────────────────────────────────────
+
     config.run_recon              = args.recon or merged_settings.get("run_recon", False)
     config.run_subdomain_map      = config.run_recon
     config.run_js_extract         = (
@@ -2182,13 +2182,13 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         or merged_settings.get("strict_validation", False)
     )
 
-    # FIX (BUG-6): --no-validation is now stored with an explicit dest= in
-    # argparse (dest="no_validation") so args.no_validation is always reliable.
-    # It is propagated to config here and then acted on in the scanner patch
-    # block below where it disables EndpointValidator entirely when set.
+
+
+
+
     config.no_validation = getattr(args, "no_validation", False)
 
-    # ── Phase 1: Flows / Auth ─────────────────────────────────────────────────
+
     raw_flow_configs = build_flow_configs(args, profile)
     resolved_flows   = resolve_flow_templates(raw_flow_configs, args)
     auto_flows       = args.auto_flows or profile.get("auto_flows", False)
@@ -2202,7 +2202,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.oracle_samples    = args.samples
     config.run_blind_idor    = args.blind_idor
 
-    # ── Phase 4: Attack Surface ───────────────────────────────────────────────
+
     prof_settings = profile.get("settings", {})
     config.idor_range          = args.idor_range   or prof_settings.get("idor_range", 0)
     config.idor_harvest        = args.idor_harvest  or prof_settings.get("idor_harvest", False)
@@ -2219,19 +2219,19 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.run_source_scan      = args.source_scan  or prof_settings.get("run_source_scan", False)
     config.skip_verification    = args.no_verify    or prof_settings.get("skip_verification", False)
     config.print_attack_plan         = args.classify
-    config.max_endpoint_concurrency   = getattr(args, "max_endpoints", 5)  # WEAK-7 FIX
+    config.max_endpoint_concurrency   = getattr(args, "max_endpoints", 5)  
 
-    # ── Phase 5: Database ─────────────────────────────────────────────────────
+
     config.db_path   = os.path.expanduser(args.db)
     config.program   = args.program
     config.no_repeat = args.no_repeat
 
-    # FIX (BUG-17): previous logic compared args.db to the hardcoded default
-    # string "~/.blfinder.db", which meant explicitly passing that path on
-    # the CLI left use_db=False.  Now the DB is activated when any
-    # DB-related flag is set OR when the user explicitly provided a --db
-    # path (different from the default is checked, but we also activate on
-    # program/no_repeat/export_h1 regardless of path).
+
+
+
+
+
+
     _db_explicitly_set = args.db != "~/.blfinder.db"
     config.use_db = bool(
         _db_explicitly_set
@@ -2240,7 +2240,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         or args.export_h1
     )
 
-    # ── Deep discovery flags on ScanConfig ───────────────────────────────────
+
     config.deep_discovery     = (
         args.deep_discovery
         or merged_settings.get("deep_discovery", False)
@@ -2251,30 +2251,30 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     config.no_openapi         = args.no_openapi
     config.no_version_permute = args.no_version_permute
 
-    # FIX (BUG-15): enforce mutual exclusion between --deep-discovery and
-    # --no-deep-discovery.  If the user passed --no-deep-discovery it
-    # overrides --deep-discovery regardless of the order on the command line.
+
+
+
     if getattr(args, "no_deep_discovery", False):
         config.deep_discovery    = False
         config.no_deep_discovery = True
 
-    # Apply profile-level discovery (fills gaps left by CLI defaults)
+
     apply_profile_discovery(profile, args, config)
 
-    # ── Load endpoints ────────────────────────────────────────────────────────
+
     endpoints: list[dict] = load_endpoints(args.endpoints)
     endpoints.extend(imported_endpoints)
 
     if not endpoints:
-        # Seed with root so discovery has somewhere to start
+
         endpoints = [{"url": "/", "method": "GET", "body": {}, "params": {}}]
         if not args.recon:
             print("[*] No endpoints supplied — relying on discovery")
 
-    # ── Classify-only (preview attack plan) ───────────────────────────────────
-    # FIX (BUG-16): --classify with --target now ALWAYS continues to the full
-    # scan (as the code comment already stated).  Without --target it exits.
-    # Help text was updated above to reflect this accurately.
+
+
+
+
     if args.classify:
         try:
             from core.intelligence.business_classifier import BusinessClassifier
@@ -2285,10 +2285,10 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             print("[!] BusinessClassifier not available")
         if not args.target:
             return 0
-        # Target provided → fall through to the full scan (intentional)
+
         print("[*] --classify: continuing to full scan (target supplied)...")
 
-    # ── Initialise database ───────────────────────────────────────────────────
+
     db      = None
     scan_id = None
     if config.use_db:
@@ -2308,11 +2308,11 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             print(f"[!] Database init failed: {e} — continuing without DB")
             db = None
 
-    # ── Outer deep discovery pipeline (if requested) ──────────────────────────
+
     if config.deep_discovery and outer_disc_cfg is not None:
-        # Patch version_permuter BEFORE running discovery so that individual
-        # probe failures (timeout, SSL error, connection refused) are caught
-        # per-probe and never crash the whole pipeline.
+
+
+
         try:
             from core.discovery.version_permuter_patch import (
                 apply_version_permuter_patch,
@@ -2321,7 +2321,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             if args.verbose:
                 print("[*] version_permuter_patch applied")
         except ImportError:
-            pass  # patch file absent — permuter runs unpatched
+            pass  
 
         try:
             import aiohttp
@@ -2334,7 +2334,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             ) as disc_session:
                 discovered = await run_deep_discovery(args, outer_disc_cfg, disc_session)
 
-            # Merge, deduplicate by (url, method)
+
             existing_keys: set[tuple] = {
                 (ep["url"], ep.get("method", "GET")) for ep in endpoints
             }
@@ -2355,9 +2355,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 import traceback
                 traceback.print_exc()
 
-    # ── No-scan mode: discovery only ──────────────────────────────────────────
+
     if args.no_scan:
-        # BUG-D FIX: honour --save-discovery path; fall back to output dir.
+
         _noscan_save = (
             getattr(args, "save_discovery", "")
             or getattr(args, "discovery_save", "")
@@ -2384,9 +2384,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 pass
         return 0
 
-    # ── Apply patches ─────────────────────────────────────────────────────────
 
-    # Patch 1: scanner_patch — fixes coroutine leak + soft-404 over-skip
+
+
     if not getattr(config, "no_deep_discovery", False):
         try:
             from core.discovery.scanner_patch import apply_patch
@@ -2394,10 +2394,10 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             if args.verbose:
                 print("[*] scanner_patch applied (coroutine fix + soft-404 threshold)")
         except ImportError:
-            pass  # Engine absent — BLFScanner uses its built-in fallback
+            pass  
 
-    # FIX (BUG-6): wire --no-validation flag into scanner_patch so the
-    # EndpointValidator is bypassed when the user requests it.
+
+
     if config.no_validation:
         try:
             from core.discovery.scanner_patch import disable_endpoint_validation
@@ -2405,8 +2405,8 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             if args.verbose:
                 print("[*] EndpointValidator disabled (--no-validation)")
         except (ImportError, AttributeError):
-            # scanner_patch may not expose this helper yet — apply a direct
-            # monkey-patch as a safe fallback.
+
+
             try:
                 from core.scanner import BLFScanner as _BLF
                 if hasattr(_BLF, "_validate_endpoint"):
@@ -2418,7 +2418,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             except ImportError:
                 pass
 
-    # Patch 2b: blind_idor_patch — prevents false positives
+
     try:
         from core.oracles.blind_idor_patch import apply_blind_idor_patch
         apply_blind_idor_patch()
@@ -2427,7 +2427,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     except ImportError:
         pass
 
-    # Patch 2: verifier_patch — fixes over-aggressive re-verification
+
     try:
         from core.verifier_patch import apply_verifier_patch
         patched = apply_verifier_patch()
@@ -2436,21 +2436,21 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     except ImportError:
         pass
 
-    # FIX (BUG-1): scanner_integration was never called, leaving auth-diff,
-    # platform attack modules, and domain chain engine completely dead.
-    # It MUST be applied after scanner_patch (so it wraps the patched method)
-    # and BEFORE the BLFScanner context manager opens.
+
+
+
+
     try:
         from core.intelligence.scanner_integration import apply_integration
         integration_applied = apply_integration()
         if args.verbose and integration_applied:
             print("[*] scanner_integration applied (auth_diff + platform + chains)")
     except ImportError:
-        pass  # Module absent — scan continues with standard 21-module sweep
+        pass  
 
-    # WEAK-7 FIX: global endpoint concurrency cap prevents WAF-triggering bursts.
-    # Wraps _run_endpoint_checks with a semaphore so at most N endpoints are
-    # processed simultaneously (default 5; lower on Cloudflare targets).
+
+
+
     _max_ep = getattr(config, "max_endpoint_concurrency", 5)
     try:
         from core.scanner import BLFScanner as _BLF_cls
@@ -2465,13 +2465,13 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         if args.verbose:
             print(f"[*] endpoint concurrency cap: max={_max_ep} (--max-endpoints)")
     except Exception:
-        pass  # Non-fatal
+        pass  
 
-    # ── Endpoint enrichment ───────────────────────────────────────────────────
-    # Adds real body parameters and query params to bare endpoints so that
-    # BLFinder's attack modules have concrete fields to manipulate.
-    # Runs automatically unless --no-enrich is passed.
-    # Skipped when all endpoints already have bodies (nothing to infer).
+
+
+
+
+
     _bare_count = sum(
         1 for ep in endpoints
         if not ep.get("body") and not ep.get("params")
@@ -2480,7 +2480,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     _should_enrich = (
         not getattr(args, "no_enrich", False)
         and _bare_count > 0
-        and _has_auth  # need auth to probe protected endpoints
+        and _has_auth  
         and not args.no_scan
     )
     if _should_enrich:
@@ -2490,10 +2490,10 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         )
         try:
             from core.discovery.endpoint_enricher import enrich_endpoints
-            # BUG-A FIX: pass cookies + extra_headers so cookie-authenticated
-            # targets (1win.com: cf_clearance, 1w_token) are probed correctly.
-            # BUG-B FIX: pass verify_ssl so ssl= is not hardcoded False.
-            # BUG-H FIX: pass proxy so Burp interception works during enrichment.
+
+
+
+
             endpoints = await enrich_endpoints(
                 endpoints     = endpoints,
                 target_url    = config.target_url,
@@ -2510,7 +2510,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 verbose       = args.verbose,
                 promote_get   = not getattr(args, "no_enrich_promote", False),
             )
-            # Optionally save enriched endpoints
+
             enrich_save = getattr(args, "enrich_save", "")
             if enrich_save:
                 try:
@@ -2534,16 +2534,16 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     elif getattr(args, "no_enrich", False) and _bare_count > 0:
         print(f"[*] Enrichment skipped (--no-enrich). {_bare_count} endpoints are bare.")
 
-    # ── Run scanner ───────────────────────────────────────────────────────────
+
     findings = []
     scanner_error: Exception | None = None
 
     async with BLFScanner(config) as scanner:
-        # Apply profile to scanner instance
+
         if profile:
             scanner.apply_profile(profile)
 
-        # Setup TUI dashboard
+
         dashboard     = None
         dash_task     = None
         if args.dashboard:
@@ -2568,15 +2568,15 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         try:
             findings = await scanner.run_all_modules(endpoints)
         except (KeyboardInterrupt, asyncio.CancelledError):
-            # RESUME-FIX: previously this propagated all the way up
-            # uncaught (KeyboardInterrupt/CancelledError aren't Exception
-            # subclasses) and crashed with a raw traceback — and even if it
-            # hadn't, `findings` here would still be empty since
-            # run_all_modules never got to return it. Checkpointing has
-            # already been saving progress incrementally per-endpoint
-            # throughout the scan, so the data itself is safe on disk;
-            # this just gives the person a clean message instead of a
-            # crash, and tells them how to pick back up.
+
+
+
+
+
+
+
+
+
             interrupted = True
             ckpt = getattr(scanner, "_checkpoint", None)
             print("\n[!] Scan interrupted.")
@@ -2608,7 +2608,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                     pass
 
     if interrupted:
-        return 130  # conventional SIGINT exit code
+        return 130  
 
     if scanner_error and not findings:
         if db:
@@ -2619,7 +2619,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
                 pass
         return 1
 
-    # ── Save findings to database ─────────────────────────────────────────────
+
     if db and findings:
         try:
             new_count, dupe_count = await db.save_findings(
@@ -2630,7 +2630,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
             await db.finish_scan(scan_id, finding_count=new_count)
             print(f"[*] Database: {new_count} new, {dupe_count} duplicates")
 
-            # Post-scan HackerOne export
+
             if args.export_h1 and args.h1_token and new_count > 0:
                 await cmd_export_h1(args)
         except Exception as e:
@@ -2647,7 +2647,7 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
         except Exception:
             pass
 
-    # ── Generate reports ──────────────────────────────────────────────────────
+
     scan_phase_elapsed = time.monotonic() - _scan_phase_start
     print(f"[*] Scan + verification phase took {scan_phase_elapsed:.1f}s")
 
@@ -2663,10 +2663,10 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     else:
         print(f"\n[+] Scan complete. {len(findings)} findings.")
 
-    # HTML report — try full evidence report first, fall back gracefully.
-    # FIX (BUG-5): the second reporter path was "core.reporting.core.reporting.
-    # evidence_report" (doubled prefix, copy-paste error).  Corrected to
-    # "core.reporting.evidence_report".
+
+
+
+
     if args.html or not (args.json or args.md):
         html_path = os.path.join(args.output, "report.html")
         generated = False
@@ -2704,9 +2704,9 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     report_phase_elapsed = time.monotonic() - _report_phase_start
     print(f"[*] Report generation took {report_phase_elapsed:.2f}s")
 
-    # BUG-G FIX: exit 1 only on confirmed CRITICAL findings with >=80% confidence.
-    # Unconfirmed / low-confidence CRITICAL findings (e.g. price manipulation FPs)
-    # no longer fail CI pipelines.
+
+
+
     return 1 if any(
         getattr(f.severity, "value", str(f.severity)) == "CRITICAL"
         and getattr(f, "confirmed", False)
@@ -2715,7 +2715,11 @@ async def main() -> int:  # noqa: C901  (intentionally long — orchestration on
     ) else 0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    try:
+        sys.exit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        print("\n[!] Interrupted by user")
+        sys.exit(130)

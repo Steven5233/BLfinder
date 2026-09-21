@@ -50,7 +50,7 @@ except ImportError:
     _HAS_AIOHTTP = False
 
 
-# ── HackerOne API endpoint ────────────────────────────────────────────────────
+
 _H1_API_BASE     = "https://api.hackerone.com/v1"
 _H1_REPORTS_URL  = f"{_H1_API_BASE}/reports"
 
@@ -78,7 +78,7 @@ class DBFinding:
     reported_at:   str | None = None
     h1_report_id:  str | None = None
     bounty_amount: float = 0.0
-    status:        str = "new"     # new | reported | triaged | resolved | duplicate
+    status:        str = "new"     
     created_at:    str = ""
     verified_curl: str = ""
 
@@ -199,7 +199,7 @@ class ScanDatabase:
     async def __aexit__(self, *args):
         await self.close()
 
-    # ── Scan management ───────────────────────────────────────────────────────
+
 
     async def start_scan(self, target: str, program: str = "", config: dict = None) -> int:
         """Start a new scan session. Returns scan_id."""
@@ -221,11 +221,11 @@ class ScanDatabase:
         )
         await self._db.commit()
 
-    # ── Finding CRUD ──────────────────────────────────────────────────────────
+
 
     async def save_findings(
         self,
-        findings:   list,          # list[Finding] from models.py
+        findings:   list,          
         scan_id:    int | None = None,
         program:    str = "",
     ) -> tuple[int, int]:
@@ -282,7 +282,7 @@ class ScanDatabase:
 
         await self._db.commit()
 
-        # Update program stats
+
         if program:
             await self._update_program_stats(program)
 
@@ -376,7 +376,7 @@ class ScanDatabase:
         )
         await self._db.commit()
 
-    # ── Deduplication ─────────────────────────────────────────────────────────
+
 
     async def _check_duplicate(self, dedup_hash: str, program: str = "") -> bool:
         """Return True if this finding hash already exists for this program."""
@@ -395,7 +395,7 @@ class ScanDatabase:
         """Public API: check if a Finding object is already in the DB."""
         return await self._check_duplicate(_make_dedup_hash(finding), program)
 
-    # ── Program management ────────────────────────────────────────────────────
+
 
     async def register_program(
         self,
@@ -442,7 +442,7 @@ class ScanDatabase:
             )
             await self._db.commit()
 
-    # ── HackerOne export ──────────────────────────────────────────────────────
+
 
     async def export_to_hackerone(
         self,
@@ -464,7 +464,7 @@ class ScanDatabase:
         if not _HAS_AIOHTTP:
             raise RuntimeError("aiohttp required for HackerOne export")
 
-        # Fetch finding from DB
+
         async with self._db.execute(
             "SELECT * FROM findings WHERE id = ?", (finding_id,)
         ) as cur:
@@ -475,8 +475,8 @@ class ScanDatabase:
         finding = _row_to_finding(row)
         payload = self._format_h1_payload(finding, program_handle)
 
-        # HackerOne API uses HTTP Basic auth (username:api_token)
-        # token format: "username:api_token"
+
+
         if ":" in h1_token:
             username, api_token = h1_token.split(":", 1)
         else:
@@ -501,7 +501,7 @@ class ScanDatabase:
                     report_id  = str(body.get("data", {}).get("id", ""))
                     report_url = f"https://hackerone.com/reports/{report_id}"
 
-                    # Mark as reported in DB
+
                     await self.mark_reported(finding_id, h1_report_id=report_id)
 
                     return {
@@ -526,7 +526,7 @@ class ScanDatabase:
         }
         h1_severity = sev_map.get(finding.severity.upper(), "medium")
 
-        # Build vulnerability information string
+
         vuln_info = "\n".join(filter(None, [
             finding.description,
             "",
@@ -612,7 +612,7 @@ class ScanDatabase:
         ]
         return "\n".join(lines)
 
-    # ── Statistics ────────────────────────────────────────────────────────────
+
 
     async def get_stats(self, program: str = "") -> DBStats:
         """Get aggregated statistics from the database."""
@@ -622,7 +622,7 @@ class ScanDatabase:
         stats = DBStats(by_severity={}, by_program={}, by_category={},
                         top_endpoints=[], recent_findings=[])
 
-        # Totals
+
         async with self._db.execute(
             f"SELECT COUNT(*), SUM(bounty_amount) FROM findings {where}", params
         ) as cur:
@@ -650,7 +650,7 @@ class ScanDatabase:
             row = await cur.fetchone()
             stats.total_reported = row[0] or 0
 
-        # By severity
+
         async with self._db.execute(
             f"SELECT severity, COUNT(*) FROM findings {where} "
             "GROUP BY severity ORDER BY COUNT(*) DESC",
@@ -659,7 +659,7 @@ class ScanDatabase:
             rows = await cur.fetchall()
             stats.by_severity = {row[0]: row[1] for row in rows}
 
-        # By program
+
         async with self._db.execute(
             "SELECT program, COUNT(*) FROM findings "
             "GROUP BY program ORDER BY COUNT(*) DESC LIMIT 10"
@@ -667,7 +667,7 @@ class ScanDatabase:
             rows = await cur.fetchall()
             stats.by_program = {row[0]: row[1] for row in rows}
 
-        # By category
+
         async with self._db.execute(
             f"SELECT category, COUNT(*) FROM findings {where} "
             "GROUP BY category ORDER BY COUNT(*) DESC LIMIT 10",
@@ -676,7 +676,7 @@ class ScanDatabase:
             rows = await cur.fetchall()
             stats.by_category = {row[0]: row[1] for row in rows}
 
-        # Recent
+
         recent = await self.get_findings(program=program, limit=5)
         stats.recent_findings = recent
 
@@ -727,7 +727,7 @@ class ScanDatabase:
             print()
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")

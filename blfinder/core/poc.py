@@ -56,7 +56,7 @@ class PoCGenerator:
         else:
             return self._poc_generic(finding)
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+
 
     def _auth_header(self, token: str = None) -> str:
         t = token or self.config.auth_token
@@ -116,7 +116,7 @@ session = requests.Session()
 session.verify = False
 '''
 
-    # ── PoC Builders ─────────────────────────────────────────────────────────
+
 
     def _poc_price_manipulation(self, f: Finding) -> ProofOfConcept:
         req = f.request
@@ -476,7 +476,7 @@ else:
         body = req.get("body", {})
         token = self.config.auth_token
 
-        alg_none = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"  # {"alg":"none","typ":"JWT"}
+        alg_none = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"  
 
         python = self._python_script_header() + f'''
 # JWT Vulnerability PoC

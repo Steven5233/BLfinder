@@ -60,13 +60,13 @@ from urllib.parse import urljoin, urlparse
 
 from ..models import Finding, Severity, ProofOfConcept
 
-_MAX_MAP_BYTES = 2 * 1024 * 1024          # skip source maps bigger than this
-_MAX_JS_FILES_PER_HOST = 20                # cap Phase B volume per host
-_MAX_RECONSTRUCTED_CHARS = 500_000         # cap total original-source text scanned per host
+_MAX_MAP_BYTES = 2 * 1024 * 1024          
+_MAX_JS_FILES_PER_HOST = 20                
+_MAX_RECONSTRUCTED_CHARS = 500_000         
 
 
-# ── Phase A: source-exposure candidate paths ─────────────────────────────────
-# Each tuple: (path, validator(body, headers) -> bool, title, severity, cwe, recommendation)
+
+
 
 def _is_git_ref(body: str, headers: dict) -> bool:
     return bool(re.match(r"^\s*ref:\s*refs/heads/\S+", body)) or bool(re.match(r"^\s*[0-9a-f]{40}\s*$", body.strip()))
@@ -134,9 +134,9 @@ _EXPOSURE_CHECKS = [
 ]
 
 
-# ── Phase B: static JS bug patterns ──────────────────────────────────────────
-# minified_safe=True patterns are kept in the reduced set run against raw
-# (possibly minified) JS when no source map / sourcesContent is available.
+
+
+
 
 class _JSPattern:
     __slots__ = ("id", "regex", "title", "description", "severity", "cwe", "minified_safe")
@@ -266,11 +266,11 @@ class SourceCodeScanner:
         self._config = scanner.config
         self._request = scanner._request
         self._exposure_checked_hosts: set[str] = set()
-        self._reported: set[tuple] = set()          # (host, kind, key)
+        self._reported: set[tuple] = set()          
         self._js_files_scanned_per_host: dict[str, int] = {}
         self._reconstructed_chars_per_host: dict[str, int] = {}
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def check(
         self,
@@ -287,12 +287,12 @@ class SourceCodeScanner:
             return findings
         headers = headers or {}
 
-        # Phase A — runs once per host, triggered by the first request we see for it.
+
         if host not in self._exposure_checked_hosts:
             self._exposure_checked_hosts.add(host)
             findings.extend(await self._scan_source_exposure(parsed.scheme, host))
 
-        # Phase B — only for responses that look like JavaScript.
+
         if self._looks_like_js(url, headers, body):
             budget = self._js_files_scanned_per_host.get(host, 0)
             if budget < _MAX_JS_FILES_PER_HOST:
@@ -301,7 +301,7 @@ class SourceCodeScanner:
 
         return findings
 
-    # ── Phase A ──────────────────────────────────────────────────────────────
+
 
     async def _scan_source_exposure(self, scheme: str, host: str) -> list[Finding]:
         findings: list[Finding] = []
@@ -325,7 +325,7 @@ class SourceCodeScanner:
             if not pbody or len(pbody) < 5:
                 continue
             if canary_hash and self._body_hash(pbody) == canary_hash:
-                continue  # soft-404 / SPA catch-all — not a real hit
+                continue  
             if not validator(pbody, pheaders or {}):
                 continue
 
@@ -416,7 +416,7 @@ class SourceCodeScanner:
         )
         return finding
 
-    # ── Phase B ──────────────────────────────────────────────────────────────
+
 
     def _looks_like_js(self, url: str, headers: dict, body: str) -> bool:
         ct = ""
@@ -447,8 +447,8 @@ class SourceCodeScanner:
                 self._apply_patterns(url, host, combined, _JS_PATTERNS, source_label=f"reconstructed via {map_url}")
             )
         else:
-            # No usable source map — fall back to the minification-safe subset
-            # run directly against the raw (possibly minified) JS.
+
+
             findings.extend(
                 self._apply_patterns(url, host, body, _MINIFIED_SAFE_PATTERNS, source_label="raw/minified JS")
             )
@@ -461,7 +461,7 @@ class SourceCodeScanner:
             return "", ""
         map_ref = m.group(1)
         if map_ref.startswith("data:"):
-            return "", ""  # inline data-URI maps are rare and skipped to keep this cheap
+            return "", ""  
         map_url = urljoin(js_url, map_ref)
         try:
             status, headers, map_body, _ = await self._request("GET", map_url)

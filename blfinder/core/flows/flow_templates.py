@@ -34,7 +34,7 @@ class FlowTemplates:
     All methods return list[FlowStep] ready for FlowReplayer.
     """
 
-    # ── E-Commerce Flows ──────────────────────────────────────────────────────
+
 
     @staticmethod
     def ecommerce_checkout(
@@ -149,7 +149,7 @@ class FlowTemplates:
             ),
         ]
 
-        # Inject coupon step after add_to_cart if a code was provided
+
         if coupon_code:
             coupon_step = FlowStep(
                 id="apply_coupon",
@@ -281,7 +281,7 @@ class FlowTemplates:
             ),
         ]
 
-    # ── Financial Flows ───────────────────────────────────────────────────────
+
 
     @staticmethod
     def funds_transfer(
@@ -398,7 +398,7 @@ class FlowTemplates:
             ),
         ]
 
-    # ── Auth Flows ────────────────────────────────────────────────────────────
+
 
     @staticmethod
     def password_reset(
@@ -477,7 +477,7 @@ class FlowTemplates:
                     "verification_token": "$.verification_token",
                 },
                 expected_status=[200, 201],
-                attack_here=True,     # Mass assignment attack here
+                attack_here=True,     
                 required=True,
             ),
             FlowStep(
@@ -493,7 +493,7 @@ class FlowTemplates:
                     "auth_token":  "$.token",
                 },
                 expected_status=[200, 201],
-                attack_here=True,     # Workflow bypass — skip this step
+                attack_here=True,     
                 required=False,
             ),
             FlowStep(
@@ -511,7 +511,7 @@ class FlowTemplates:
             ),
         ]
 
-    # ── Reward / Loyalty Flows ────────────────────────────────────────────────
+
 
     @staticmethod
     def redeem_reward(
@@ -551,7 +551,7 @@ class FlowTemplates:
                     "new_balance":   "$.account.balance",
                 },
                 expected_status=[200, 201],
-                attack_here=True,     # Race condition target
+                attack_here=True,     
                 required=True,
             ),
         ]
@@ -602,7 +602,7 @@ class FlowTemplates:
             ),
         ]
 
-    # ── Admin / KYC Flows ─────────────────────────────────────────────────────
+
 
     @staticmethod
     def kyc_verification(
@@ -629,7 +629,7 @@ class FlowTemplates:
                     "kyc_token": "$.kyc.token",
                 },
                 expected_status=[200, 201],
-                attack_here=True,     # Force status = verified
+                attack_here=True,     
                 required=True,
             ),
             FlowStep(
@@ -644,7 +644,7 @@ class FlowTemplates:
                 extract={"doc_id": "$.document.id"},
                 expected_status=[200, 201],
                 attack_here=False,
-                required=False,       # Skip this to test workflow bypass
+                required=False,       
             ),
             FlowStep(
                 id="verify_kyc",
@@ -661,7 +661,7 @@ class FlowTemplates:
                     "kyc_level":           "$.kyc.level",
                 },
                 expected_status=[200, 201],
-                attack_here=True,     # Force verification
+                attack_here=True,     
                 required=True,
             ),
         ]
@@ -692,7 +692,7 @@ class FlowTemplates:
                     "key_token":        "$.key.token",
                 },
                 expected_status=[200, 201],
-                attack_here=True,     # Mass assignment: add admin permissions
+                attack_here=True,     
                 required=True,
             ),
             FlowStep(
@@ -713,7 +713,7 @@ class FlowTemplates:
             ),
         ]
 
-    # ── Generic Builder ───────────────────────────────────────────────────────
+
 
     @staticmethod
     def from_json(flow_def: dict) -> list[FlowStep]:

@@ -105,7 +105,7 @@ class EvidenceReportGenerator:
             else "#ff2d55"
         )
 
-        # Build all tabs
+
         tabs_html   = self._build_tabs(fid)
         tab_content = self._build_tab_contents(fid, f, pkg)
 
@@ -322,14 +322,14 @@ class EvidenceReportGenerator:
 """
 
     def _tab_reproduce(self, f: Finding, pkg: EvidencePackage | None) -> str:
-        # REPORT-FIX: this tab used to always rebuild its own bare curl
-        # command from pkg.verified_curl / f.request and never looked at
-        # f.poc at all — so the category-specific PoC (threading race
-        # script, Burp Turbo Intruder config, state-transition sequence,
-        # manual steps, expected result) generated for every finding was
-        # silently discarded before it ever reached the report. Render it
-        # when present; fall back to the old bare-curl behavior only for
-        # findings that somehow have no attached PoC.
+
+
+
+
+
+
+
+
         poc = getattr(f, "poc", None)
 
         verified_html = ""

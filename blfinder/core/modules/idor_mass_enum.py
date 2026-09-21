@@ -34,12 +34,12 @@ from urllib.parse import urlparse, urlunparse
 
 
 class ResourceStatusType(str, Enum):
-    OWNED     = "OWNED"       # Resource belongs to authenticated user
-    EXISTS    = "EXISTS"      # Resource exists, different owner (potential IDOR)
-    FORBIDDEN = "FORBIDDEN"   # 403 — resource exists but access denied (good)
-    NOT_FOUND = "NOT_FOUND"   # Resource does not exist
-    ERROR     = "ERROR"       # Server error during probe
-    UNKNOWN   = "UNKNOWN"     # Cannot determine
+    OWNED     = "OWNED"       
+    EXISTS    = "EXISTS"      
+    FORBIDDEN = "FORBIDDEN"   
+    NOT_FOUND = "NOT_FOUND"   
+    ERROR     = "ERROR"       
+    UNKNOWN   = "UNKNOWN"     
 
 
 @dataclass
@@ -60,17 +60,17 @@ class ResourceStatus:
 class IDOREnumResult:
     """Full result of mass IDOR enumeration on one endpoint."""
     endpoint:          str
-    id_field:          str          # "path[2]", "body.user_id", etc.
-    id_type:           str          # "numeric", "uuid", "harvested"
+    id_field:          str          
+    id_type:           str          
     total_tested:      int = 0
     existing_ids:      list[str] = field(default_factory=list)
-    accessible_ids:    list[str] = field(default_factory=list)  # Not owned
-    forbidden_ids:     list[str] = field(default_factory=list)  # 403 access
-    confirmed_idors:   list[str] = field(default_factory=list)  # Cross-user verified
+    accessible_ids:    list[str] = field(default_factory=list)  
+    forbidden_ids:     list[str] = field(default_factory=list)  
+    confirmed_idors:   list[str] = field(default_factory=list)  
     resource_map:      dict[str, ResourceStatus] = field(default_factory=dict)
-    findings:          list = field(default_factory=list)  # list[Finding]
-    owned_id:          str = ""     # The ID that belongs to the current user
-    owned_response:    str = ""     # Baseline response for owned resource
+    findings:          list = field(default_factory=list)  
+    owned_id:          str = ""     
+    owned_response:    str = ""     
     owned_hash:        str = ""
 
 
@@ -89,7 +89,7 @@ class IDORMassEnumerator:
             scanner.findings.append(finding)
     """
 
-    # Common test UUIDs used across many test suites
+
     _TEST_UUIDS = [
         "00000000-0000-0000-0000-000000000001",
         "00000000-0000-0000-0000-000000000002",
@@ -108,7 +108,7 @@ class IDORMassEnumerator:
         self._finalize   = scanner._finalize_finding
         self._harvested_ids: set[str] = set()
 
-    # ── Public API ────────────────────────────────────────────────────────────
+
 
     async def enumerate_path(
         self,
@@ -139,23 +139,23 @@ class IDORMassEnumerator:
                 owned_id=segment,
             )
 
-            # Get baseline (owned resource)
+
             _, _, baseline_body, _ = await self._request(
                 method, url, json=body if body else None
             )
             result.owned_response = baseline_body
             result.owned_hash     = _hash(baseline_body)
 
-            # Canary FP guard — nonsense ID must be rejected
+
             canary_segs    = path_segments[:]
             canary_segs[seg_idx] = "__blfinder_canary_xyz__"
             canary_url     = urlunparse(parsed._replace(path="/".join(canary_segs)))
             canary_status, _, _, _ = await self._request("GET", canary_url)
             if canary_status in (200, 201):
-                # Server accepts anything — skip this segment
+
                 continue
 
-            # Build candidate IDs
+
             if id_type == "numeric":
                 original_id = int(segment)
                 candidates  = _build_numeric_range(original_id, max_range)
@@ -164,7 +164,7 @@ class IDORMassEnumerator:
             else:
                 candidates = list(self._harvested_ids)
 
-            # Batch probe
+
             result = await self._probe_batch(
                 result, parsed, path_segments, seg_idx,
                 candidates, method, body, max_range,
@@ -200,24 +200,24 @@ class IDORMassEnumerator:
             owned_id=str(original_value),
         )
 
-        # Baseline
+
         _, _, baseline_body, _ = await self._request(method, url, json=body)
         result.owned_response = baseline_body
         result.owned_hash     = _hash(baseline_body)
 
-        # Canary guard
+
         canary_body = {**body, field_name: "__blfinder_canary__"}
         cs, _, _, _ = await self._request(method, url, json=canary_body)
         if cs in (200, 201):
             return result
 
-        # Candidates
+
         if id_type == "numeric":
             candidates = _build_numeric_range(int(original_value), max_range)
         else:
             candidates = self._TEST_UUIDS + list(self._harvested_ids)
 
-        # Probe
+
         sem = asyncio.Semaphore(20)
 
         async def probe_one(cand_id: str) -> ResourceStatus:
@@ -269,7 +269,7 @@ class IDORMassEnumerator:
         for ep in endpoints:
             ep_url = ep.get("url", "")
             if id_value in ep_url:
-                continue  # Same endpoint, skip
+                continue  
 
             parsed   = urlparse(ep_url)
             segments = parsed.path.split("/")
@@ -284,7 +284,7 @@ class IDORMassEnumerator:
                     method, test_url
                 )
                 if status == 200 and len(resp_body) > 50:
-                    # FP guard: verify it's not a generic 200
+
                     if not _body_is_error(resp_body):
                         ev  = self._new_ev()
                         pkg = self._build_pkg(
@@ -333,10 +333,10 @@ class IDORMassEnumerator:
         """
         if not response_body:
             return
-        # Numeric IDs (>= 3 digits to avoid noise)
+
         for m in re.finditer(r'\b(\d{3,12})\b', response_body):
             self._harvested_ids.add(m.group(1))
-        # UUIDs
+
         for m in re.finditer(
             r'\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b',
             response_body, re.I,
@@ -347,7 +347,7 @@ class IDORMassEnumerator:
     def harvested_ids(self) -> set[str]:
         return self._harvested_ids
 
-    # ── Internal ──────────────────────────────────────────────────────────────
+
 
     async def _probe_batch(
         self,
@@ -420,7 +420,7 @@ class IDORMassEnumerator:
 
         from ..models import Finding, Severity
 
-        for acc_id in result.accessible_ids[:5]:  # Cap at 5 confirmations
+        for acc_id in result.accessible_ids[:5]:  
             rs        = result.resource_map.get(acc_id)
             confirmed = False
 
@@ -489,7 +489,7 @@ class IDORMassEnumerator:
             result.findings.append(f)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _detect_id_type(segment: str) -> str:
     if re.match(r'^\d{1,12}$', segment):
@@ -509,7 +509,7 @@ def _build_numeric_range(original: int, max_range: int) -> list[str]:
     start  = max(1, original - max_range // 2)
     end    = start + max_range
     ids    = [str(i) for i in range(start, end) if i != original]
-    # Prioritise nearby IDs
+
     nearby = [str(original - 1), str(original + 1),
               str(original - 2), str(original + 2)]
     ordered = [x for x in nearby if x in ids]

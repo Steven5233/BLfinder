@@ -50,7 +50,7 @@ class ResponseClass(str, Enum):
     UNKNOWN           = "UNKNOWN"
 
 
-# Finding suppression rules per response class
+
 SUPPRESSION_RULES: dict[ResponseClass, dict] = {
     ResponseClass.SOFT_404_HTML:     {"suppress": True,  "confidence_cap": 0,   "note": "Soft-404 HTML — marketing/homepage response"},
     ResponseClass.WAF_BLOCK:         {"suppress": True,  "confidence_cap": 0,   "note": "WAF block page — request was blocked"},
@@ -76,26 +76,26 @@ class ClassifiedResponse:
     elapsed_ms:     float
     response_class: ResponseClass = ResponseClass.UNKNOWN
 
-    # Suppression guidance
+
     suppress_findings:  bool = False
     confidence_cap:     int  = 100
     classification_note: str = ""
 
-    # Parsed body (populated if JSON)
+
     body_parsed:    Any = None
     is_json:        bool = False
     is_html:        bool = False
-    has_data_field: bool = False     # JSON has meaningful data fields
+    has_data_field: bool = False     
 
-    # GraphQL-specific
+
     has_graphql_data:   bool = False
     has_graphql_errors: bool = False
 
-    # Error analysis
+
     has_stack_trace: bool = False
     error_message:   str  = ""
 
-    # Signals
+
     signals: list[str] = field(default_factory=list)
 
     def apply_suppression(self, finding_confidence: int) -> int:
@@ -142,7 +142,7 @@ class ResponseClassifier:
         adjusted_confidence = classified.apply_suppression(finding.confidence)
     """
 
-    # ── Classification entry point ────────────────────────────────────────────
+
 
     def classify(
         self,
@@ -160,7 +160,7 @@ class ResponseClassifier:
             headers=headers, elapsed_ms=elapsed * 1000,
         )
 
-        # Basic parsing
+
         cr.is_json = _is_json(body)
         cr.is_html = _is_html(body, headers)
         if cr.is_json:
@@ -169,11 +169,11 @@ class ResponseClassifier:
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        # Classify in priority order
+
         rc = self._classify_ordered(cr, status, body, headers)
         cr.response_class = rc
 
-        # Apply suppression rules
+
         rule = SUPPRESSION_RULES.get(rc, SUPPRESSION_RULES[ResponseClass.UNKNOWN])
         cr.suppress_findings  = rule["suppress"]
         cr.confidence_cap     = rule["confidence_cap"]
@@ -190,25 +190,25 @@ class ResponseClassifier:
     ) -> ResponseClass:
         """Run classifiers in priority order."""
 
-        # ── 1. WAF block (highest priority — most definitive) ─────────────────
+
         if _is_waf_block(body):
             cr.signals.append("WAF block patterns detected")
             return ResponseClass.WAF_BLOCK
 
-        # ── 2. Rate limited ───────────────────────────────────────────────────
+
         if status == 429:
             cr.signals.append("HTTP 429 Too Many Requests")
             return ResponseClass.RATE_LIMITED
 
-        # ── 3. Auth required — NEVER suppress ─────────────────────────────────
+
         if status in (401, 403):
             cr.signals.append(f"HTTP {status} — authentication/authorization required")
-            # Check if it's a real JSON auth error or an HTML block page
+
             if cr.is_html:
                 cr.signals.append("Auth response is HTML — may be a redirect to login")
             return ResponseClass.AUTH_REQUIRED
 
-        # ── 4. Server error — real endpoint ───────────────────────────────────
+
         if status >= 500:
             cr.signals.append(f"HTTP {status} — server error")
             cr.has_stack_trace = _has_stack_trace(body)
@@ -217,7 +217,7 @@ class ResponseClassifier:
             cr.error_message = _extract_error_message(body)
             return ResponseClass.REAL_ERROR
 
-        # ── 5. HTML response (soft-404 or redirect) ───────────────────────────
+
         if cr.is_html:
             cr.signals.append("Response body is HTML — not an API endpoint")
             cr.signals.append(
@@ -225,12 +225,12 @@ class ResponseClassifier:
             )
             return ResponseClass.SOFT_404_HTML
 
-        # ── 6. Empty response ──────────────────────────────────────────────────
+
         if not body or len(body.strip()) < 10:
             cr.signals.append("Response body is empty or nearly empty")
             return ResponseClass.EMPTY_RESPONSE
 
-        # ── 7. GraphQL endpoint ───────────────────────────────────────────────
+
         if cr.is_json and isinstance(cr.body_parsed, dict):
             cr.has_graphql_data   = "data"   in cr.body_parsed
             cr.has_graphql_errors = "errors" in cr.body_parsed
@@ -239,14 +239,14 @@ class ResponseClassifier:
                 cr.has_data_field = True
                 return ResponseClass.GRAPHQL_ENDPOINT
 
-        # ── 8. Soft-404 JSON (returns generic not-found for everything) ────────
+
         if cr.is_json and _is_generic_404_json(body, status):
             cr.signals.append(
                 "JSON not-found pattern — endpoint returns generic error for everything"
             )
             return ResponseClass.SOFT_404_JSON
 
-        # ── 9. Real API JSON ───────────────────────────────────────────────────
+
         if cr.is_json and status in (200, 201, 204):
             cr.has_data_field = _has_meaningful_data(cr.body_parsed)
             if cr.has_data_field:
@@ -255,7 +255,7 @@ class ResponseClassifier:
                 cr.signals.append("Valid JSON but minimal data")
             return ResponseClass.REAL_API_JSON
 
-        # ── 10. Unknown ────────────────────────────────────────────────────────
+
         cr.signals.append(
             f"Could not classify: status={status}, "
             f"is_json={cr.is_json}, is_html={cr.is_html}, "
@@ -263,7 +263,7 @@ class ResponseClassifier:
         )
         return ResponseClass.UNKNOWN
 
-    # ── Batch classification ──────────────────────────────────────────────────
+
 
     def classify_many(
         self,
@@ -281,7 +281,7 @@ class ResponseClassifier:
         return classified.confidence_cap
 
 
-# ── Detection helpers ─────────────────────────────────────────────────────────
+
 
 _WAF_SIGNALS = [
     re.compile(p, re.I) for p in [
@@ -303,12 +303,12 @@ _HTML_SIGNALS = [
 
 _STACK_TRACE_SIGNALS = [
     re.compile(p, re.I) for p in [
-        r"at\s+\w+\.\w+\(.*\.py:\d+\)",   # Python
-        r"at\s+\w+\.\w+\(.*\.java:\d+\)", # Java
-        r"at\s+\w+\.\w+\(.*\.js:\d+\)",   # Node.js
+        r"at\s+\w+\.\w+\(.*\.py:\d+\)",   
+        r"at\s+\w+\.\w+\(.*\.java:\d+\)", 
+        r"at\s+\w+\.\w+\(.*\.js:\d+\)",   
         r"stack trace:", r"traceback",
         r"exception in thread", r"caused by:",
-        r"at\s+\w[\w.]+\s+\(.*:\d+:\d+\)",  # Generic
+        r"at\s+\w[\w.]+\s+\(.*:\d+:\d+\)",  
     ]
 ]
 
@@ -379,7 +379,7 @@ def _has_meaningful_data(parsed: Any) -> bool:
     if isinstance(parsed, dict):
         if not parsed:
             return False
-        # Exclude generic status-only responses
+
         if set(parsed.keys()) <= {"status", "ok", "success", "message", "code"}:
             return len(parsed) > 1
         return True

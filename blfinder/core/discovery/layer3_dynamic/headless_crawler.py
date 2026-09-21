@@ -64,18 +64,18 @@ from ..models import (
 from ..layer5_dedup.normaliser import normalise_url, extract_id_params, dedup_key
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Playwright availability check
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -89,7 +89,7 @@ def _check_playwright() -> tuple[bool, str]:
     Checks both the Python package and the Chromium binary.
     """
     try:
-        import playwright  # type: ignore  # noqa: F401
+        import playwright  
     except ImportError:
         return False, (
             "playwright not installed. "
@@ -97,7 +97,7 @@ def _check_playwright() -> tuple[bool, str]:
             "&& playwright install chromium"
         )
     try:
-        from playwright.sync_api import sync_playwright  # type: ignore
+        from playwright.sync_api import sync_playwright  
         with sync_playwright() as p:
             browser_path = p.chromium.executable_path
             import os
@@ -111,21 +111,21 @@ def _check_playwright() -> tuple[bool, str]:
     return True, "ok"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Request capture helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Resource types to intercept (XHR and fetch only)
+
+
+
+
 _API_RESOURCE_TYPES = {"xhr", "fetch"}
 
-# Extensions that are definitely not API endpoints
+
 _SKIP_EXTENSIONS = frozenset({
     ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
     ".woff", ".woff2", ".ttf", ".eot", ".map", ".pdf", ".zip",
     ".mp3", ".mp4", ".webm", ".ogg",
 })
 
-# Tag inference
+
 _TAG_KEYWORDS: dict[str, list[str]] = {
     "payment":  ["payment", "pay", "billing", "transaction", "wallet", "charge", "invoice"],
     "order":    ["order", "cart", "checkout", "purchase", "buy"],
@@ -155,7 +155,7 @@ def _priority(tags: list[str], method: str) -> int:
 def _is_same_origin(request_url: str, target_url: str) -> bool:
     req_host    = urlparse(request_url).netloc
     target_host = urlparse(target_url).netloc
-    # Allow subdomains of the same root domain
+
     req_parts    = req_host.split(".")
     target_parts = target_host.split(".")
     return (
@@ -176,25 +176,25 @@ def _parse_intercepted_request(
     Convert a Playwright intercepted request into a DiscoveredEndpoint.
     Returns None if the request should be filtered out.
     """
-    # Must be same-origin
+
     if not _is_same_origin(url, target_url):
         return None
 
     parsed = urlparse(url)
     path   = parsed.path
 
-    # Skip asset extensions
+
     for ext in _SKIP_EXTENSIONS:
         if path.lower().endswith(ext):
             return None
 
-    # Must look like an API path (at minimum: /something)
+
     if not path or path == "/":
         return None
 
     method = method.upper()
 
-    # Parse body
+
     body: dict = {}
     if post_data and method in ("POST", "PUT", "PATCH"):
         try:
@@ -203,7 +203,7 @@ def _parse_intercepted_request(
                 body = {"data": body}
         except Exception as e:
             _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#1", e)
-            # Form-encoded body — parse manually
+
             try:
                 from urllib.parse import parse_qs
                 parsed_qs = parse_qs(post_data)
@@ -213,7 +213,7 @@ def _parse_intercepted_request(
                 _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#2", e)
                 body = {}
 
-    # Strip auth headers from the captured headers (security)
+
     safe_headers: dict = {}
     sensitive_hdrs = {"authorization", "cookie", "x-auth-token", "x-api-key",
                       "x-session-token", "x-csrf-token"}
@@ -228,20 +228,20 @@ def _parse_intercepted_request(
         url=url, method=method,
         body=body,
         source=SOURCE_HEADLESS,
-        confidence=0.92,   # live-verified = highest confidence tier
+        confidence=0.92,   
         priority=_priority(tags, method),
         id_params=extract_id_params(path),
         tags=tags,
         raw_source_evidence=f"headless XHR intercept: {method} {url[:80]}",
         normalised_template=tmpl,
-        live_verified=True,   # key: this was actually called by the browser
+        live_verified=True,   
         schema_hint=body,
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Auto-login helper
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _try_auto_login(page: Any, target_url: str, auth_token: str) -> bool:
     """
@@ -254,7 +254,7 @@ async def _try_auto_login(page: Any, target_url: str, auth_token: str) -> bool:
     if not auth_token:
         return False
 
-    # Strategy 1: inject as Bearer token into localStorage (works for many SPAs)
+
     try:
         await page.evaluate(f"""
             () => {{
@@ -276,9 +276,9 @@ async def _try_auto_login(page: Any, target_url: str, auth_token: str) -> bool:
     return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Link extractor
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _extract_links(page: Any, base_url: str) -> list[str]:
     """Extract all same-origin links from the current page."""
@@ -298,12 +298,12 @@ async def _extract_links(page: Any, base_url: str) -> list[str]:
     for href in (hrefs or []):
         if _is_same_origin(href, base_url):
             links.append(href)
-    return links[:30]   # cap to avoid infinite crawl
+    return links[:30]   
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Interactive UI actions (opt-in via config.headless_interact)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _interact_with_page(page: Any) -> None:
     """
@@ -311,19 +311,19 @@ async def _interact_with_page(page: Any) -> None:
     happen after user interactions. Best-effort — errors are silently ignored.
     """
     interaction_selectors = [
-        # Tabs / navigation panels
+
         "[role='tab']",
         ".tab, .nav-tab, .tab-item",
-        # Dropdowns
+
         "[data-toggle='dropdown'], .dropdown-toggle",
-        # Expand/collapse sections
+
         "[data-toggle='collapse'], .accordion-button, .expandable",
-        # Load-more buttons
+
         "button:has-text('Load more'), button:has-text('Show more')",
         "button:has-text('View all'), button:has-text('See all')",
-        # Pagination
+
         "[aria-label='Next page'], .pagination-next, .next-page",
-        # Common action buttons (non-destructive)
+
         "button:has-text('Filter'), button:has-text('Sort')",
         "button:has-text('Refresh'), button:has-text('Reload')",
         "button:has-text('Search')",
@@ -331,7 +331,7 @@ async def _interact_with_page(page: Any) -> None:
     for selector in interaction_selectors:
         try:
             elements = await page.query_selector_all(selector)
-            for el in elements[:3]:   # click at most 3 of each type
+            for el in elements[:3]:   
                 try:
                     await el.click(timeout=2000)
                     await page.wait_for_load_state("networkidle", timeout=3000)
@@ -343,9 +343,9 @@ async def _interact_with_page(page: Any) -> None:
             pass
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main crawler class
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class HeadlessCrawler:
     """
@@ -368,14 +368,14 @@ class HeadlessCrawler:
         t0     = time.time()
         result = LayerResult(layer=SOURCE_HEADLESS)
 
-        # Check availability
+
         available, msg = _check_playwright()
         if not available:
             print(f"  [headless] {msg}")
             result.elapsed_s = time.time() - t0
             return result
 
-        # Run in a thread executor (Playwright has its own event loop requirements)
+
         try:
             loop = asyncio.get_event_loop()
             endpoints = await loop.run_in_executor(
@@ -407,7 +407,7 @@ class HeadlessCrawler:
         Returns list of DiscoveredEndpoints.
         """
         try:
-            from playwright.sync_api import sync_playwright  # type: ignore
+            from playwright.sync_api import sync_playwright  
         except ImportError:
             return []
 
@@ -441,7 +441,7 @@ class HeadlessCrawler:
                 args=[
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",   # important for Termux
+                    "--disable-dev-shm-usage",   
                     "--disable-gpu",
                     "--no-first-run",
                     "--no-default-browser-check",
@@ -462,7 +462,7 @@ class HeadlessCrawler:
                 viewport={"width": 1280, "height": 800},
             )
 
-            # Inject auth token as default header if it looks like a JWT
+
             if auth_token and "." in auth_token:
                 context.set_extra_http_headers({
                     "Authorization": f"Bearer {auth_token}"
@@ -473,7 +473,7 @@ class HeadlessCrawler:
 
             timeout_ms = config.headless_timeout_s * 1000
 
-            # Navigate to root
+
             try:
                 page.goto(
                     target_url,
@@ -490,7 +490,7 @@ class HeadlessCrawler:
                     browser.close()
                     return []
 
-            # Attempt auto-login
+
             if auth_token:
                 try:
                     page.evaluate(f"""
@@ -507,7 +507,7 @@ class HeadlessCrawler:
                     _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#10", e)
                     pass
 
-            # Interact with page if requested
+
             if config.headless_interact:
                 try:
                     _sync_interact(page)
@@ -515,7 +515,7 @@ class HeadlessCrawler:
                     _blf_dbg("blfinder/core/discovery/layer3_dynamic/headless_crawler.py#11", e)
                     pass
 
-            # Follow links (depth 1)
+
             visited: set[str] = {target_url}
             try:
                 hrefs = page.evaluate("""
@@ -555,7 +555,7 @@ class HeadlessCrawler:
 
             browser.close()
 
-        # Convert intercepted requests → DiscoveredEndpoints
+
         for item in intercepted:
             ep = _parse_intercepted_request(
                 url=item["url"],

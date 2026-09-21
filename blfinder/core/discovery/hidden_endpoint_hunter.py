@@ -98,18 +98,18 @@ from typing import Optional
 from urllib.parse import urlparse, urljoin, urlencode
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data models
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -122,7 +122,7 @@ class HiddenEndpoint:
     url:        str
     method:     str  = "GET"
     score:      int  = 0
-    source:     str  = ""          # which phase found it
+    source:     str  = ""          
     status:     int  = 0
     body:       str  = ""
     params:     dict = field(default_factory=dict)
@@ -149,9 +149,9 @@ class HunterResult:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Technology fingerprinting signatures
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 TECH_SIGNATURES: dict[str, dict] = {
     "django": {
@@ -273,11 +273,11 @@ TECH_SIGNATURES: dict[str, dict] = {
     },
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# High-value path mutation prefixes and suffixes
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Prefixes injected between the base path and the resource name
+
+
+
+
 HIGH_VALUE_PREFIXES = [
     "internal", "admin", "private", "staff", "sys",
     "system", "manage", "management", "ops", "operations",
@@ -291,7 +291,7 @@ HIGH_VALUE_PREFIXES = [
     "platform", "service", "svc", "micro",
 ]
 
-# Suffixes appended to the resource path
+
 HIGH_VALUE_SUFFIXES = [
     "admin", "internal", "debug", "test", "all",
     "export", "dump", "download", "bulk", "batch",
@@ -307,7 +307,7 @@ HIGH_VALUE_SUFFIXES = [
     "backup", "restore", "migrate", "seed",
 ]
 
-# Full path segments that are almost always high-value
+
 HIGH_VALUE_SEGMENTS = [
     "/admin", "/internal", "/private", "/staff",
     "/debug", "/test", "/dev", "/ops",
@@ -323,9 +323,9 @@ HIGH_VALUE_SEGMENTS = [
     "/privileged", "/restricted",
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Mobile API path patterns
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 MOBILE_BASE_PATHS = [
     "/mobile", "/mobile/api", "/mobile/v1", "/mobile/v2",
@@ -350,17 +350,17 @@ MOBILE_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Dart/3.0 (dart:io)",  # Flutter apps
-    "okhttp/4.11.0",       # Android native
-    "Alamofire/5.8.1",     # iOS native
+    "Dart/3.0 (dart:io)",  
+    "okhttp/4.11.0",       
+    "Alamofire/5.8.1",     
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Historical HackerOne corpus — real paths from disclosed reports
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 HISTORICAL_HIGH_VALUE_PATHS = [
-    # Internal/admin panels found in real reports
+
     "/api/v1/internal/users",
     "/api/v1/internal/admin",
     "/api/v1/internal/accounts",
@@ -379,7 +379,7 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v2/admin/users",
     "/api/v2/admin/impersonate",
 
-    # Debug / diagnostic endpoints (commonly left open)
+
     "/debug", "/debug/vars", "/debug/pprof",
     "/debug/pprof/heap", "/debug/pprof/goroutine",
     "/_debug", "/_debug/vars",
@@ -392,7 +392,7 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/info", "/api/info", "/server-info",
     "/version", "/api/version", "/api/v1/version",
 
-    # Actuator endpoints (Spring, Go, etc.)
+
     "/actuator", "/actuator/env", "/actuator/beans",
     "/actuator/mappings", "/actuator/httptrace",
     "/actuator/heapdump", "/actuator/threaddump",
@@ -401,14 +401,14 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/manage/health", "/management/health",
     "/management/env", "/management/info",
 
-    # Config/credentials endpoints (found in breaches)
+
     "/api/v1/config", "/api/config", "/config.json",
     "/api/v1/settings", "/api/settings",
     "/api/v1/secrets", "/api/secrets",
     "/env", "/.env", "/api/env",
     "/api/v1/env", "/environment",
 
-    # User impersonation (critical finding if accessible)
+
     "/api/v1/users/{id}/impersonate",
     "/api/v1/admin/impersonate",
     "/api/v1/users/impersonate",
@@ -418,7 +418,7 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v1/switch-user",
     "/api/v1/login-as",
 
-    # Export/dump endpoints (data exposure)
+
     "/api/v1/users/export",
     "/api/v1/orders/export",
     "/api/v1/payments/export",
@@ -429,7 +429,7 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v1/reports/generate",
     "/api/v1/admin/export",
 
-    # Bulk/batch operations (often skip row-level checks)
+
     "/api/v1/users/bulk",
     "/api/v1/users/batch",
     "/api/v1/orders/bulk",
@@ -438,7 +438,7 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v1/bulk/update",
     "/api/bulk", "/api/batch",
 
-    # Soft-delete recovery
+
     "/api/v1/users/deleted",
     "/api/v1/orders/archived",
     "/api/v1/accounts/suspended",
@@ -446,13 +446,13 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v1/trash",
     "/api/v1/recyclebin",
 
-    # Token/key management
+
     "/api/v1/tokens", "/api/v1/api-keys",
     "/api/v1/admin/tokens",
     "/api/v1/service-accounts",
     "/api/v1/internal/tokens",
 
-    # Old mobile API paths (from mobile app reversing reports)
+
     "/api/mobile/v1/users",
     "/mobile/api/v1/auth",
     "/mapi/v1/users",
@@ -460,23 +460,23 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v1/mobile/users",
     "/api/v1/app/config",
 
-    # GraphQL (often has weaker auth than REST)
+
     "/graphql", "/api/graphql", "/query",
     "/gql", "/graphiql", "/playground",
     "/api/v1/graphql", "/api/v2/graphql",
 
-    # Webhook / callback endpoints
+
     "/api/v1/webhooks", "/webhooks",
     "/api/v1/callbacks", "/callbacks",
     "/api/v1/notifications/internal",
 
-    # Background job / queue management
+
     "/sidekiq", "/resque", "/horizon",
     "/api/v1/jobs", "/api/v1/tasks",
     "/api/v1/queue", "/api/v1/workers",
     "/admin/jobs", "/api/admin/jobs",
 
-    # Payment/financial internals (highest value)
+
     "/api/v1/payments/internal",
     "/api/v1/payments/admin",
     "/api/v1/finance/report",
@@ -488,14 +488,14 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/api/v1/wallet/admin",
     "/api/v1/bank/admin",
 
-    # Partner/B2B APIs (frequently underdeveloped auth)
+
     "/api/partner/v1/",
     "/api/b2b/v1/",
     "/api/vendor/v1/",
     "/partner/api/",
     "/b2b/api/",
 
-    # Testing/QA endpoints left in production
+
     "/api/v1/test",
     "/api/test/",
     "/api/v1/test/reset",
@@ -510,9 +510,9 @@ HISTORICAL_HIGH_VALUE_PATHS = [
     "/dev/api/",
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# "Activation" query parameters — some endpoints are hidden behind params
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 ACTIVATION_PARAMS = [
     {"debug": "true"},
@@ -549,29 +549,29 @@ ACTIVATION_PARAMS = [
     {"override": "true"},
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Response interest scoring
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 INTERESTING_STATUS_CODES = {200, 201, 301, 302, 401, 403}
-# 401/403 are interesting — they mean the endpoint EXISTS but is protected
-# That's more valuable than a 404 (endpoint doesn't exist)
+
+
 
 INTERESTING_BODY_PATTERNS = [
-    # Credential/secret exposure
+
     r'"(password|secret|token|api_key|access_key|private_key|credentials)"',
     r'"(aws_|gcp_|azure_)(key|secret|token)',
-    # Internal data
+
     r'"(internal|admin|staff|privileged|superuser)":\s*true',
     r'"role":\s*"(admin|superadmin|staff|internal|root)"',
-    # Error leakage (reveals endpoint exists and its structure)
+
     r'(stack trace|traceback|exception|error.*line \d+)',
     r'(ValidationError|TypeError|ValueError|KeyError)',
     r'"detail":\s*"(Authentication|Permission|Not authenticated)',
-    # Business data (high value)
+
     r'"(email|phone|ssn|dob|credit_card|bank_account|routing_number)"',
     r'"(salary|income|balance|amount|revenue|profit)":\s*\d',
-    # Debug info
+
     r'(DEBUG|TRACE|development mode|debug mode)',
     r'"(config|configuration|settings|env)":\s*\{',
 ]
@@ -584,9 +584,9 @@ BORING_EXTENSIONS = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main Hunter class
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class HiddenEndpointHunter:
     """
@@ -602,7 +602,7 @@ class HiddenEndpointHunter:
         self._tech_stack: list[str] = []
         self._confirmed_200_paths: list[str] = []
 
-    # ── Entry point ───────────────────────────────────────────────────────────
+
 
     async def hunt(
         self,
@@ -639,10 +639,10 @@ class HiddenEndpointHunter:
         parsed   = urlparse(target_url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        # ── Establish soft-404 baseline ───────────────────────────────────────
+
         await self._build_soft404_baseline(base_url, session, auth_token, timeout_s)
 
-        # ── Phase 1: Technology fingerprinting ────────────────────────────────
+
         self._tech_stack = await self._fingerprint(
             base_url, session, auth_token, timeout_s
         )
@@ -650,11 +650,11 @@ class HiddenEndpointHunter:
         if self._tech_stack:
             print(f"  [hunter:tech]   detected: {', '.join(self._tech_stack)}")
 
-        # ── Build candidate list ──────────────────────────────────────────────
-        candidates: list[tuple[int, str, str]] = []
-        # (score, path, source_label)
 
-        # Phase 1 paths: technology-specific
+        candidates: list[tuple[int, str, str]] = []
+
+
+
         for tech in self._tech_stack:
             for path in TECH_SIGNATURES[tech]["paths"]:
                 candidates.append((
@@ -663,16 +663,16 @@ class HiddenEndpointHunter:
                     f"tech:{tech}",
                 ))
 
-        # Phase 5 paths: historical corpus
+
         for path in HISTORICAL_HIGH_VALUE_PATHS:
-            if "{" not in path:  # skip template paths for now
+            if "{" not in path:  
                 candidates.append((
                     self._score_path(path, source="historical"),
                     path,
                     "historical",
                 ))
 
-        # Phase 4 paths: mobile
+
         if not skip_mobile:
             for path in MOBILE_BASE_PATHS:
                 candidates.append((
@@ -681,7 +681,7 @@ class HiddenEndpointHunter:
                     "mobile",
                 ))
 
-        # Phase 2 paths: mutation of known paths
+
         if not skip_mutation and known_paths:
             for mutated_path, source in self._mutate_paths(known_paths):
                 candidates.append((
@@ -690,7 +690,7 @@ class HiddenEndpointHunter:
                     source,
                 ))
 
-        # Deduplicate, filter boring, sort by score descending
+
         seen_candidates: set[str] = set(known_paths)
         unique: list[tuple[int, str, str]] = []
         for score, path, source in candidates:
@@ -705,7 +705,7 @@ class HiddenEndpointHunter:
         if self.verbose:
             print(f"  [hunter]        {len(unique)} candidates to probe")
 
-        # ── Probe candidates concurrently ─────────────────────────────────────
+
         semaphore = asyncio.Semaphore(max_workers)
         probe_tasks = [
             self._probe_with_sem(
@@ -725,7 +725,7 @@ class HiddenEndpointHunter:
 
         result.total_probed = len(unique)
 
-        # ── Phase 3: Response-driven recursive expansion ──────────────────────
+
         confirmed_200 = [
             ep for ep in found_endpoints
             if ep.status == 200 and ep.body
@@ -738,30 +738,30 @@ class HiddenEndpointHunter:
             found_endpoints.extend(expanded)
             result.total_probed += len(expanded)
 
-        # ── Phase 6: Activation parameter probing ─────────────────────────────
-        # Test activation params on endpoints that returned non-200 —
-        # sometimes a hidden endpoint only responds when the right param is sent
+
+
+
         if not skip_activation:
             silent_endpoints = [
                 ep for ep in found_endpoints
                 if ep.status in (404, 400, 403, 401)
-            ][:20]  # limit to 20 to save time
+            ][:20]  
             activated = await self._probe_activation_params(
                 silent_endpoints, session, auth_token, timeout_s, semaphore
             )
             found_endpoints.extend(activated)
 
-        # ── Phase 7: HTTP method expansion on 200/403 endpoints ───────────────
+
         interesting = [
             ep for ep in found_endpoints
             if ep.status in (200, 403)
-        ][:15]  # limit to 15
+        ][:15]  
         expanded_methods = await self._expand_http_methods(
             interesting, session, auth_token, timeout_s, semaphore
         )
         found_endpoints.extend(expanded_methods)
 
-        # ── Mobile UA probing on interesting paths ─────────────────────────────
+
         if not skip_mobile:
             mobile_variants = await self._probe_mobile_ua(
                 [ep for ep in found_endpoints if ep.status == 200][:10],
@@ -769,11 +769,11 @@ class HiddenEndpointHunter:
             )
             found_endpoints.extend(mobile_variants)
 
-        # ── Score and mark interesting findings ───────────────────────────────
+
         for ep in found_endpoints:
             ep.is_interesting, ep.interest_reason = self._is_interesting(ep)
 
-        # Filter: only report endpoints that got a real response
+
         reportable = [
             ep for ep in found_endpoints
             if ep.status in INTERESTING_STATUS_CODES
@@ -787,7 +787,7 @@ class HiddenEndpointHunter:
         print(f"  {result.summary()}")
         return result
 
-    # ── Phase 1: Technology fingerprinting ────────────────────────────────────
+
 
     async def _fingerprint(
         self, base_url: str, session, auth_token: str, timeout_s: int
@@ -822,11 +822,11 @@ class HiddenEndpointHunter:
                     for tech, sigs in TECH_SIGNATURES.items():
                         if tech in detected:
                             continue
-                        # Check headers
+
                         if any(h in header_str for h in sigs["headers"]):
                             detected.append(tech)
                             continue
-                        # Check body
+
                         if any(
                             re.search(p, body[:5000], re.I)
                             for p in sigs["body_patterns"]
@@ -836,13 +836,13 @@ class HiddenEndpointHunter:
                 _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#1", e)
                 pass
 
-        # Always include graphql as a candidate — it's universal
+
         if "graphql" not in detected:
             detected.append("graphql")
 
-        return list(dict.fromkeys(detected))  # deduplicate preserving order
+        return list(dict.fromkeys(detected))  
 
-    # ── Soft-404 baseline ─────────────────────────────────────────────────────
+
 
     async def _build_soft404_baseline(
         self, base_url: str, session, auth_token: str, timeout_s: int
@@ -863,10 +863,10 @@ class HiddenEndpointHunter:
                     timeout=self._timeout(timeout_s), ssl=False,
                 ) as resp:
                     body = await resp.text(errors="replace")
-                    # Hash first 2000 chars — catches body-level soft-404
+
                     h = hashlib.md5(body[:2000].encode()).hexdigest()
                     self._soft404_hashes.add(h)
-                    # Also hash the status code + first 500 chars
+
                     h2 = hashlib.md5(
                         f"{resp.status}{body[:500]}".encode()
                     ).hexdigest()
@@ -875,7 +875,7 @@ class HiddenEndpointHunter:
                 _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#2", e)
                 pass
 
-    # ── Phase 2: Path mutation ────────────────────────────────────────────────
+
 
     def _mutate_paths(
         self, known_paths: list[str]
@@ -893,12 +893,12 @@ class HiddenEndpointHunter:
             if not clean or clean == "/":
                 continue
 
-            # Split into parts: /api/v1/users → ["api", "v1", "users"]
+
             parts = [p for p in clean.split("/") if p]
             if not parts:
                 continue
 
-            # Find version component if present
+
             ver_idx = next(
                 (i for i, p in enumerate(parts)
                  if re.match(r'^v\d+$', p, re.I) or p in (
@@ -906,26 +906,26 @@ class HiddenEndpointHunter:
                  )), None
             )
 
-            resource = parts[-1]   # last component = resource name
+            resource = parts[-1]   
 
-            # Mutation 1: inject prefix after version
+
             if ver_idx is not None and ver_idx < len(parts) - 1:
                 pre_ver  = parts[:ver_idx + 1]
                 post_ver = parts[ver_idx + 1:]
-                for prefix in HIGH_VALUE_PREFIXES[:12]:  # top 12 only
+                for prefix in HIGH_VALUE_PREFIXES[:12]:  
                     mutated = "/" + "/".join(pre_ver + [prefix] + post_ver)
                     if mutated not in seen:
                         seen.add(mutated)
                         mutations.append((mutated, f"mutation:prefix:{prefix}"))
 
-            # Mutation 2: append suffix to resource
+
             for suffix in HIGH_VALUE_SUFFIXES[:12]:
                 mutated = clean + "/" + suffix
                 if mutated not in seen:
                     seen.add(mutated)
                     mutations.append((mutated, f"mutation:suffix:{suffix}"))
 
-            # Mutation 3: replace version number
+
             if ver_idx is not None:
                 current_ver = parts[ver_idx]
                 for alt_ver in ["v1", "v2", "v3", "internal", "legacy", "beta", "v0"]:
@@ -937,7 +937,7 @@ class HiddenEndpointHunter:
                             seen.add(mutated)
                             mutations.append((mutated, f"mutation:version:{alt_ver}"))
 
-            # Mutation 4: prefix the whole path with internal/admin
+
             for prefix in ["internal", "admin", "private", "staff"]:
                 mutated = "/" + prefix + clean
                 if mutated not in seen:
@@ -946,7 +946,7 @@ class HiddenEndpointHunter:
 
         return mutations
 
-    # ── Probe with semaphore ──────────────────────────────────────────────────
+
 
     async def _probe_with_sem(
         self,
@@ -996,7 +996,7 @@ class HiddenEndpointHunter:
                 status = resp.status
                 body   = await resp.text(errors="replace")
 
-                # Skip soft-404 responses
+
                 body_hash = hashlib.md5(body[:2000].encode()).hexdigest()
                 if body_hash in self._soft404_hashes:
                     return None
@@ -1006,9 +1006,9 @@ class HiddenEndpointHunter:
                 if combo_hash in self._soft404_hashes:
                     return None
 
-                # 404 with a non-generic body is still interesting
-                # (means the endpoint exists but the resource doesn't)
-                # 404 with generic body → skip
+
+
+
                 if status == 404:
                     if len(body) < 50 or not any(
                         c in body for c in ["{", "[", "api", "endpoint"]
@@ -1032,7 +1032,7 @@ class HiddenEndpointHunter:
             _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#3", e)
             return None
 
-    # ── Phase 3: Recursive expansion ─────────────────────────────────────────
+
 
     async def _recursive_expand(
         self,
@@ -1056,7 +1056,7 @@ class HiddenEndpointHunter:
             extracted_paths: set[str] = set()
 
             for ep in queue:
-                # Extract paths from JSON values
+
                 try:
                     data = json.loads(ep.body)
                     for path in self._extract_paths_from_json(data):
@@ -1065,7 +1065,7 @@ class HiddenEndpointHunter:
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-                # Extract paths from body text (regex)
+
                 for match in re.findall(
                     r'["\'](/(?:api|v\d+|internal|admin)[^"\'<>\s]{2,80})["\']',
                     ep.body,
@@ -1116,7 +1116,7 @@ class HiddenEndpointHunter:
                 paths.extend(self._extract_paths_from_json(item, depth + 1))
         return paths
 
-    # ── Phase 6: Activation parameter probing ────────────────────────────────
+
 
     async def _probe_activation_params(
         self,
@@ -1129,7 +1129,7 @@ class HiddenEndpointHunter:
         """Test activation query params on silent/blocked endpoints."""
         new_found = []
         for ep in endpoints:
-            for params in ACTIVATION_PARAMS[:10]:   # top 10 params
+            for params in ACTIVATION_PARAMS[:10]:   
                 param_str = "&".join(f"{k}={v}" for k, v in params.items())
                 url_with_param = ep.url + "?" + param_str
                 if url_with_param in self._seen:
@@ -1165,7 +1165,7 @@ class HiddenEndpointHunter:
                     pass
         return new_found
 
-    # ── Phase 7: HTTP method expansion ────────────────────────────────────────
+
 
     async def _expand_http_methods(
         self,
@@ -1178,7 +1178,7 @@ class HiddenEndpointHunter:
         """Test non-standard HTTP methods on interesting endpoints."""
         new_found = []
         for ep in endpoints:
-            # First get allowed methods from OPTIONS
+
             try:
                 async with semaphore:
                     async with session.options(
@@ -1197,12 +1197,12 @@ class HiddenEndpointHunter:
                 _blf_dbg("blfinder/core/discovery/hidden_endpoint_hunter.py#5", e)
                 allowed = set()
 
-            # Try methods not in original discovery
+
             to_try = (
                 (allowed or {"POST", "PUT", "PATCH", "DELETE"}) -
                 {ep.method.upper()}
             )
-            for method in list(to_try)[:3]:    # max 3 extra methods
+            for method in list(to_try)[:3]:    
                 key = f"{method}:{ep.url}"
                 if key in self._seen:
                     continue
@@ -1229,7 +1229,7 @@ class HiddenEndpointHunter:
                     pass
         return new_found
 
-    # ── Mobile UA probing ─────────────────────────────────────────────────────
+
 
     async def _probe_mobile_ua(
         self,
@@ -1241,8 +1241,8 @@ class HiddenEndpointHunter:
     ) -> list[HiddenEndpoint]:
         """Re-probe interesting endpoints with mobile User-Agent headers."""
         new_found = []
-        for ep in endpoints[:5]:   # top 5 only
-            for ua in MOBILE_USER_AGENTS[:2]:   # 2 UAs
+        for ep in endpoints[:5]:   
+            for ua in MOBILE_USER_AGENTS[:2]:   
                 key = f"mobile_ua:{ua[:20]}:{ep.url}"
                 if key in self._seen:
                     continue
@@ -1256,14 +1256,14 @@ class HiddenEndpointHunter:
                     new_found.append(result)
         return new_found
 
-    # ── Scoring ───────────────────────────────────────────────────────────────
+
 
     def _score_path(self, path: str, source: str = "") -> int:
         """Assign a priority score to a candidate path."""
-        score  = 5   # base
+        score  = 5   
         pl     = path.lower()
 
-        # High-value keywords
+
         if any(k in pl for k in [
             "admin", "internal", "private", "staff", "debug",
             "export", "dump", "impersonate", "sudo", "config",
@@ -1272,47 +1272,47 @@ class HiddenEndpointHunter:
         ]):
             score += 30
 
-        # Version component
+
         if re.search(r'/v\d+/', pl) or any(
             s in pl for s in ["/internal/", "/legacy/", "/beta/"]
         ):
             score += 5
 
-        # Historical corpus match
+
         if source == "historical":
             score += 10
 
-        # Tech-specific
+
         if source.startswith("tech:"):
             score += 20
 
-        # Mobile
+
         if source == "mobile":
             score += 5
 
-        # Mutation of confirmed 200
+
         if source.startswith("mutation:"):
             score += 15
 
-        # Actuator paths (Spring Boot) — extremely high value
+
         if "actuator" in pl or "management" in pl:
             score += 25
 
-        # GraphQL — high value
+
         if "graphql" in pl or "/gql" in pl:
             score += 20
 
-        # Boring indicators
+
         if any(pl.endswith(ext) for ext in BORING_EXTENSIONS):
             score = -999
 
         return score
 
-    # ── Interest scoring ──────────────────────────────────────────────────────
+
 
     def _is_interesting(self, ep: HiddenEndpoint) -> tuple[bool, str]:
         """Determine if a found endpoint is security-relevant."""
-        # 401/403 = endpoint exists but protected (still valuable)
+
         if ep.status in (401, 403):
             return True, f"Protected endpoint exists (HTTP {ep.status}) — auth bypass target"
 
@@ -1336,7 +1336,7 @@ class HiddenEndpointHunter:
 
         return False, ""
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+
 
     def _build_headers(
         self, auth_token: str, ua_override: str = ""
@@ -1361,9 +1361,9 @@ class HiddenEndpointHunter:
         return aiohttp.ClientTimeout(total=timeout_s, connect=5)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Integration helper — called from blfinder.py run_deep_discovery()
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def run_hidden_hunter(
     target_url:  str,
@@ -1425,9 +1425,9 @@ async def run_hidden_hunter(
     ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Self-test
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 if __name__ == "__main__":
     print("=" * 60)
@@ -1481,7 +1481,7 @@ if __name__ == "__main__":
     )
     assert hunter._is_interesting(ep_creds)[0] is True
     assert hunter._is_interesting(ep_403)[0]   is True
-    assert hunter._is_interesting(ep_boring)[0] is False  # short generic body
+    assert hunter._is_interesting(ep_boring)[0] is False  
     print("  PASS")
 
     print("\n[TEST 5] Historical corpus coverage")

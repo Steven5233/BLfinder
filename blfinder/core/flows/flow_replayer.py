@@ -32,7 +32,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 
-# ── Data Models ───────────────────────────────────────────────────────────────
+
 
 @dataclass
 class FlowStep:
@@ -42,30 +42,30 @@ class FlowStep:
     Supports template variables: {{variable_name}} in url, body, params.
     Variables are populated from previous step extractions.
     """
-    id: str                                    # Unique step identifier
-    method: str                                # HTTP method
-    url: str                                   # URL — may contain {{variables}}
-    body: dict = field(default_factory=dict)   # Request body — may contain {{variables}}
-    params: dict = field(default_factory=dict) # Query params — may contain {{variables}}
+    id: str                                    
+    method: str                                
+    url: str                                   
+    body: dict = field(default_factory=dict)   
+    params: dict = field(default_factory=dict) 
     headers: dict = field(default_factory=dict)
 
-    # Value extraction: key → JSONPath-like expression
-    # e.g. {"cart_id": "$.cart.id", "total": "$.order.total"}
+
+
     extract: dict = field(default_factory=dict)
 
-    # If True, run all attack modules against this step
+
     attack_here: bool = False
 
-    # If True, skip this step (used for workflow bypass attacks)
+
     skip: bool = False
 
-    # Expected status codes — deviation is flagged
+
     expected_status: list[int] = field(default_factory=lambda: [200, 201])
 
-    # Optional delay before this step (seconds)
+
     delay: float = 0.0
 
-    # If True, this step must succeed for the flow to continue
+
     required: bool = True
 
 
@@ -78,7 +78,7 @@ class FlowStepResult:
     status: int
     body: str
     elapsed: float
-    extracted: dict = field(default_factory=dict)   # Values extracted from response
+    extracted: dict = field(default_factory=dict)   
     success: bool = False
     error: str = ""
     request_body: dict = field(default_factory=dict)
@@ -91,10 +91,10 @@ class FlowResult:
     flow_name: str
     success: bool = False
     steps: list[FlowStepResult] = field(default_factory=list)
-    context: dict = field(default_factory=dict)   # All extracted values
+    context: dict = field(default_factory=dict)   
     total_elapsed: float = 0.0
     error: str = ""
-    attack_findings: list = field(default_factory=list)  # list[Finding]
+    attack_findings: list = field(default_factory=list)  
 
 
 @dataclass
@@ -112,7 +112,7 @@ class FlowAttackResult:
     confirmed: bool = False
 
 
-# ── Flow Replayer ─────────────────────────────────────────────────────────────
+
 
 class FlowReplayer:
     """
@@ -136,7 +136,7 @@ class FlowReplayer:
         self._config   = scanner.config
         self._request  = scanner._request
 
-    # ── Public API ────────────────────────────────────────────────────────────
+
 
     async def execute(
         self,
@@ -171,10 +171,10 @@ class FlowReplayer:
             step_result = await self._execute_step(step, base_url, ctx)
             result.steps.append(step_result)
 
-            # Merge extracted values into context
+
             ctx.update(step_result.extracted)
 
-            # Check if step succeeded
+
             if not step_result.success and step.required:
                 result.error = (
                     f"Required step '{step.id}' failed "
@@ -204,7 +204,7 @@ class FlowReplayer:
         Execute the flow and attack every step marked with attack_here=True.
         Returns a list of Finding objects.
         """
-        # First, run a clean baseline to populate context
+
         baseline = await self.execute(steps, base_url, context, stop_on_failure=False)
         ctx = dict(baseline.context)
 
@@ -214,7 +214,7 @@ class FlowReplayer:
             if not step.attack_here:
                 continue
 
-            # Resolve the step's URL and body with current context
+
             resolved_url  = self._resolve_template(step.url,  ctx, base_url)
             resolved_body = self._resolve_body(step.body, ctx)
 
@@ -243,12 +243,12 @@ class FlowReplayer:
         findings = []
         ctx = dict(context or {})
 
-        # Execute only the first step to get a valid session
+
         if steps:
             first_result = await self._execute_step(steps[0], base_url, ctx)
             ctx.update(first_result.extracted)
 
-        # Try to jump directly to each subsequent step
+
         for i, step in enumerate(steps[1:], start=1):
             if step.skip:
                 continue
@@ -262,15 +262,15 @@ class FlowReplayer:
                 params=self._resolve_body(step.params, ctx) or None,
             )
 
-            # Success on a step we shouldn't have access to = workflow bypass
+
             if status in step.expected_status:
-                # FP guard: try with a completely invalid body to verify server isn't just 200ing everything
+
                 canary_status, _, _, _ = await self._request(
                     step.method, resolved_url,
                     json={"__canary_invalid__": True},
                 )
                 if canary_status in step.expected_status:
-                    continue  # Server returns 200 for anything — skip
+                    continue  
 
                 findings.append(self._make_finding(
                     title=f"Workflow Bypass — jumped directly to step '{step.id}' (step {i+1})",
@@ -423,7 +423,7 @@ class FlowReplayer:
         for i, snap_ctx in snapshots.items():
             for j, target_step in enumerate(steps):
                 if j == i + 1 or target_step.skip:
-                    continue  # i+1 is the one legitimate next transition
+                    continue  
 
                 resolved_url  = self._resolve_template(target_step.url, snap_ctx, base_url)
                 resolved_body = self._resolve_body(target_step.body, snap_ctx)
@@ -436,7 +436,7 @@ class FlowReplayer:
                 if status not in target_step.expected_status:
                     continue
 
-                # FP guard: server that 200s everything isn't meaningful
+
                 canary_status, _, _, _ = await self._request(
                     target_step.method, resolved_url,
                     json={"__canary_invalid__": True},
@@ -573,7 +573,7 @@ class FlowReplayer:
 
         return findings
 
-    # ── Step Execution ────────────────────────────────────────────────────────
+
 
     async def _execute_step(
         self,
@@ -614,7 +614,7 @@ class FlowReplayer:
             if not result.success:
                 result.error = f"Expected {step.expected_status}, got {status}"
 
-            # Extract values for use in subsequent steps
+
             if step.extract and resp_body:
                 result.extracted = self._extract_values(resp_body, step.extract)
 
@@ -623,7 +623,7 @@ class FlowReplayer:
 
         return result
 
-    # ── Attack Modules ────────────────────────────────────────────────────────
+
 
     async def _attack_step(
         self,
@@ -707,11 +707,11 @@ class FlowReplayer:
                     step.method, url, json=test_body,
                     params=params if params else None,
                 )
-                # FP guard: verify server rejects invalid string values
+
                 canary_body = self._set_nested(copy.deepcopy(body), key, "INVALID_QTY")
                 cs, _, _, _ = await self._request(step.method, url, json=canary_body)
                 if cs in step.expected_status:
-                    continue  # Server accepts anything — skip
+                    continue  
 
                 if (
                     status in step.expected_status
@@ -744,7 +744,7 @@ class FlowReplayer:
             if not isinstance(original, str):
                 continue
 
-            # Test: array type confusion
+
             for test_val, label in [
                 ([original, original], "duplicate array"),
                 ([original],           "single-item array"),
@@ -758,7 +758,7 @@ class FlowReplayer:
                     status in step.expected_status
                     and self._scanner._response_indicates_success(resp_body, status)
                 ):
-                    # Check if discount actually increased
+
                     base_discount = self._scanner._extract_discount(base_body)
                     new_discount  = self._scanner._extract_discount(resp_body)
                     confirmed = bool(
@@ -848,7 +848,7 @@ class FlowReplayer:
             if reflected in (True, "true", 1, "admin", "premium", "verified"):
                 base_data = self._scanner._try_parse_json(base_body)
                 if isinstance(base_data, dict) and base_data.get(key) == reflected:
-                    continue  # Already set — no injection
+                    continue  
                 findings.append(self._make_finding(
                     title=f"[Flow:{step.id}] Mass Assignment — `{key}` reflected as `{reflected}`",
                     severity="CRITICAL",
@@ -867,7 +867,7 @@ class FlowReplayer:
                 ))
         return findings
 
-    # ── Template Resolution ───────────────────────────────────────────────────
+
 
     def _resolve_template(self, template: str, context: dict, base_url: str = "") -> str:
         """Replace {{variable}} placeholders with values from context."""
@@ -893,7 +893,7 @@ class FlowReplayer:
             return [self._resolve_body(item, context) for item in body]
         return body
 
-    # ── Value Extraction ──────────────────────────────────────────────────────
+
 
     def _extract_values(self, body: str, extract_map: dict) -> dict:
         """
@@ -907,7 +907,7 @@ class FlowReplayer:
             return extracted
 
         for var_name, path in extract_map.items():
-            # Strip leading $. if present
+
             clean_path = path.lstrip("$").lstrip(".")
             value = self._get_by_path(data, clean_path)
             if value is not None:
@@ -933,7 +933,7 @@ class FlowReplayer:
                 pass
         return None
 
-    # ── Nested body helpers ───────────────────────────────────────────────────
+
 
     def _find_keys_recursive(self, obj: Any, target_keys: list[str], prefix: str = "") -> list[str]:
         """Find all keys in a nested dict that match any of the target_keys."""
@@ -958,7 +958,7 @@ class FlowReplayer:
         parts = path.split(".", 1)
         key   = parts[0]
 
-        # Handle list index notation: [0]
+
         list_match = re.match(r'^(\w+)\[(\d+)\]$', key)
         if list_match:
             field_name = list_match.group(1)
@@ -977,7 +977,7 @@ class FlowReplayer:
                 obj[key] = self._set_nested(obj[key], parts[1], value)
         return obj
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+
 
     def _find_baseline_step(
         self, baseline: FlowResult, step_id: str

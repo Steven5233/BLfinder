@@ -26,15 +26,15 @@ from urllib.parse import (
 )
 
 
-# ── Regex patterns for ID-like segments ──────────────────────────────────────
+
 
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -55,7 +55,7 @@ _RE_SLUG_ID   = re.compile(
 _RE_BASE64_ID = re.compile(r'^[A-Za-z0-9+/=]{20,}$')
 _RE_MIXED_ID  = re.compile(r'^[a-z]{2,6}[0-9]{3,}$', re.IGNORECASE)
 
-# Segments that look like IDs but are actually path keywords
+
 _KEYWORD_SEGMENTS = frozenset({
     "api", "v1", "v2", "v3", "v4", "v5", "internal", "legacy", "beta",
     "admin", "public", "private", "static", "assets", "health", "metrics",
@@ -86,7 +86,7 @@ def is_id_segment(segment: str) -> bool:
         return True
     if _RE_MIXED_ID.match(segment):
         return True
-    # Long alphanumeric blobs (token-like) with no separators
+
     if len(segment) >= 20 and re.match(r'^[A-Za-z0-9_-]+$', segment):
         return True
     return False
@@ -147,7 +147,7 @@ def normalise_url(url: str) -> tuple[str, str]:
     scheme = (parsed.scheme or "https").lower()
     host   = (parsed.netloc or "").lower()
 
-    # Strip default ports
+
     if host.endswith(":80") and scheme == "http":
         host = host[:-3]
     elif host.endswith(":443") and scheme == "https":
@@ -155,7 +155,7 @@ def normalise_url(url: str) -> tuple[str, str]:
 
     template_path, _ = normalise_path(parsed.path or "/")
 
-    # Canonical URL keeps sorted query string
+
     qs_dict = parse_qs(parsed.query, keep_blank_values=False)
     canonical_qs = urlencode(
         sorted((k, v[0]) for k, v in qs_dict.items() if v)

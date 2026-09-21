@@ -40,14 +40,14 @@ except ImportError:
     _HAS_AIOHTTP = False
 
 
-# ── Secret patterns ───────────────────────────────────────────────────────────
+
 
 @dataclass
 class SecretPattern:
     name:        str
     pattern:     re.Pattern
     category:    str
-    severity:    str      # CRITICAL / HIGH / MEDIUM / LOW
+    severity:    str      
     min_entropy: float = 3.0
     context_keywords: list[str] = field(default_factory=list)
     false_positive_patterns: list[re.Pattern] = field(default_factory=list)
@@ -55,7 +55,7 @@ class SecretPattern:
 
 _SECRET_PATTERNS: list[SecretPattern] = [
 
-    # ── Cloud provider keys ───────────────────────────────────────────────────
+
     SecretPattern(
         name="AWS Access Key ID",
         pattern=re.compile(r'\b(AKIA[0-9A-Z]{16})\b'),
@@ -85,7 +85,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         min_entropy=3.5,
     ),
 
-    # ── Payment ───────────────────────────────────────────────────────────────
+
     SecretPattern(
         name="Stripe Live Secret Key",
         pattern=re.compile(r'\b(sk_live_[A-Za-z0-9]{20,})\b'),
@@ -115,7 +115,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         min_entropy=3.5,
     ),
 
-    # ── Communication (Twilio, SendGrid, etc.) ────────────────────────────────
+
     SecretPattern(
         name="Twilio Account SID",
         pattern=re.compile(r'\b(AC[a-f0-9]{32})\b'),
@@ -145,7 +145,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         min_entropy=3.5,
     ),
 
-    # ── Version control ───────────────────────────────────────────────────────
+
     SecretPattern(
         name="GitHub Personal Access Token",
         pattern=re.compile(r'\b(ghp_[A-Za-z0-9]{36})\b'),
@@ -175,7 +175,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         min_entropy=3.5,
     ),
 
-    # ── JWT tokens ────────────────────────────────────────────────────────────
+
     SecretPattern(
         name="JWT Token",
         pattern=re.compile(r'\b(eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)\b'),
@@ -184,7 +184,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         min_entropy=4.0,
     ),
 
-    # ── Generic API keys ──────────────────────────────────────────────────────
+
     SecretPattern(
         name="Generic API Key",
         pattern=re.compile(
@@ -214,7 +214,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         ],
     ),
 
-    # ── Internal endpoints ────────────────────────────────────────────────────
+
     SecretPattern(
         name="Internal API Endpoint",
         pattern=re.compile(
@@ -230,7 +230,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
         min_entropy=0.0,
     ),
 
-    # ── Infrastructure ────────────────────────────────────────────────────────
+
     SecretPattern(
         name="Database Connection String",
         pattern=re.compile(
@@ -271,7 +271,7 @@ _SECRET_PATTERNS: list[SecretPattern] = [
     ),
 ]
 
-# ── Known test/placeholder values to exclude ───────────────────────────────────
+
 _PLACEHOLDER_PATTERNS = [
     re.compile(p, re.I) for p in [
         r'^(your|example|placeholder|insert|replace|change|todo)_',
@@ -279,7 +279,7 @@ _PLACEHOLDER_PATTERNS = [
         r'\{[A-Z_]+\}',
         r'^(test|demo|sample|fake|dummy)',
         r'xxx+',
-        r'^[a-z]+$',   # All lowercase = likely a variable name, not a real secret
+        r'^[a-z]+$',   
         r'1234567',
     ]
 ]
@@ -291,12 +291,12 @@ class SecretFinding:
     pattern_name:  str
     category:      str
     severity:      str
-    raw_value:     str          # The actual found value
-    redacted:      str          # Safe version for reports
-    source_url:    str          # JS file URL
+    raw_value:     str          
+    redacted:      str          
+    source_url:    str          
     line_number:   int = 0
-    context:       str = ""     # Surrounding code context
-    confidence:    int = 0      # 0–100
+    context:       str = ""     
+    confidence:    int = 0      
     entropy:       float = 0.0
     is_false_positive: bool = False
     fp_reason:     str = ""
@@ -309,7 +309,7 @@ class JSExtractionResult:
     js_files_found:    int = 0
     js_files_scanned:  int = 0
     secrets:       list[SecretFinding] = field(default_factory=list)
-    endpoints:     list[str] = field(default_factory=list)   # Internal endpoints found
+    endpoints:     list[str] = field(default_factory=list)   
     elapsed_sec:   float = 0.0
 
     @property
@@ -338,8 +338,8 @@ class JSSecretExtractor:
     """
 
     _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".ts")
-    _MAX_JS_SIZE   = 5 * 1024 * 1024    # 5MB max per JS file
-    _MAX_JS_FILES  = 30                  # Max files to scan per target
+    _MAX_JS_SIZE   = 5 * 1024 * 1024    
+    _MAX_JS_FILES  = 30                  
 
     def __init__(self, verbose: bool = False):
         self.verbose   = verbose
@@ -372,7 +372,7 @@ class JSSecretExtractor:
             )
 
         try:
-            # Collect JS file URLs
+
             js_urls = await self._collect_js_urls(target_url, session)
             if extra_js_urls:
                 js_urls.update(extra_js_urls)
@@ -381,7 +381,7 @@ class JSSecretExtractor:
             if self.verbose:
                 print(f"  [*] Found {len(js_urls)} JS files to scan")
 
-            # Scan each JS file
+
             js_url_list = list(js_urls)[: self._MAX_JS_FILES]
             scan_tasks  = [
                 self._scan_js_file(url, session)
@@ -396,7 +396,7 @@ class JSSecretExtractor:
                     result.endpoints.extend(file_endpoints)
                     result.js_files_scanned += 1
 
-            # Deduplicate
+
             result.secrets   = self._dedupe_secrets(result.secrets)
             result.endpoints = list(set(result.endpoints))
 
@@ -423,7 +423,7 @@ class JSSecretExtractor:
         """
         return self._extract_from_content(content, source_url)
 
-    # ── Internal methods ──────────────────────────────────────────────────────
+
 
     async def _collect_js_urls(
         self, target_url: str, session
@@ -446,7 +446,7 @@ class JSSecretExtractor:
                 parsed = urlparse(target_url)
                 base   = f"{parsed.scheme}://{parsed.netloc}"
 
-                # Extract src= attributes
+
                 for pattern in [
                     r'<script[^>]+src=["\']([^"\']+)["\']',
                     r'<link[^>]+href=["\']([^"\']+\.js[^"\']*)["\']',
@@ -457,7 +457,7 @@ class JSSecretExtractor:
                             full = urljoin(base, src) if not src.startswith("http") else src
                             js_urls.add(full)
 
-                # Look for webpack chunks
+
                 chunk_patterns = [
                     r'["\']((?:[./\w\-]+)?(?:chunk|bundle|main|vendor|app)'
                     r'[\w.\-]*\.js)["\']',
@@ -492,7 +492,7 @@ class JSSecretExtractor:
                 if resp.status != 200:
                     return [], []
 
-                # Size check
+
                 content_length = int(resp.headers.get("content-length", 0))
                 if content_length > self._MAX_JS_SIZE:
                     if self.verbose:
@@ -526,17 +526,17 @@ class JSSecretExtractor:
                 if not value or len(value) < 6:
                     continue
 
-                # Get line number and context
+
                 pos         = match.start()
                 line_num    = content[:pos].count("\n") + 1
                 context     = self._get_context(lines, line_num - 1)
 
-                # FP checks
+
                 is_fp, fp_reason = self._is_false_positive(
                     value, context, pattern_def
                 )
 
-                # Entropy check
+
                 entropy = _shannon_entropy(value)
 
                 confidence = self._compute_confidence(
@@ -559,7 +559,7 @@ class JSSecretExtractor:
                 )
                 secrets.append(finding)
 
-                # Extract internal endpoints
+
                 if pattern_def.category == "internal_endpoint":
                     endpoints.append(value)
 
@@ -570,23 +570,23 @@ class JSSecretExtractor:
     ) -> tuple[bool, str]:
         """Check if a found value is likely a false positive."""
 
-        # Check against pattern-specific FP patterns
+
         for fp_pat in pattern_def.false_positive_patterns:
             if fp_pat.search(value) or fp_pat.search(context):
                 return True, f"Matches known FP pattern: {fp_pat.pattern[:30]}"
 
-        # Check against global placeholder patterns
+
         for placeholder in _PLACEHOLDER_PATTERNS:
             if placeholder.search(value):
                 return True, f"Looks like a placeholder/test value"
 
-        # Entropy check
+
         if pattern_def.min_entropy > 0:
             entropy = _shannon_entropy(value)
             if entropy < pattern_def.min_entropy:
                 return True, f"Low entropy ({entropy:.1f} < {pattern_def.min_entropy})"
 
-        # Context suggests test/example
+
         context_lower = context.lower()
         test_context_words = [
             "test", "example", "mock", "fake", "dummy",
@@ -608,9 +608,9 @@ class JSSecretExtractor:
         if is_fp:
             return 10
 
-        score = 50    # Base
+        score = 50    
 
-        # Entropy bonus
+
         if entropy >= 4.5:
             score += 25
         elif entropy >= 3.5:
@@ -618,11 +618,11 @@ class JSSecretExtractor:
         elif entropy >= 3.0:
             score += 5
 
-        # Pattern-specific format match (e.g. AKIA prefix = very confident)
-        if pattern_def.name.startswith("AWS") or pattern_def.name.startswith("Stripe"):
-            score += 20  # Prefix-based patterns are very reliable
 
-        # Context suggests real use
+        if pattern_def.name.startswith("AWS") or pattern_def.name.startswith("Stripe"):
+            score += 20  
+
+
         real_context_words = [
             "production", "prod", "live", "config", "env",
             "process.env", "const ", "let ", "var ",
@@ -656,7 +656,7 @@ class JSSecretExtractor:
         return unique
 
 
-# ── Utility functions ─────────────────────────────────────────────────────────
+
 
 def _shannon_entropy(s: str) -> float:
     """Calculate Shannon entropy of a string."""

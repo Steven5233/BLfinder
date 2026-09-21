@@ -27,32 +27,32 @@ from typing import Callable, Awaitable
 @dataclass
 class TimingResult:
     """Result of a timing oracle measurement."""
-    # Raw measurements
-    samples_a: list[float] = field(default_factory=list)   # Baseline timings
-    samples_b: list[float] = field(default_factory=list)   # Test timings
 
-    # Statistical summary (after outlier removal)
+    samples_a: list[float] = field(default_factory=list)   
+    samples_b: list[float] = field(default_factory=list)   
+
+
     mean_a: float = 0.0
     mean_b: float = 0.0
     median_a: float = 0.0
     median_b: float = 0.0
     stdev_a: float = 0.0
     stdev_b: float = 0.0
-    delta: float = 0.0              # mean_b - mean_a (positive = B is slower)
-    delta_pct: float = 0.0          # delta as percentage of mean_a
+    delta: float = 0.0              
+    delta_pct: float = 0.0          
 
-    # Significance
-    is_significant: bool = False    # True if difference is statistically meaningful
-    confidence: float = 0.0         # 0.0–1.0 confidence in the timing difference
-    effect_size: float = 0.0        # Cohen's d — how large the difference is
-    p_value_approx: float = 1.0     # Approximate p-value (lower = more significant)
 
-    # Interpretation
-    interpretation: str = ""        # Human-readable explanation
+    is_significant: bool = False    
+    confidence: float = 0.0         
+    effect_size: float = 0.0        
+    p_value_approx: float = 1.0     
+
+
+    interpretation: str = ""        
     fp_signals: list[str] = field(default_factory=list)
 
-    # Thresholds used
-    min_delta_ms: float = 0.0       # Minimum delta threshold used
+
+    min_delta_ms: float = 0.0       
     sample_count: int = 0
 
 
@@ -81,14 +81,14 @@ class TimingOracle:
             # Real timing difference detected
     """
 
-    # Minimum timing difference to consider significant (seconds)
-    MIN_DELTA_THRESHOLD = 0.100     # 100ms — below this is network noise
 
-    # Minimum effect size (Cohen's d) to consider practically significant
-    MIN_EFFECT_SIZE = 0.8           # Large effect (standard threshold)
+    MIN_DELTA_THRESHOLD = 0.100     
 
-    # Maximum coefficient of variation — networks with CV > this are too noisy
-    MAX_CV_THRESHOLD = 0.5          # 50% CV = too unstable for timing oracle
+
+    MIN_EFFECT_SIZE = 0.8           
+
+
+    MAX_CV_THRESHOLD = 0.5          
 
     def __init__(self, scanner=None):
         """
@@ -128,7 +128,7 @@ class TimingOracle:
         samples_b = []
 
         if interleave:
-            # Interleave A and B to minimize time-drift bias
+
             for _ in range(samples):
                 _, _, _, t = await request_a()
                 samples_a.append(t)
@@ -218,7 +218,7 @@ class TimingOracle:
         result.mean_b = statistics.mean(sleep_clean)
         result.delta = result.mean_b - result.mean_a
 
-        # Sleep injection: response should be ~N seconds slower
+
         if result.delta >= expected_sleep_seconds * 0.8:
             result.is_significant = True
             result.confidence = min(1.0, result.delta / expected_sleep_seconds)
@@ -234,12 +234,12 @@ class TimingOracle:
 
         return result
 
-    # ── Statistical Analysis ──────────────────────────────────────────────────
+
 
     def _analyze(self, result: TimingResult, description: str, min_delta_ms: float | None) -> TimingResult:
         """Run full statistical analysis on collected timing samples."""
 
-        # Remove outliers from both sets
+
         clean_a = self._remove_outliers(result.samples_a)
         clean_b = self._remove_outliers(result.samples_b)
 
@@ -248,7 +248,7 @@ class TimingOracle:
             result.fp_signals.append("Insufficient clean samples — network may be too unstable")
             return result
 
-        # Basic statistics
+
         result.mean_a = statistics.mean(clean_a)
         result.mean_b = statistics.mean(clean_b)
         result.median_a = statistics.median(clean_a)
@@ -258,7 +258,7 @@ class TimingOracle:
         result.delta = result.mean_b - result.mean_a
         result.delta_pct = (result.delta / result.mean_a * 100) if result.mean_a > 0 else 0.0
 
-        # Network stability check (Coefficient of Variation)
+
         cv_a = result.stdev_a / result.mean_a if result.mean_a > 0 else 0.0
         cv_b = result.stdev_b / result.mean_b if result.mean_b > 0 else 0.0
         avg_cv = (cv_a + cv_b) / 2
@@ -269,17 +269,17 @@ class TimingOracle:
                 "Use a stable network or increase samples."
             )
 
-        # Effect size (Cohen's d)
+
         pooled_std = math.sqrt((result.stdev_a ** 2 + result.stdev_b ** 2) / 2)
         result.effect_size = abs(result.delta) / pooled_std if pooled_std > 0 else 0.0
 
-        # Approximate p-value using Welch's t-test statistic
+
         result.p_value_approx = self._welch_p_value(clean_a, clean_b)
 
-        # Minimum delta threshold (convert ms to seconds)
+
         threshold_s = (min_delta_ms or result.min_delta_ms) / 1000
 
-        # Significance decision
+
         delta_significant = abs(result.delta) >= threshold_s
         effect_significant = result.effect_size >= self.MIN_EFFECT_SIZE
         p_significant = result.p_value_approx < 0.05
@@ -291,16 +291,16 @@ class TimingOracle:
             avg_cv <= self.MAX_CV_THRESHOLD
         )
 
-        # Confidence score (0.0–1.0)
+
         signals = [
-            min(1.0, abs(result.delta) / (threshold_s * 3)),      # Delta strength
-            min(1.0, result.effect_size / (self.MIN_EFFECT_SIZE * 2)),  # Effect size
-            max(0.0, 1.0 - result.p_value_approx * 10),            # P-value
-            max(0.0, 1.0 - avg_cv / self.MAX_CV_THRESHOLD),        # Network stability
+            min(1.0, abs(result.delta) / (threshold_s * 3)),      
+            min(1.0, result.effect_size / (self.MIN_EFFECT_SIZE * 2)),  
+            max(0.0, 1.0 - result.p_value_approx * 10),            
+            max(0.0, 1.0 - avg_cv / self.MAX_CV_THRESHOLD),        
         ]
         result.confidence = statistics.mean(signals)
 
-        # Human interpretation
+
         direction = "slower" if result.delta > 0 else "faster"
         result.interpretation = (
             f"{description}: B is {abs(result.delta)*1000:.0f}ms {direction} than A "
@@ -332,10 +332,10 @@ class TimingOracle:
 
         sorted_s = sorted(samples)
 
-        # Winsorize: remove fastest and slowest
+
         trimmed = sorted_s[1:-1]
 
-        # IQR outlier removal
+
         n = len(trimmed)
         q1 = trimmed[n // 4]
         q3 = trimmed[(3 * n) // 4]
@@ -367,13 +367,13 @@ class TimingOracle:
 
         t_stat = abs(mean_a - mean_b) / se
 
-        # Welch-Satterthwaite degrees of freedom
+
         dof = (var_a / n_a + var_b / n_b) ** 2 / (
             (var_a / n_a) ** 2 / (n_a - 1) + (var_b / n_b) ** 2 / (n_b - 1)
         )
 
-        # Approximate p-value using survival function of t-distribution
-        # Using a simple polynomial approximation suitable for Termux
+
+
         p = self._t_survival(t_stat, dof)
         return min(1.0, max(0.0, p))
 
@@ -385,22 +385,22 @@ class TimingOracle:
         if df <= 0 or t <= 0:
             return 1.0
 
-        # For large df, t approaches normal distribution
+
         if df > 30:
-            # Normal approximation
+
             z = t
             p = 2.0 * (1.0 - self._normal_cdf(z))
             return max(0.0, min(1.0, p))
 
-        # For smaller df, use a rough approximation
+
         x = df / (df + t * t)
-        # Regularized incomplete beta function approximation
+
         p = self._beta_approx(x, df / 2.0, 0.5)
         return max(0.0, min(1.0, p))
 
     def _normal_cdf(self, x: float) -> float:
         """Approximate CDF of standard normal distribution."""
-        # Abramowitz & Stegun approximation
+
         t = 1.0 / (1.0 + 0.2316419 * abs(x))
         poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
         phi = (1.0 / math.sqrt(2 * math.pi)) * math.exp(-0.5 * x * x)
@@ -413,7 +413,7 @@ class TimingOracle:
             return 0.0
         if x >= 1:
             return 1.0
-        # Simple continued fraction approximation
+
         try:
             log_beta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
             log_x = a * math.log(x) + b * math.log(1 - x) - log_beta

@@ -29,7 +29,7 @@ class ConfidenceEngine:
         reasons = []
         fp_checks = []
 
-        # ── 1. HTTP status comparison ──────────────────────────────────────────
+
         if tampered_status in (200, 201) and base_status in (200, 201):
             score += 10
             reasons.append("Both baseline and tampered returned 2xx")
@@ -40,7 +40,7 @@ class ConfidenceEngine:
             score += 5
             reasons.append("Same status code (weaker signal)")
 
-        # ── 2. Response body semantic analysis ────────────────────────────────
+
         success_tokens = [
             "success", "created", "updated", "confirmed", "accepted",
             "processed", "completed", "transaction_id", "order_id",
@@ -67,12 +67,12 @@ class ConfidenceEngine:
             score -= 20
             fp_checks.append(f"Failure tokens ({failure_hits}) exceed success tokens ({success_hits}) — likely error response")
 
-        # ── 3. Response similarity / diff analysis ─────────────────────────────
-        # This score feeds every finding before it's reported, so the same
-        # false-positive/false-negative risk as verifier.py's _similarity()
-        # applies here: raw byte comparison penalizes/rewards findings based
-        # on incidental differences (timestamps, key order) rather than
-        # actual security-relevant content changes.
+
+
+
+
+
+
         if _HAS_SEMANTIC_DIFF:
             try:
                 similarity = SemanticDiff.compare(
@@ -97,7 +97,7 @@ class ConfidenceEngine:
             score += 10
             reasons.append(f"Moderate response difference (similarity={similarity:.2f})")
 
-        # ── 4. JSON structure analysis ─────────────────────────────────────────
+
         base_data = _safe_json(baseline_body)
         new_data = _safe_json(tampered_body)
 
@@ -107,7 +107,7 @@ class ConfidenceEngine:
                 score += 15
                 reasons.append(f"New JSON keys in tampered response: {list(new_keys)[:5]}")
 
-            # Check if sensitive fields appeared
+
             sensitive = ["password", "secret", "token", "key", "ssn", "cvv",
                          "private", "internal", "admin", "hash", "salt"]
             sens_found = [k for k in new_data if any(s in k.lower() for s in sensitive)]
@@ -120,18 +120,18 @@ class ConfidenceEngine:
                 score += 20
                 reasons.append(f"Response list grew from {len(base_data)} to {len(new_data)} items")
 
-        # ── 5. Confirmation bonus ──────────────────────────────────────────────
+
         if finding.confirmed:
             score += 25
             reasons.append("Finding independently confirmed (multi-user or re-verified)")
 
-        # ── 6. Severity calibration ────────────────────────────────────────────
-        # Critical findings need higher evidence bar
+
+
         if finding.severity == Severity.CRITICAL and score < 50:
-            score = min(score, 49)  # Cap at 49 if evidence is weak for critical
+            score = min(score, 49)  
             fp_checks.append("Critical severity requires stronger evidence — capped confidence")
 
-        # ── 7. Generic/catch-all response check ───────────────────────────────
+
         generic_responses = [
             '{"status": "ok"}',
             '{"success": true}',
@@ -141,7 +141,7 @@ class ConfidenceEngine:
             score -= 10
             fp_checks.append("Generic success response — may not indicate real business logic flaw")
 
-        # ── 8. WAF / security tool detection ──────────────────────────────────
+
         waf_signals = [
             "access denied", "request blocked", "security violation",
             "cloudflare", "akamai", "imperva", "sucuri", "mod_security",
@@ -150,7 +150,7 @@ class ConfidenceEngine:
             score -= 30
             fp_checks.append("WAF/security block detected in response — likely blocked, not vulnerable")
 
-        # Clamp 0–100
+
         score = max(0, min(100, score))
         finding.confidence = score
         finding.confidence_reasons = reasons

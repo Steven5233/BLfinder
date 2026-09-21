@@ -46,11 +46,11 @@ from urllib.parse import urlparse
 
 from ..models import Finding, Severity, ProofOfConcept
 
-# A short, high-signal list of secrets that show up constantly in real JWT
-# HS256 deployments (default framework secrets, tutorial leftovers, and the
-# usual weak-password suspects). Kept intentionally small — this is meant
-# to catch the common, embarrassing case instantly, not replace a proper
-# offline cracking session with rockyou.txt.
+
+
+
+
+
 _WEAK_SECRETS = [
     "secret", "Secret", "SECRET", "secretkey", "secret_key", "jwtsecret",
     "jwt_secret", "jwtSecret", "your-256-bit-secret", "your-secret-key",
@@ -59,7 +59,7 @@ _WEAK_SECRETS = [
     "root", "test", "testing", "development", "dev", "production", "prod",
     "staging", "key", "apikey", "api_key", "signing-key", "signingkey",
     "s3cr3t", "keyboardcat", "correcthorsebatterystaple", "0", "null",
-    "",  # empty secret — surprisingly common
+    "",  
 ]
 
 
@@ -76,13 +76,13 @@ class JWTAlgConfusionScanner:
         self._config = scanner.config
         self._request = scanner._request
         self._resp_ok = getattr(scanner, "_response_indicates_success", None)
-        self._reported: set[tuple] = set()          # (token_hash, check_name)
-        self._attempts: dict[tuple, int] = {}        # (token_hash, check_name) -> tries
-        self._hmac_attempted: set[str] = set()        # token_hash — offline crack already tried
-        self._control_cache: dict[str, bool] = {}     # url -> control passed (token rejected)
-        self._max_attempts_per_check = 3              # retry across a few endpoints, then stop
+        self._reported: set[tuple] = set()          
+        self._attempts: dict[tuple, int] = {}        
+        self._hmac_attempted: set[str] = set()        
+        self._control_cache: dict[str, bool] = {}     
+        self._max_attempts_per_check = 3              
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def scan(self, url: str, method: str = "GET") -> list[Finding]:
         findings: list[Finding] = []
@@ -95,10 +95,10 @@ class JWTAlgConfusionScanner:
         alg = str(header.get("alg", "")).upper()
         token_hash = hashlib.sha256(token.encode()).hexdigest()[:12]
 
-        # Stop entirely once every applicable check for this token has
-        # either found something or exhausted its retry budget — avoids
-        # burning a control request on every remaining endpoint for the
-        # rest of the scan once there's nothing left to learn.
+
+
+
+
         applicable_checks = ["alg_none", "sig_stripped"]
         if "kid" in header:
             applicable_checks.append("kid_injection")
@@ -116,17 +116,17 @@ class JWTAlgConfusionScanner:
         if live_checks_done and hmac_check_done:
             return findings
 
-        # Establish a control: does this endpoint even enforce auth?
-        # If a garbage token already gets 200, forged-token acceptance here
-        # would be meaningless — skip this endpoint for confirmation checks.
+
+
+
         control_ok = await self._control_rejects(url, method)
         if control_ok is None:
-            return findings  # couldn't reach the endpoint at all
+            return findings  
         if not control_ok and self._config.verbose:
             print(f"[!] JWTAlgConfusionScanner: {url} accepts garbage tokens — "
                   f"skipping confirmation checks (endpoint may not enforce auth)")
 
-        # ── 1. alg:none ─────────────────────────────────────────────────────
+
         if control_ok:
             f = await self._try_check(
                 url, method, token_hash, "alg_none",
@@ -155,7 +155,7 @@ class JWTAlgConfusionScanner:
             if f:
                 findings.append(f)
 
-        # ── 2. Signature stripping (original alg, empty signature) ────────
+
         if control_ok:
             stripped = f"{header_b64}.{payload_b64}."
             f = await self._try_check(
@@ -183,7 +183,7 @@ class JWTAlgConfusionScanner:
             if f:
                 findings.append(f)
 
-        # ── 3. Weak HMAC secret (fully offline, no live probe needed first) ─
+
         if alg.startswith("HS") and sig and token_hash not in self._hmac_attempted:
             self._hmac_attempted.add(token_hash)
             cracked = self._crack_hmac(header_b64, payload_b64, sig, alg)
@@ -221,7 +221,7 @@ class JWTAlgConfusionScanner:
                     attack_note=f"Cracked secret: {cracked!r} (offline HMAC match)",
                 ))
 
-        # ── 4. kid header injection ─────────────────────────────────────────
+
         if control_ok and "kid" in header:
             f = await self._try_check(
                 url, method, token_hash, "kid_injection",
@@ -251,7 +251,7 @@ class JWTAlgConfusionScanner:
             if f:
                 findings.append(f)
 
-        # ── 5. Informational: jku/x5u present on asymmetric tokens ─────────
+
         if alg in ("RS256", "RS384", "RS512", "ES256", "ES384", "ES512") and \
            ("jku" in header or "x5u" in header):
             key = (token_hash, "jku_x5u_info")
@@ -276,7 +276,7 @@ class JWTAlgConfusionScanner:
 
         return findings
 
-    # ── Confirmation control ────────────────────────────────────────────────
+
 
     async def _control_rejects(self, url: str, method: str) -> bool | None:
         """Returns True if a garbage token is rejected (endpoint enforces
@@ -336,7 +336,7 @@ class JWTAlgConfusionScanner:
                 return build(forged)
         return None
 
-    # ── JWT parsing / forging ───────────────────────────────────────────────
+
 
     def _b64url_encode(self, data: bytes) -> str:
         return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
@@ -372,8 +372,8 @@ class JWTAlgConfusionScanner:
             h = dict(header)
             h["alg"] = alg_val
             h_b64, p_b64 = self._encode_header_payload(h, payload)
-            variants.append(f"{h_b64}.{p_b64}.")   # trailing empty signature
-            variants.append(f"{h_b64}.{p_b64}")    # no signature segment at all
+            variants.append(f"{h_b64}.{p_b64}.")   
+            variants.append(f"{h_b64}.{p_b64}")    
         return variants
 
     def _forge_kid_variants(self, header: dict, payload: dict) -> list[str]:
@@ -425,7 +425,7 @@ class JWTAlgConfusionScanner:
         sig = self._hmac_sign(secret.encode(), h_b64, p_b64, hashalg)
         return f"{h_b64}.{p_b64}.{sig}"
 
-    # ── Finding construction ────────────────────────────────────────────────
+
 
     def _build(
         self, url, method, original_token, forged_token,

@@ -32,9 +32,9 @@ except ImportError:
     _HAS_AIOHTTP = False
 
 
-# ── Scoring constants ─────────────────────────────────────────────────────────
 
-# Subdomains containing these keywords score higher
+
+
 _HIGH_VALUE_KEYWORDS = {
     "api":         50,
     "console":     45,
@@ -73,7 +73,7 @@ _HIGH_VALUE_KEYWORDS = {
     "reporting":   30,
 }
 
-# Subdomains containing these keywords score lower (less interesting)
+
 _LOW_VALUE_KEYWORDS = {
     "www": -20, "mail": -30, "smtp": -30, "ftp": -30,
     "blog": -20, "docs": -10, "help": -10, "support": -10,
@@ -81,32 +81,32 @@ _LOW_VALUE_KEYWORDS = {
     "status": -10, "marketing": -20,
 }
 
-# Common subdomain wordlist for brute force probing
+
 _COMMON_SUBDOMAINS = [
-    # API tiers
+
     "api", "api2", "api3", "api-v1", "api-v2", "api-v3",
     "v1", "v2", "v3", "v4",
-    # Console / Dashboard
+
     "console", "dashboard", "app", "portal", "manage", "management",
-    # Auth
+
     "auth", "sso", "login", "oauth", "identity",
-    # Internal
+
     "internal", "internal-api", "private", "backend",
     "admin", "administrator",
-    # GraphQL
+
     "graphql", "gql",
-    # Gateway
+
     "gateway", "proxy", "service", "services",
-    # Data
+
     "data", "analytics", "metrics", "reporting", "insights", "monitor",
-    # Dev/Staging
+
     "dev", "development", "staging", "stage", "beta", "sandbox",
     "test", "testing", "qa",
-    # Cloud
+
     "cloud", "platform",
-    # Accounts
+
     "account", "accounts", "my", "user", "users", "customer",
-    # REST
+
     "rest", "rpc",
 ]
 
@@ -123,7 +123,7 @@ class SubdomainResult:
     response_size: int = 0
     is_live:     bool = False
     score:       int = 0
-    source:      str = ""    # "crtsh", "wordlist", "provided"
+    source:      str = ""    
     api_paths:   list[str] = field(default_factory=list)
     notes:       list[str] = field(default_factory=list)
 
@@ -208,7 +208,7 @@ class SubdomainMapper:
     """
 
     _CRTSH_URL   = "https://crt.sh/?q={domain}&output=json"
-    _CRTSH_DELAY = 1.2    # seconds between crt.sh requests
+    _CRTSH_DELAY = 1.2    
     _PROBE_CONCURRENCY = 10
 
     def __init__(self, verbose: bool = False):
@@ -240,7 +240,7 @@ class SubdomainMapper:
         if self.verbose:
             print(f"[*] Subdomain mapping: {base_domain}")
 
-        # Create session if not provided
+
         own_session = session is None
         if own_session and _HAS_AIOHTTP:
             connector = aiohttp.TCPConnector(ssl=False, limit=20)
@@ -252,7 +252,7 @@ class SubdomainMapper:
         try:
             found_hostnames: set[str] = set()
 
-            # Step 1: Certificate transparency
+
             if use_crtsh:
                 crt_hosts = await self._query_crtsh(base_domain, session)
                 found_hostnames.update(crt_hosts)
@@ -260,7 +260,7 @@ class SubdomainMapper:
                 if self.verbose:
                     print(f"  [+] crt.sh: {len(crt_hosts)} subdomains")
 
-            # Step 2: Wordlist probing
+
             if use_wordlist:
                 wordlist = _COMMON_SUBDOMAINS[:max_wordlist]
                 wl_hosts = [
@@ -269,7 +269,7 @@ class SubdomainMapper:
                 found_hostnames.update(wl_hosts)
                 result.wordlist_count = len(wl_hosts)
 
-            # Always include the base domain and www
+
             found_hostnames.add(base_domain)
             found_hostnames.add(f"www.{base_domain}")
 
@@ -277,7 +277,7 @@ class SubdomainMapper:
             if self.verbose:
                 print(f"  [*] Total candidates: {result.total_found}")
 
-            # Step 3: Live host probing
+
             subdomain_objects = [
                 SubdomainResult(hostname=h, source="crtsh" if h in (crt_hosts if use_crtsh else set()) else "wordlist")
                 for h in sorted(found_hostnames)
@@ -306,7 +306,7 @@ class SubdomainMapper:
         result.elapsed_sec = time.time() - start
         return result
 
-    # ── crt.sh query ──────────────────────────────────────────────────────────
+
 
     async def _query_crtsh(
         self, domain: str, session
@@ -315,7 +315,7 @@ class SubdomainMapper:
         if session is None:
             return set()
 
-        # Rate limit
+
         since_last = time.time() - self._last_crtsh_request
         if since_last < self._CRTSH_DELAY:
             await asyncio.sleep(self._CRTSH_DELAY - since_last)
@@ -336,14 +336,14 @@ class SubdomainMapper:
                 try:
                     entries = json.loads(text)
                     for entry in entries:
-                        # name_value can be "*.domain.com\nsubdomain.domain.com"
+
                         raw = entry.get("name_value", "") or entry.get("common_name", "")
                         for name in raw.split("\n"):
                             name = name.strip().lstrip("*.")
                             if name and _is_valid_subdomain(name, domain):
                                 hostnames.add(name.lower())
                 except (json.JSONDecodeError, ValueError, KeyError):
-                    # crt.sh sometimes returns malformed JSON
+
                     pass
 
         except asyncio.TimeoutError:
@@ -355,7 +355,7 @@ class SubdomainMapper:
 
         return hostnames
 
-    # ── Live probing ──────────────────────────────────────────────────────────
+
 
     async def _probe_live(
         self,
@@ -364,7 +364,7 @@ class SubdomainMapper:
     ) -> list[SubdomainResult]:
         """Probe a list of subdomains for liveness in async batches."""
         if session is None:
-            # No session — just score based on hostname
+
             for sub in subdomains:
                 sub.score = _score_hostname(sub.hostname)
             return sorted(subdomains, key=lambda s: s.score, reverse=True)
@@ -410,7 +410,7 @@ class SubdomainMapper:
                 sub.is_live = resp.status not in (0,)
                 body        = await resp.text(errors="replace")
 
-                # Extract metadata
+
                 for k, v in resp.headers.items():
                     k_lower = k.lower()
                     if k_lower == "server":
@@ -421,22 +421,22 @@ class SubdomainMapper:
                 sub.response_size = len(body)
                 sub.title         = _extract_title(body)
 
-                # Boost score for JSON responses (API surface)
+
                 if "json" in sub.content_type:
                     sub.score += 20
                     sub.notes.append("Returns JSON")
 
-                # Boost for API-related response patterns
+
                 if _body_looks_like_api(body):
                     sub.score += 15
                     sub.notes.append("API-like response body")
 
-                # Auth-required responses are very valuable
+
                 if resp.status in (401, 403):
                     sub.score += 10
                     sub.notes.append(f"Auth required (HTTP {resp.status})")
 
-                # Probe common API paths for live subdomains
+
                 if sub.score >= 20 and sub.is_live:
                     sub.api_paths = await self._discover_api_paths(
                         sub.hostname, session
@@ -477,7 +477,7 @@ class SubdomainMapper:
         return live_paths
 
 
-# ── Scoring ───────────────────────────────────────────────────────────────────
+
 
 def _score_hostname(hostname: str) -> int:
     """Score a hostname by its likely API attack surface value."""
@@ -485,8 +485,8 @@ def _score_hostname(hostname: str) -> int:
     hostname = hostname.lower()
     parts    = hostname.split(".")
 
-    # Score based on subdomain keywords
-    for part in parts[:-2]:   # Exclude the TLD parts
+
+    for part in parts[:-2]:   
         for keyword, pts in _HIGH_VALUE_KEYWORDS.items():
             if keyword in part:
                 score += pts
@@ -496,14 +496,14 @@ def _score_hostname(hostname: str) -> int:
                 score += pts
                 break
 
-    # Penalty for deeply nested subdomains (likely CDN)
+
     if len(parts) > 4:
         score -= 10
 
     return max(0, score)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _extract_root_domain(domain: str) -> str:
     """Extract root domain from URL or hostname."""
@@ -522,10 +522,10 @@ def _is_valid_subdomain(name: str, parent_domain: str) -> bool:
         return False
     if not name.endswith(f".{parent_domain}") and name != parent_domain:
         return False
-    # Filter out wildcards and garbage
+
     if "*" in name or " " in name:
         return False
-    # Basic hostname validation
+
     if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$', name):
         return False
     return True

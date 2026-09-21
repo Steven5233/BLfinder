@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-# ── Discovery source labels ───────────────────────────────────────────────────
+
 SOURCE_DNS          = "layer1:dns"
 SOURCE_ROBOTS       = "layer1:robots"
 SOURCE_SHODAN       = "layer1:shodan"
@@ -33,7 +33,7 @@ SOURCE_PARAM_EXPAND = "layer4:param_expand"
 SOURCE_SEED         = "seed"
 
 
-# ── Core endpoint model ───────────────────────────────────────────────────────
+
 @dataclass
 class DiscoveredEndpoint:
     """
@@ -51,27 +51,27 @@ class DiscoveredEndpoint:
     headers:            dict                 = field(default_factory=dict)
     source:             str                  = SOURCE_SEED
 
-    # Scoring
-    confidence:         float                = 0.5   # 0.0–1.0
-    priority:           int                  = 3     # 1 (high) – 5 (low)
 
-    # Metadata
+    confidence:         float                = 0.5   
+    priority:           int                  = 3     
+
+
     auth_required:      bool                 = True
     schema_hint:        dict                 = field(default_factory=dict)
     id_params:          list[str]            = field(default_factory=list)
-    version:            str                  = ""    # "v1", "v2", "internal", …
+    version:            str                  = ""    
     tags:               list[str]            = field(default_factory=list)
-    raw_source_evidence: str                 = ""    # where it was found
-    normalised_template: str                 = ""    # /orders/{id}/items/{id}
+    raw_source_evidence: str                 = ""    
+    normalised_template: str                 = ""    
     http_methods_allowed: list[str]          = field(default_factory=list)
     discovered_at:      float                = field(default_factory=time.time)
 
-    # FP-reduction signals (populated by layer5 enricher)
-    spec_verified:      bool                 = False  # found in an API spec
-    live_verified:      bool                 = False  # actually called in headless
-    response_hint:      Optional[dict]       = None   # sample response shape
 
-    # Priority heap support: lower number = higher priority
+    spec_verified:      bool                 = False  
+    live_verified:      bool                 = False  
+    response_hint:      Optional[dict]       = None   
+
+
     def __lt__(self, other: "DiscoveredEndpoint") -> bool:
         return self.priority < other.priority
 
@@ -82,7 +82,7 @@ class DiscoveredEndpoint:
             "method":  self.method,
             "body":    self.body,
             "params":  self.params,
-            # Pass extra context the scanner can use for smarter fuzzing
+
             "_meta": {
                 "source":       self.source,
                 "confidence":   self.confidence,
@@ -95,7 +95,7 @@ class DiscoveredEndpoint:
         }
 
 
-# ── Priority queue of discovered endpoints ────────────────────────────────────
+
 class EndpointQueue:
     """
     Min-heap of DiscoveredEndpoints ordered by priority (1=highest).
@@ -104,7 +104,7 @@ class EndpointQueue:
 
     def __init__(self):
         self._heap:    list[DiscoveredEndpoint] = []
-        self._seen:    set[str]                 = set()   # (template, method)
+        self._seen:    set[str]                 = set()   
         self._all:     list[DiscoveredEndpoint] = []
 
     def push(self, ep: DiscoveredEndpoint) -> bool:
@@ -171,7 +171,7 @@ class EndpointQueue:
             print(f"      {src:<30} {cnt}")
 
 
-# ── Per-layer result containers ───────────────────────────────────────────────
+
 @dataclass
 class LayerResult:
     """Returned by every layer's run() method."""
@@ -188,42 +188,42 @@ class LayerResult:
         )
 
 
-# ── Discovery config ──────────────────────────────────────────────────────────
+
 @dataclass
 class DiscoveryConfig:
     """
     All knobs for the deep discovery pipeline.
     Defaults are chosen to work on Termux with no external deps.
     """
-    # Layer 1
+
     subdomain_wordlist_size: int          = 50
     use_shodan:               bool        = False
     shodan_key:               str         = ""
 
-    # Layer 2
+
     openapi_paths:            list[str]   = field(default_factory=list)
     proto_paths:              list[str]   = field(default_factory=list)
     follow_js_imports:        bool        = True
     max_js_files:             int         = 30
     graphql_deep:             bool        = False
 
-    # Layer 3 (headless — requires playwright, opt-in)
+
     use_headless:             bool        = False
-    headless_interact:        bool        = False   # click buttons / submit forms
+    headless_interact:        bool        = False   
     headless_timeout_s:       int         = 30
 
-    # Layer 4
-    wordlist_depth:           int         = 2       # 1=tiny … 5=exhaustive
+
+    wordlist_depth:           int         = 2       
     include_versions:         list[str]   = field(
         default_factory=lambda: ["v1", "v2", "v3", "internal", "legacy", "beta"]
     )
     business_tags:            list[str]   = field(default_factory=list)
     no_wordlist:              bool        = False
 
-    # General
+
     auth_token:               str         = ""
     second_token:             str         = ""
-    max_depth:                int         = 4       # link-following depth
+    max_depth:                int         = 4       
     timeout_s:                int         = 15
     verbose:                  bool        = False
-    save_discovery_path:      str         = ""      # if set, dump JSON here
+    save_discovery_path:      str         = ""      

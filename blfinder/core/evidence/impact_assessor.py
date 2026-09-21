@@ -23,10 +23,10 @@ from typing import Any
 
 
 class SensitivityLevel(str, Enum):
-    CRITICAL = "CRITICAL"   # Credentials, keys, PII that enables identity theft
-    HIGH     = "HIGH"       # Personal data, financial info, internal secrets
-    MEDIUM   = "MEDIUM"     # Semi-sensitive: internal IDs, metadata, config
-    LOW      = "LOW"        # Minimal sensitivity: public-ish data in wrong context
+    CRITICAL = "CRITICAL"   
+    HIGH     = "HIGH"       
+    MEDIUM   = "MEDIUM"     
+    LOW      = "LOW"        
 
 
 @dataclass
@@ -34,11 +34,11 @@ class SensitiveItem:
     """A single sensitive data item found in the attack response."""
     field_name: str
     sensitivity: SensitivityLevel
-    category: str               # "credential", "pii", "financial", "internal", etc.
-    sample_value: str           # Redacted sample (e.g. "sk_live_****")
-    full_path: str = ""         # JSON path e.g. "users[0].api_key"
-    count: int = 1              # How many occurrences (e.g. 47 user emails)
-    description: str = ""      # Human-readable impact statement
+    category: str               
+    sample_value: str           
+    full_path: str = ""         
+    count: int = 1              
+    description: str = ""      
 
 
 @dataclass
@@ -47,27 +47,27 @@ class ImpactReport:
     Complete impact assessment of an attack response.
     Attached to EvidencePackage.impact_report.
     """
-    # Findings
+
     sensitive_items: list[SensitiveItem] = field(default_factory=list)
 
-    # Scores
-    impact_score: int = 0               # 0–100
-    cvss_adjustment: float = 0.0        # Suggested CVSS base score boost
 
-    # Category flags
-    has_credentials: bool = False       # Passwords, API keys, tokens
-    has_pii: bool = False               # Personal identifiable information
-    has_financial: bool = False         # Card numbers, bank accounts
-    has_internal: bool = False          # Internal config, secrets, admin data
-    has_other_user_data: bool = False   # Data belonging to another user
+    impact_score: int = 0               
+    cvss_adjustment: float = 0.0        
 
-    # Record counts
-    total_records_exposed: int = 0      # How many user records / items exposed
-    unique_users_exposed: int = 0       # How many distinct users affected
 
-    # Impact statement
-    impact_statement: str = ""          # Human-readable one-paragraph statement
-    h1_impact_section: str = ""         # Ready to paste into HackerOne "Impact" field
+    has_credentials: bool = False       
+    has_pii: bool = False               
+    has_financial: bool = False         
+    has_internal: bool = False          
+    has_other_user_data: bool = False   
+
+
+    total_records_exposed: int = 0      
+    unique_users_exposed: int = 0       
+
+
+    impact_statement: str = ""          
+    h1_impact_section: str = ""         
 
     def __post_init__(self):
         self._compute_scores()
@@ -86,11 +86,11 @@ class ImpactReport:
                 score += 10
             else:
                 score += 5
-            score += min(item.count, 10) * 2   # Volume bonus
+            score += min(item.count, 10) * 2   
 
         self.impact_score = min(100, score)
 
-        # CVSS adjustment based on what was found
+
         if self.has_credentials:
             self.cvss_adjustment = 2.5
         elif self.has_pii:
@@ -115,13 +115,13 @@ class ImpactAssessor:
         print(report.h1_impact_section)
     """
 
-    # ── Detection Patterns ────────────────────────────────────────────────────
 
-    # Field name patterns and their sensitivity classification
+
+
     FIELD_PATTERNS: list[tuple[re.Pattern, SensitivityLevel, str, str]] = [
-        # (pattern, sensitivity, category, description_template)
 
-        # Credentials — CRITICAL
+
+
         (re.compile(r'\bpassword(_hash|_digest|_encrypted)?\b', re.I),
          SensitivityLevel.CRITICAL, "credential", "Password or password hash exposed"),
         (re.compile(r'\b(api_key|apikey|api_secret)\b', re.I),
@@ -135,7 +135,7 @@ class ImpactAssessor:
         (re.compile(r'\b(db_password|database_password|db_pass)\b', re.I),
          SensitivityLevel.CRITICAL, "credential", "Database password exposed"),
 
-        # Financial — CRITICAL
+
         (re.compile(r'\b(card_number|credit_card|pan|primary_account_number)\b', re.I),
          SensitivityLevel.CRITICAL, "financial", "Credit card number exposed"),
         (re.compile(r'\bcvv\b|\bcvc\b|\bcvc2\b', re.I),
@@ -143,7 +143,7 @@ class ImpactAssessor:
         (re.compile(r'\b(bank_account|account_number|iban|routing_number)\b', re.I),
          SensitivityLevel.CRITICAL, "financial", "Bank account information exposed"),
 
-        # PII — HIGH
+
         (re.compile(r'\b(ssn|social_security|national_id|tax_id)\b', re.I),
          SensitivityLevel.CRITICAL, "pii", "Government ID number exposed"),
         (re.compile(r'\b(email|email_address)\b', re.I),
@@ -159,7 +159,7 @@ class ImpactAssessor:
         (re.compile(r'\b(passport|passport_number)\b', re.I),
          SensitivityLevel.CRITICAL, "pii", "Passport number exposed"),
 
-        # Financial data — HIGH
+
         (re.compile(r'\b(balance|account_balance|wallet_balance)\b', re.I),
          SensitivityLevel.HIGH, "financial", "Financial balance exposed"),
         (re.compile(r'\b(salary|income|revenue|earnings)\b', re.I),
@@ -167,13 +167,13 @@ class ImpactAssessor:
         (re.compile(r'\b(transaction_id|payment_id|invoice_id)\b', re.I),
          SensitivityLevel.MEDIUM, "financial", "Payment record IDs exposed"),
 
-        # Privilege / Auth — HIGH
+
         (re.compile(r'\b(role|roles|permissions|scopes)\b', re.I),
          SensitivityLevel.HIGH, "privilege", "Role/permission data exposed"),
         (re.compile(r'\b(is_admin|is_staff|is_superuser)\b', re.I),
          SensitivityLevel.HIGH, "privilege", "Admin flag exposed"),
 
-        # Internal / Config — MEDIUM
+
         (re.compile(r'\b(db_host|database_url|connection_string)\b', re.I),
          SensitivityLevel.CRITICAL, "internal", "Database connection string exposed"),
         (re.compile(r'\b(internal_note|admin_note|staff_note)\b', re.I),
@@ -183,14 +183,14 @@ class ImpactAssessor:
         (re.compile(r'\b(ip_address|server_ip)\b', re.I),
          SensitivityLevel.MEDIUM, "internal", "Internal IP address exposed"),
 
-        # Location — MEDIUM
+
         (re.compile(r'\b(latitude|longitude|lat|lng|coordinates|location)\b', re.I),
          SensitivityLevel.MEDIUM, "location", "Location data exposed"),
     ]
 
-    # Value patterns that indicate real sensitive data (not just field names)
+
     VALUE_PATTERNS: list[tuple[re.Pattern, str, str]] = [
-        # (pattern, category, description)
+
         (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'),
          "pii", "Email address"),
         (re.compile(r'\b4[0-9]{12}(?:[0-9]{3})?\b'),
@@ -236,21 +236,21 @@ class ImpactAssessor:
         """
         report = ImpactReport()
 
-        # Parse the attack response
+
         attack_data = cls._safe_parse(attack_body)
 
         if attack_data is None:
-            # Non-JSON: scan raw body with value patterns
+
             cls._scan_raw_body(report, attack_body)
         else:
-            # JSON: scan field names and values
-            cls._scan_json(report, attack_data, prefix="")
-            cls._scan_raw_body(report, attack_body)  # Also scan raw for value patterns
 
-        # Remove duplicates
+            cls._scan_json(report, attack_data, prefix="")
+            cls._scan_raw_body(report, attack_body)  
+
+
         report.sensitive_items = cls._dedupe(report.sensitive_items)
 
-        # Set category flags
+
         for item in report.sensitive_items:
             if item.category == "credential":
                 report.has_credentials = True
@@ -261,7 +261,7 @@ class ImpactAssessor:
             elif item.category in ("internal", "privilege"):
                 report.has_internal = True
 
-        # Count total records
+
         if isinstance(attack_data, list):
             report.total_records_exposed = len(attack_data)
         elif isinstance(attack_data, dict):
@@ -270,7 +270,7 @@ class ImpactAssessor:
                     report.total_records_exposed = len(attack_data[key])
                     break
 
-        # Build impact statement
+
         report.impact_statement = cls._build_statement(report, endpoint)
         report.h1_impact_section = cls._build_h1_section(report, endpoint)
 
@@ -301,15 +301,15 @@ class ImpactAssessor:
                         report.sensitive_items.append(item)
                         break
 
-                # Recurse
+
                 if isinstance(value, (dict, list)) and depth < 8:
                     cls._scan_json(report, value, path, depth + 1)
 
         elif isinstance(data, list):
             if data:
-                # Scan first item for schema
+
                 cls._scan_json(report, data[0], f"{prefix}[0]", depth + 1)
-                # Update counts for list fields
+
                 for item in report.sensitive_items:
                     if item.full_path.startswith(f"{prefix}[0]"):
                         item.count = len(data)
@@ -320,7 +320,7 @@ class ImpactAssessor:
         for pattern, category, description in cls.VALUE_PATTERNS:
             matches = pattern.findall(body)
             if matches:
-                # Avoid duplicates with field-name detections
+
                 already_found = any(
                     item.category == category and item.description == description
                     for item in report.sensitive_items
@@ -358,14 +358,14 @@ class ImpactAssessor:
             return "****"
 
         if category == "pii":
-            if "@" in s:  # Email
+            if "@" in s:  
                 parts = s.split("@")
                 return f"{parts[0][:2]}***@{parts[1]}"
             if len(s) > 4:
                 return f"{s[:2]}***{s[-2:]}"
             return "***"
 
-        # Internal / other — show type and length
+
         if isinstance(value, dict):
             return f"{{...}} ({len(value)} keys)"
         if isinstance(value, list):

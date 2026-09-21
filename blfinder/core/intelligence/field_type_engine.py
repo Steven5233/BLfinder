@@ -61,20 +61,20 @@ from enum import Enum
 from typing import Any
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Field type envelope
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 
 class FieldType(str, Enum):
-    INTEGER          = "integer"           # 1, 42, -3   (no decimal point)
-    FLOAT             = "float"            # 1.0, 9.99
-    MONETARY_STRING   = "monetary_string"  # "10.00", "9,999.00" — server expects a string
+    INTEGER          = "integer"           
+    FLOAT             = "float"            
+    MONETARY_STRING   = "monetary_string"  
     BOOLEAN           = "boolean"
-    IDENTIFIER        = "identifier"       # UUID / opaque token-shaped string or int PK
-    ENUM_LIKE         = "enum_like"        # short fixed-vocabulary string ("active","USD")
+    IDENTIFIER        = "identifier"       
+    ENUM_LIKE         = "enum_like"        
     DATE_ISO          = "date_iso"
-    STRING_FREE       = "string_free"      # free text, not attack-relevant for numeric classes
+    STRING_FREE       = "string_free"      
     NULL              = "null"
     ARRAY             = "array"
     OBJECT            = "object"
@@ -99,8 +99,8 @@ def infer_field_type(key: str, value: Any) -> FieldType:
     if isinstance(value, bool):
         return FieldType.BOOLEAN
     if isinstance(value, int):
-        # Long opaque-looking integers under an *_id / id key are PKs, not
-        # tamperable quantities/prices even though they're numeric.
+
+
         if _looks_like_identifier_key(key) and value > 0:
             return FieldType.IDENTIFIER
         return FieldType.INTEGER
@@ -130,13 +130,13 @@ def _infer_string_subtype(key: str, value: str) -> FieldType:
         return FieldType.DATE_ISO
     if _MONEY_RE.match(v):
         return FieldType.MONETARY_STRING
-    # Pure-digit string under an identifier-shaped key ("order_id": "88213")
+
     if v.isdigit() and _looks_like_identifier_key(key):
         return FieldType.IDENTIFIER
-    # Pure-digit / decimal string not identifier-shaped → treat as monetary/
-    # numeric-as-string, which many payment APIs deliberately use to avoid
-    # float rounding (Stripe-style minor units are the exception — handled
-    # by the caller comparing magnitude, not this classifier).
+
+
+
+
     if re.match(r"^-?\d+(\.\d+)?$", v):
         return FieldType.MONETARY_STRING
     if any(hint in key.lower() for hint in _ENUM_HINT_KEYS) and len(v) <= 20 and " " not in v:
@@ -144,15 +144,15 @@ def _infer_string_subtype(key: str, value: str) -> FieldType:
     return FieldType.STRING_FREE
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Attack relevance gate — per module class
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Which field types are legitimate targets for each attack class. Anything
-# outside this set is skipped for that module — this is what stops
-# "amount_id" (an identifier that happens to contain "amount") from being
-# fed negative-price payloads, and stops a free-text "notes" field from
-# being treated as a quantity.
+
+
+
+
+
+
+
+
 _RELEVANT_TYPES_FOR_MODULE: dict[str, set[FieldType]] = {
     "price_manipulation":  {FieldType.INTEGER, FieldType.FLOAT, FieldType.MONETARY_STRING},
     "negative_quantity":   {FieldType.INTEGER, FieldType.FLOAT},
@@ -167,13 +167,13 @@ def is_attack_relevant(module: str, key: str, value: Any) -> bool:
     ftype = infer_field_type(key, value)
     allowed = _RELEVANT_TYPES_FOR_MODULE.get(module)
     if allowed is None:
-        return True  # module has no registered gate — don't block it
+        return True  
     return ftype in allowed
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Type-preserving payload generation
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 
 def generate_payloads(ftype: FieldType, original: Any, *, permissive: bool = False) -> list[Any]:
@@ -193,8 +193,8 @@ def generate_payloads(ftype: FieldType, original: Any, *, permissive: bool = Fal
     if ftype == FieldType.INTEGER:
         n = int(original) if isinstance(original, (int, float)) else 1
         out += [-n if n != 0 else -1, 0, -1, n - 1 if n > 1 else -1]
-        out.append(2_147_483_648)          # int32 overflow
-        out.append(9_223_372_036_854_775_808)  # int64 overflow
+        out.append(2_147_483_648)          
+        out.append(9_223_372_036_854_775_808)  
         if permissive:
             out += [None, False, "0"]
 
@@ -205,10 +205,10 @@ def generate_payloads(ftype: FieldType, original: Any, *, permissive: bool = Fal
             out += [None, False, "0.00"]
 
     elif ftype == FieldType.MONETARY_STRING:
-        # Preserve the "it's a string" contract — this is exactly the class
-        # of field the old fixed list broke by sending bare ints/None to a
-        # server that does `Decimal(request["amount"])` and 500s or 400s
-        # on non-string input, telling you nothing.
+
+
+
+
         try:
             n = float(str(original).replace(",", ""))
         except ValueError:
@@ -221,9 +221,9 @@ def generate_payloads(ftype: FieldType, original: Any, *, permissive: bool = Fal
         out = [not bool(original)]
 
     elif ftype == FieldType.ENUM_LIKE:
-        # Enum tampering wants known plausible neighbours, not garbage —
-        # garbage strings just get schema-rejected. Common neighbours by
-        # semantic hint on the value itself.
+
+
+
         v = str(original).lower()
         neighbours = {
             "usd": ["eur", "gbp", "ngn"], "eur": ["usd"], "ngn": ["usd"],
@@ -234,10 +234,10 @@ def generate_payloads(ftype: FieldType, original: Any, *, permissive: bool = Fal
         out = neighbours.get(v, [])
 
     elif ftype == FieldType.IDENTIFIER:
-        # Deliberately NOT handled here — identifier tampering is IDOR's
-        # job (sequential/adjacent ID walking with cross-user comparison),
-        # not the price/quantity module's job. Returning [] enforces that
-        # separation instead of letting a same-named module improvise.
+
+
+
+
         out = []
 
     return out
@@ -263,23 +263,23 @@ def generate_time_payloads(ftype: FieldType, original: Any) -> list[tuple[Any, s
         ]
     if ftype == FieldType.INTEGER:
         return [
-            (4102444800, "far-future-unix"),   # year 2100
+            (4102444800, "far-future-unix"),   
             (-1, "unix-negative"),
         ]
-    # Field matched a time-ish name but isn't a recognizable date/unix
-    # type (e.g. a free-text label) — not this module's business.
+
+
     return []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Per-endpoint validation posture — learned once, shared across modules
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 
 @dataclass
 class ValidationPosture:
-    strict: bool = True          # default to conservative (type-preserving only)
-    calibrated: bool = False     # has a canary probe actually run yet
+    strict: bool = True          
+    calibrated: bool = False     
     weak_validation_finding_emitted: bool = False
 
 
@@ -324,26 +324,26 @@ def build_canary_value(ftype: FieldType) -> Any:
     return {
         FieldType.INTEGER:        "NOT_AN_INTEGER_CANARY",
         FieldType.FLOAT:          "NOT_A_FLOAT_CANARY",
-        FieldType.MONETARY_STRING: 123456789,   # int where a formatted string is expected
+        FieldType.MONETARY_STRING: 123456789,   
         FieldType.BOOLEAN:        "NOT_A_BOOL_CANARY",
         FieldType.ENUM_LIKE:      "NOT_A_VALID_ENUM_CANARY",
     }.get(ftype, "TYPE_CANARY")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Non-API path filter — shared across GET-probe modules
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# Several attack modules (BOPLA field expansion, limit/offset manipulation,
-# soft-delete bypass, HTTP method override, parameter pollution) fire a
-# fixed probe set at every discovered endpoint's URL regardless of whether
-# that URL is even an API route. Discovery layers already do their own
-# static-asset filtering for crawling purposes, but nothing stopped these
-# specific attack modules from independently probing a `.js`/`.css`/image
-# URL that slipped through as a "discovered endpoint" (e.g. found via a
-# Referer header or a sourcemap reference) — those probes can only ever
-# return the same static file byte-for-byte, so every module firing on
-# them is pure wasted request volume with zero chance of signal.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 _NON_API_EXTENSIONS = frozenset({
     ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg",
@@ -371,7 +371,7 @@ def pollution_probe_value(key: str, original: Any) -> Any:
     """
     ftype = infer_field_type(key, original)
     if ftype == FieldType.IDENTIFIER:
-        # Same shape, different value — a real "which one wins" probe.
+
         if _UUID_RE.match(str(original)):
             return "00000000-0000-0000-0000-000000000000"
         return "999999"
@@ -379,4 +379,4 @@ def pollution_probe_value(key: str, original: Any) -> Any:
         return "999999"
     if ftype == FieldType.ENUM_LIKE:
         return "__polluted__"
-    return "999999"  # sane default; still type-mismatched only for free text
+    return "999999"  

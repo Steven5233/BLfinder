@@ -33,9 +33,9 @@ from __future__ import annotations
 
 import threading
 
-# FIX (BUG-2): corrected import path from `core.chain_engine` to
-# `core.analysis.chain_engine`.  The codebase consistently uses the latter;
-# the wrong path caused a silent ImportError that killed all chain rules.
+
+
+
 from core.analysis.chain_engine import (
     CHAIN_RULES,
     ChainRule,
@@ -59,9 +59,9 @@ from core.analysis.chain_engine import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# New capability constants for domain modules
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 CAP_NEGATIVE_AMOUNT    = "CAN_USE_NEGATIVE_AMOUNT"
 CAP_CURRENCY_CONFUSE   = "CAN_CONFUSE_CURRENCY"
@@ -78,9 +78,9 @@ CAP_BYPASS_DEVICE_CAP  = "CAN_BYPASS_DEVICE_LIMIT"
 CAP_ACCESS_RESOURCE    = "CAN_ACCESS_FOREIGN_RESOURCE_STREAMING"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Domain chain rules
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _DOMAIN_CHAIN_RULES: list[ChainRule] = [
 
@@ -364,13 +364,13 @@ _DOMAIN_CHAIN_RULES: list[ChainRule] = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Extended capability classifier
-# ─────────────────────────────────────────────────────────────────────────────
 
-# FIX (BUG-12): guard flag prevents double-patching if extend_capability_classifier()
-# is ever called more than once (e.g. from a concurrent register() call before
-# the lock fix took effect, or during testing).
+
+
+
+
+
+
 _classifier_extended = False
 
 
@@ -446,9 +446,9 @@ def extend_capability_classifier() -> None:
     _classifier_extended = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Domain chain engine
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class DomainChainEngine:
     """
@@ -462,8 +462,8 @@ class DomainChainEngine:
     """
 
     _registered = False
-    # FIX (BUG-11): lock prevents two concurrent callers both reading
-    # _registered=False and registering rules twice.
+
+
     _lock = threading.Lock()
 
     @classmethod

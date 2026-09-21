@@ -54,10 +54,10 @@ from urllib.parse import urlparse, urlunparse
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -80,11 +80,11 @@ from ..layer5_dedup.normaliser import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Version namespace trees to probe
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Version prefixes: generate by replacing the detected version segment
+
+
+
+
 _VERSION_PREFIXES = [
     "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
     "internal", "legacy", "beta", "alpha", "preview",
@@ -94,7 +94,7 @@ _VERSION_PREFIXES = [
     "public", "private", "partner", "b2b", "b2c",
 ]
 
-# Namespace alternatives: /api/v1 → /internal/v1, /service/v1, …
+
 _NAMESPACE_ALTS = [
     "api", "rest", "service", "services",
     "internal", "private", "backend",
@@ -102,7 +102,7 @@ _NAMESPACE_ALTS = [
     "partner", "b2b", "external",
 ]
 
-# Debug / introspection paths to always probe (appended to base URL)
+
 _DEBUG_PROBE_PATHS = [
     "/_debug",
     "/__debug__",
@@ -118,23 +118,23 @@ _DEBUG_PROBE_PATHS = [
     "/debug",
     "/debug/info",
     "/debug/vars",
-    "/debug/pprof",          # Go pprof
+    "/debug/pprof",          
     "/debug/routes",
     "/metrics",
-    "/actuator",             # Spring Boot
+    "/actuator",             
     "/actuator/health",
     "/actuator/info",
     "/actuator/env",
     "/actuator/mappings",
     "/actuator/beans",
-    "/jolokia",              # Java JMX
+    "/jolokia",              
     "/.well-known/health",
     "/management",
     "/management/health",
     "/management/info",
 ]
 
-# Tag inference map
+
 _TAG_KEYWORDS: dict[str, list[str]] = {
     "admin":    ["admin", "manage", "internal", "staff", "backoffice"],
     "payment":  ["payment", "billing", "transaction", "wallet", "charge"],
@@ -162,9 +162,9 @@ def _priority(tags: list[str], auth_bypass: bool = False) -> int:
     return 3
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# URL manipulation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _RE_VERSION_SEG = re.compile(
     r'(?<![a-z])v\d+(?!\d)',
@@ -222,9 +222,9 @@ def _build_url(base: str, path: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Response analysis helpers
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _body_hash(body: str) -> str:
     return hashlib.md5(body[:1000].encode()).hexdigest()
@@ -252,10 +252,10 @@ def _response_looks_real(
         return False
     if len(body) < min_size:
         return False
-    # Soft-404 / wildcard catch-all check
+
     if canary_hash and _body_hash(body) == canary_hash:
         return False
-    # Reject pure HTML error pages (unless body also has JSON structure)
+
     if _is_html(content_type, body):
         stripped = body.strip()
         if not (stripped.startswith("{") or stripped.startswith("[")):
@@ -263,9 +263,9 @@ def _response_looks_real(
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main class
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class VersionPermuter:
     """
@@ -302,9 +302,9 @@ class VersionPermuter:
 
         seen_keys: set[str] = set()
 
-        # ── Step 1: Establish per-prefix canary fingerprints ──────────────────
-        # We probe one random non-existent path under each version prefix so
-        # we can detect "this version prefix returns 200 for everything" (catch-all).
+
+
+
         canary_cache: dict[str, Optional[str]] = {}
 
         async def get_canary(prefix_path: str) -> Optional[str]:
@@ -324,7 +324,7 @@ class VersionPermuter:
                 ) as resp:
                     body = await resp.text(errors="replace")
                     if resp.status in (200,):
-                        # Server returns 200 for anything under this prefix — unreliable
+
                         canary_cache[prefix_path] = _body_hash(body)
                     else:
                         canary_cache[prefix_path] = None
@@ -333,14 +333,14 @@ class VersionPermuter:
                 canary_cache[prefix_path] = None
             return canary_cache[prefix_path]
 
-        # ── Step 2: Probe debug / introspection paths ─────────────────────────
+
         async def probe_debug(path: str) -> Optional[DiscoveredEndpoint]:
             full_url = base + path
             key = dedup_key(full_url, "GET")
             if key in seen_keys:
                 return None
 
-            # Check canary for this prefix
+
             prefix = "/" + path.lstrip("/").split("/")[0]
             canary_hash = await get_canary(prefix)
 
@@ -389,10 +389,10 @@ class VersionPermuter:
             if ep:
                 result.endpoints.append(ep)
 
-        # ── Step 3: Version-permute known endpoints ───────────────────────────
+
         source_paths = list(known_endpoints or [])
 
-        # Also try base-level version paths even without known endpoints
+
         base_resource_paths = [
             "/users", "/orders", "/payments", "/accounts",
             "/admin", "/profile", "/me", "/products",
@@ -400,7 +400,7 @@ class VersionPermuter:
         ]
 
         for resource in base_resource_paths:
-            for ver in _VERSION_PREFIXES[:6]:   # depth-limited to top 6
+            for ver in _VERSION_PREFIXES[:6]:   
                 candidate = f"/{ver}{resource}"
                 if candidate not in source_paths:
                     source_paths.append(candidate)
@@ -417,12 +417,12 @@ class VersionPermuter:
             if key in seen_keys:
                 return None
 
-            # Get canary for the new version prefix
+
             prefix_seg = new_path.lstrip("/").split("/")[0]
             canary_hash = await get_canary("/" + prefix_seg)
 
             try:
-                # Probe WITH auth
+
                 async with session.get(
                     full_url, headers=authed_headers,
                     allow_redirects=True,
@@ -437,8 +437,8 @@ class VersionPermuter:
                                             canary_hash):
                     return None
 
-                # Key signal: probe WITHOUT auth
-                # If the ORIGINAL required auth but the NEW version doesn't → finding
+
+
                 auth_bypass = False
                 if status_auth == 200 and base_status in (401, 403, 0):
                     async with session.get(
@@ -457,17 +457,17 @@ class VersionPermuter:
                     ):
                         auth_bypass = True
 
-                # Determine confidence based on what we found
+
                 if auth_bypass:
                     confidence = 0.90
                 elif status_auth == 200:
-                    # Did it return more data than the original? (richer old API)
+
                     if base_body and len(body_auth) > len(base_body) * 1.2:
                         confidence = 0.80
                     else:
                         confidence = 0.65
                 elif status_auth in (401, 403):
-                    # Endpoint exists but requires auth — still useful for scanner
+
                     confidence = 0.60
                 else:
                     return None
@@ -503,17 +503,17 @@ class VersionPermuter:
                     result.errors.append(f"version probe {full_url}: {e}")
                 return None
 
-        # Build all version permutations from source paths
+
         probe_tasks = []
 
-        for path in source_paths[:50]:   # cap to avoid runaway on large apps
+        for path in source_paths[:50]:   
             parsed_path = urlparse(path).path if "://" in path else path
             version_info = _detect_version_in_path(parsed_path)
 
             if version_info:
                 seg_idx, current_ver = version_info
 
-                # Numeric downgrades (e.g. v3 → v1, v2)
+
                 ver_num = re.search(r'\d+', current_ver)
                 if ver_num:
                     n = int(ver_num.group())
@@ -525,7 +525,7 @@ class VersionPermuter:
                             f"downgrade {current_ver}→{new_ver}",
                         ))
 
-                # Non-versioned shadow: strip the version segment
+
                 stripped = _strip_version(parsed_path, current_ver)
                 if stripped and stripped != parsed_path:
                     probe_tasks.append((
@@ -533,13 +533,13 @@ class VersionPermuter:
                         f"strip version ({current_ver})",
                     ))
 
-                # Namespace alternatives
+
                 parts = parsed_path.lstrip("/").split("/")
                 for ns in _NAMESPACE_ALTS:
                     if parts and parts[0].lower() == ns.lower():
-                        continue    # already in this namespace
+                        continue    
                     new_path = _prepend_namespace(base, parsed_path, ns)
-                    # Trim to path only
+
                     new_path_only = urlparse(new_path).path
                     probe_tasks.append((
                         parsed_path, new_path_only,
@@ -547,7 +547,7 @@ class VersionPermuter:
                     ))
 
             else:
-                # No version detected — try prepending common versions
+
                 for ver in config.include_versions[:4]:
                     new_path = f"/{ver}{parsed_path}"
                     probe_tasks.append((
@@ -555,7 +555,7 @@ class VersionPermuter:
                         f"inject version {ver}",
                     ))
 
-        # Deduplicate probe tasks
+
         seen_tasks: set[str] = set()
         unique_tasks = []
         for orig, new, label in probe_tasks:
@@ -564,7 +564,7 @@ class VersionPermuter:
                 seen_tasks.add(task_key)
                 unique_tasks.append((orig, new, label))
 
-        # Execute in batches (Termux: keep concurrent I/O low)
+
         batch_size = 8
         for i in range(0, len(unique_tasks), batch_size):
             batch = unique_tasks[i:i + batch_size]

@@ -34,10 +34,10 @@ from urllib.parse import urljoin, urlparse
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -57,7 +57,7 @@ from ..models import (
 )
 from ..layer5_dedup.normaliser import normalise_url, extract_id_params
 
-# ── Well-known spec paths to probe ────────────────────────────────────────────
+
 SPEC_PROBE_PATHS = [
     "/swagger.json",
     "/swagger.yaml",
@@ -94,10 +94,10 @@ SPEC_PROBE_PATHS = [
     "/internal/openapi.json",
 ]
 
-# HTTP methods that carry a request body
+
 BODY_METHODS = {"POST", "PUT", "PATCH"}
 
-# Type → example value mapping for body generation
+
 TYPE_EXAMPLES: dict[str, Any] = {
     "integer": 1,
     "number":  1.0,
@@ -116,7 +116,7 @@ def _schema_to_example(schema: dict, depth: int = 0) -> Any:
     if depth > 4 or not isinstance(schema, dict):
         return None
 
-    # Use provided example/default first (most realistic)
+
     if "example" in schema:
         return schema["example"]
     if "default" in schema:
@@ -143,7 +143,7 @@ def _schema_to_example(schema: dict, depth: int = 0) -> Any:
     if s_type == "boolean":
         return True
     if s_type == "string":
-        # Use format hints
+
         if fmt == "email":
             return "user@example.com"
         if fmt == "date":
@@ -156,13 +156,13 @@ def _schema_to_example(schema: dict, depth: int = 0) -> Any:
             return "https://example.com"
         if fmt == "password":
             return "Password123!"
-        # Enum: pick first value
+
         enum = schema.get("enum", [])
         if enum:
             return enum[0]
         return "test"
 
-    # oneOf / anyOf / allOf — take the first branch
+
     for key in ("oneOf", "anyOf", "allOf"):
         branches = schema.get(key, [])
         if branches:
@@ -209,7 +209,7 @@ def _inline_refs(schema: dict, full_spec: dict, depth: int = 0) -> dict:
     return result
 
 
-# ── Tag detection ─────────────────────────────────────────────────────────────
+
 _TAG_KEYWORDS: dict[str, list[str]] = {
     "payment":  ["payment", "pay", "billing", "invoice", "charge", "transaction",
                  "refund", "wallet", "balance", "payout", "stripe", "card"],
@@ -231,7 +231,7 @@ def _infer_tags(path: str, summary: str = "", tags_from_spec: list = None) -> li
     for tag, keywords in _TAG_KEYWORDS.items():
         if any(kw in combined for kw in keywords):
             found.append(tag)
-    # Also include spec-provided tags (lowercased)
+
     for t in (tags_from_spec or []):
         lt = t.lower()
         if lt not in found:
@@ -247,7 +247,7 @@ def _priority_from_tags(tags: list[str]) -> int:
     return 3
 
 
-# ── YAML shim (stdlib-safe fallback) ─────────────────────────────────────────
+
 def _try_parse_yaml(text: str) -> Optional[dict]:
     """
     Attempt to parse YAML. On Termux without PyYAML, falls back to
@@ -255,20 +255,20 @@ def _try_parse_yaml(text: str) -> Optional[dict]:
     machine-generated OpenAPI YAML files that are almost-JSON).
     """
     try:
-        import yaml  # type: ignore
+        import yaml  
         return yaml.safe_load(text)
     except ImportError:
         pass
-    # Minimal YAML→JSON heuristic (handles simple flat YAML specs)
+
     try:
-        # Many OpenAPI YAML files are valid JSON with extra whitespace
+
         return json.loads(text)
     except json.JSONDecodeError:
         pass
     return None
 
 
-# ── Spec parsers ──────────────────────────────────────────────────────────────
+
 
 def parse_openapi3(spec: dict, base_url: str) -> list[DiscoveredEndpoint]:
     """Parse OpenAPI 3.x spec."""
@@ -281,7 +281,7 @@ def parse_openapi3(spec: dict, base_url: str) -> list[DiscoveredEndpoint]:
     for path, path_item in spec.get("paths", {}).items():
         if not isinstance(path_item, dict):
             continue
-        # Shared parameters at path level
+
         path_params = path_item.get("parameters", [])
 
         for method, operation in path_item.items():
@@ -294,7 +294,7 @@ def parse_openapi3(spec: dict, base_url: str) -> list[DiscoveredEndpoint]:
             body_dict: dict = {}
             params:    dict = {}
 
-            # Request body
+
             if method.upper() in BODY_METHODS:
                 rb     = operation.get("requestBody", {})
                 content = rb.get("content", {})
@@ -308,7 +308,7 @@ def parse_openapi3(spec: dict, base_url: str) -> list[DiscoveredEndpoint]:
                             body_dict = example
                         break
 
-            # Parameters → query params
+
             all_params = path_params + operation.get("parameters", [])
             for param in all_params:
                 if not isinstance(param, dict):
@@ -417,7 +417,7 @@ def parse_postman(collection: dict, base_url: str) -> list[DiscoveredEndpoint]:
             full_url = url_obj
         else:
             raw = url_obj.get("raw", "")
-            # Replace Postman variables {{baseUrl}} with the target
+
             raw = re.sub(r'\{\{[^}]+\}\}', base_url.rstrip("/"), raw)
             full_url = raw
 
@@ -466,7 +466,7 @@ def parse_insomnia(export: dict, base_url: str) -> list[DiscoveredEndpoint]:
             continue
         method   = res.get("method", "GET").upper()
         full_url = res.get("url", "")
-        # Replace Insomnia environment vars {{ base_url }}
+
         full_url = re.sub(r'\{\{[^}]+\}\}', base_url.rstrip("/"), full_url)
         if not full_url.startswith("http"):
             continue
@@ -509,7 +509,7 @@ def detect_and_parse(body: str, base_url: str) -> list[DiscoveredEndpoint]:
     if not body or len(body) < 20:
         return []
 
-    # Try JSON first
+
     spec: Optional[dict] = None
     try:
         spec = json.loads(body)
@@ -519,33 +519,33 @@ def detect_and_parse(body: str, base_url: str) -> list[DiscoveredEndpoint]:
     if not isinstance(spec, dict):
         return []
 
-    # Postman collection
+
     if "info" in spec and "item" in spec:
         info = spec.get("info", {})
         if "postman" in str(info.get("schema", "")).lower():
             return parse_postman(spec, base_url)
 
-    # Insomnia export
+
     if spec.get("_type") == "export" and "resources" in spec:
         return parse_insomnia(spec, base_url)
 
-    # OpenAPI 3.x
+
     openapi_ver = spec.get("openapi", "")
     if isinstance(openapi_ver, str) and openapi_ver.startswith("3"):
         return parse_openapi3(spec, base_url)
 
-    # Swagger 2.x
+
     if spec.get("swagger", "").startswith("2") or "basePath" in spec:
         return parse_swagger2(spec, base_url)
 
-    # Partial RAML / API Blueprint heuristic
+
     if "paths" in spec:
         return parse_openapi3(spec, base_url)
 
     return []
 
 
-# ── Main async runner ─────────────────────────────────────────────────────────
+
 
 class OpenAPIParser:
     """
@@ -559,7 +559,7 @@ class OpenAPIParser:
     async def run(
         self,
         target_url: str,
-        session: Any,               # aiohttp.ClientSession
+        session: Any,               
         config: "DiscoveryConfig",
         auth_token: str = "",
     ) -> LayerResult:
@@ -588,7 +588,7 @@ class OpenAPIParser:
                 ) as resp:
                     if resp.status == 200:
                         ct = resp.headers.get("Content-Type", "")
-                        # Reject HTML pages (swagger-ui HTML, not the spec)
+
                         text = await resp.text(errors="replace")
                         if "<html" in text[:200].lower():
                             return None
@@ -598,7 +598,7 @@ class OpenAPIParser:
                     result.errors.append(f"fetch {url}: {e}")
             return None
 
-        # Probe all paths concurrently (batched to avoid overwhelming the target)
+
         batch_size = 10
         for i in range(0, len(to_probe), batch_size):
             batch   = to_probe[i:i + batch_size]

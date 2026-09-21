@@ -36,9 +36,9 @@ import hashlib
 from typing import Any
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Finding dict → Finding object converter
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _dict_to_finding(d: dict, scanner) -> Any:
     """
@@ -82,7 +82,7 @@ def _dict_to_finding(d: dict, scanner) -> Any:
 
         pkg = d.get("evidence_package")
         if pkg is not None:
-            f.evidence_package = pkg  # type: ignore[attr-defined]
+            f.evidence_package = pkg  
             if getattr(pkg, "summary", None):
                 f.evidence = pkg.summary
 
@@ -184,9 +184,9 @@ def _attach_poc(finding: Any, source_dict: dict, scanner) -> None:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Probe target URL for platform fingerprinting data
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _probe_target(scanner, target_url: str) -> tuple[dict, str, list[str]]:
     """
@@ -204,9 +204,9 @@ async def _probe_target(scanner, target_url: str) -> tuple[dict, str, list[str]]
         return {}, "", []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main integration patch
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def apply_integration() -> bool:
     """
@@ -276,9 +276,9 @@ def apply_integration() -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Step runners
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _run_auth_diff(scanner, endpoints: list[dict]) -> list[dict]:
     try:
@@ -341,9 +341,9 @@ async def _run_chain_engine(
         return []
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Domain chain registration
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _register_domain_chains() -> None:
     try:
@@ -355,9 +355,9 @@ def _register_domain_chains() -> None:
         print(f"  [domain_chains] registration error: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Finding object → dict (for passing Finding objects into chain engine)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _finding_to_dict(f: Any) -> dict:
     """Convert a Finding object to the dict format chain_engine expects."""
@@ -388,9 +388,9 @@ def _finding_to_dict(f: Any) -> dict:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Self-test
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 if __name__ == "__main__":
     import json

@@ -36,11 +36,11 @@ except ImportError:
 class WSEndpoint:
     """A discovered WebSocket endpoint."""
     url:           str
-    protocol:      str = "wss"    # ws or wss
-    auth_method:   str = "header" # header | cookie | query_param | none
-    message_format: str = "json"  # json | text | binary
+    protocol:      str = "wss"    
+    auth_method:   str = "header" 
+    message_format: str = "json"  
     requires_auth:  bool = True
-    discovered_from: str = ""     # URL where WS was found
+    discovered_from: str = ""     
 
 
 @dataclass
@@ -82,7 +82,7 @@ class WebSocketScanner:
         self._new_ev    = scanner._new_evidence
         self._attach    = scanner._attach
 
-    # ── Discovery ─────────────────────────────────────────────────────────────
+
 
     async def discover(self, target_url: str) -> list[WSEndpoint]:
         """
@@ -92,7 +92,7 @@ class WebSocketScanner:
         parsed = urlparse(target_url)
         base   = f"{parsed.scheme}://{parsed.netloc}"
 
-        # Fetch the page and look for WS URLs in source
+
         _, _, html, _ = await self._request("GET", target_url)
         if html:
             ws_patterns = [
@@ -119,7 +119,7 @@ class WebSocketScanner:
                             discovered_from=target_url,
                         ))
 
-        # Probe common paths
+
         scheme = "wss" if parsed.scheme == "https" else "ws"
         for path in self._WS_PATHS:
             ws_url = f"{scheme}://{parsed.netloc}{path}"
@@ -136,18 +136,18 @@ class WebSocketScanner:
 
         return found
 
-    # ── Main scan ─────────────────────────────────────────────────────────────
+
 
     async def scan(self, endpoint: WSEndpoint) -> WSTestResult:
         """Run all WebSocket tests against a single endpoint."""
         result = WSTestResult(endpoint=endpoint.url)
 
-        # Confirm connection first
+
         result.connection_success = await self._probe_ws_connection(endpoint.url)
         if not result.connection_success:
             return result
 
-        # Run checks
+
         checks = await asyncio.gather(
             self._test_auth_persistence(endpoint, result),
             self._test_subscription_idor(endpoint, result),
@@ -163,7 +163,7 @@ class WebSocketScanner:
 
         return result
 
-    # ── Tests ──────────────────────────────────────────────────────────────────
+
 
     async def _test_auth_persistence(
         self, ep: WSEndpoint, result: WSTestResult
@@ -187,18 +187,18 @@ class WebSocketScanner:
                     ep.url, headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as ws:
-                    # Send a valid ping
+
                     await ws.send_json({"type": "ping"})
                     try:
                         msg = await asyncio.wait_for(ws.receive(), timeout=3)
                     except asyncio.TimeoutError:
                         msg = None
 
-                    # Now try sending without auth (simulate expired token)
-                    # by opening a new connection without auth header
+
+
                     pass
 
-            # Open second connection without Authorization
+
             async with aiohttp.ClientSession() as session:
                 try:
                     async with session.ws_connect(
@@ -241,7 +241,7 @@ class WebSocketScanner:
                         except asyncio.TimeoutError:
                             pass
                 except Exception:
-                    pass  # Connection refused = auth working correctly
+                    pass  
 
         except Exception as e:
             if self._config.verbose:
@@ -483,9 +483,9 @@ class WebSocketScanner:
         if not _HAS_AIOHTTP:
             return
         if ep.protocol != "wss":
-            return  # Already unencrypted
+            return  
 
-        # Build ws:// version
+
         ws_url = ep.url.replace("wss://", "ws://", 1)
         if ws_url == ep.url:
             return
@@ -535,9 +535,9 @@ class WebSocketScanner:
                             )
                             result.findings.append(f)
         except Exception:
-            pass  # Connection refused = not vulnerable
+            pass  
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+
 
     async def _probe_ws_connection(self, url: str) -> bool:
         """Quick check if a WebSocket URL accepts connections."""
@@ -554,7 +554,7 @@ class WebSocketScanner:
             return False
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _is_auth_error(body: str) -> bool:
     b = body.lower()

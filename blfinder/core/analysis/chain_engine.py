@@ -128,38 +128,38 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Capability taxonomy
-# ─────────────────────────────────────────────────────────────────────────────
-
-# What an attacker CAN DO with each capability
-CAP_ELEVATE_PRIVILEGE    = "CAN_ELEVATE_PRIVILEGE"      # mass assignment, JWT forge
-CAP_ACCESS_FOREIGN       = "CAN_ACCESS_FOREIGN_RESOURCE" # IDOR, BOLA
-CAP_EXECUTE_TWICE        = "CAN_EXECUTE_TWICE"           # race condition
-CAP_FORGE_IDENTITY       = "CAN_FORGE_IDENTITY"          # JWT alg:none, token theft
-CAP_BYPASS_WORKFLOW      = "CAN_BYPASS_WORKFLOW"         # workflow bypass, MFA skip
-CAP_DUMP_RECORDS         = "CAN_DUMP_RECORDS"            # limit/offset, BOPLA
-CAP_ACCESS_ADMIN         = "CAN_ACCESS_ADMIN"            # BFLA, privilege escalation
-CAP_HAS_CREDENTIAL       = "HAS_LEAKED_CREDENTIAL"       # JS secret, auth diff leak
-CAP_MANIPULATE_PRICE     = "CAN_MANIPULATE_PRICE"        # price manipulation
-CAP_NEGATIVE_VALUE       = "CAN_USE_NEGATIVE_VALUE"      # negative quantity
-CAP_STACK_COUPONS        = "CAN_STACK_COUPONS"           # coupon abuse
-CAP_FORCE_STATE          = "CAN_FORCE_STATE"             # state machine abuse
-CAP_HIDDEN_PATH          = "HAS_HIDDEN_PATH"             # hidden endpoint hunter
-CAP_POLLUTE_PARAM        = "CAN_POLLUTE_PARAM"           # parameter pollution
-CAP_EXPOSE_INTERNALS     = "CAN_EXPOSE_INTERNALS"        # BOPLA, auth diff
-CAP_UNAUTH_DATA          = "HAS_UNAUTH_DATA"             # auth diff leaks
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data models
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
+CAP_ELEVATE_PRIVILEGE    = "CAN_ELEVATE_PRIVILEGE"      
+CAP_ACCESS_FOREIGN       = "CAN_ACCESS_FOREIGN_RESOURCE" 
+CAP_EXECUTE_TWICE        = "CAN_EXECUTE_TWICE"           
+CAP_FORGE_IDENTITY       = "CAN_FORGE_IDENTITY"          
+CAP_BYPASS_WORKFLOW      = "CAN_BYPASS_WORKFLOW"         
+CAP_DUMP_RECORDS         = "CAN_DUMP_RECORDS"            
+CAP_ACCESS_ADMIN         = "CAN_ACCESS_ADMIN"            
+CAP_HAS_CREDENTIAL       = "HAS_LEAKED_CREDENTIAL"       
+CAP_MANIPULATE_PRICE     = "CAN_MANIPULATE_PRICE"        
+CAP_NEGATIVE_VALUE       = "CAN_USE_NEGATIVE_VALUE"      
+CAP_STACK_COUPONS        = "CAN_STACK_COUPONS"           
+CAP_FORCE_STATE          = "CAN_FORCE_STATE"             
+CAP_HIDDEN_PATH          = "HAS_HIDDEN_PATH"             
+CAP_POLLUTE_PARAM        = "CAN_POLLUTE_PARAM"           
+CAP_EXPOSE_INTERNALS     = "CAN_EXPOSE_INTERNALS"        
+CAP_UNAUTH_DATA          = "HAS_UNAUTH_DATA"             
+
+
+
+
+
 
 @dataclass
 class CapabilityNode:
     """A single finding annotated with its capabilities."""
-    finding:      dict                      # original finding dict
-    capabilities: set[str]                  # what this finding enables
+    finding:      dict                      
+    capabilities: set[str]                  
     endpoint:     str
     category:     str
     severity:     str
@@ -172,13 +172,13 @@ class ChainRule:
     """A rule defining one type of exploit chain."""
     chain_id:              str
     name:                  str
-    required_caps:         list[str]        # ALL must be present
-    optional_caps:         list[str]        # ANY add bonus score
+    required_caps:         list[str]        
+    optional_caps:         list[str]        
     severity:              str
     cvss:                  float
     cwe:                   str
     owasp:                 str
-    narrative_template:    str              # {step1}, {step2}, {endpoint} substitutions
+    narrative_template:    str              
     impact_template:       str
     recommendation:        str
     requires_same_endpoint: bool = False
@@ -191,15 +191,15 @@ class ChainMatch:
     contributing_nodes:  list[CapabilityNode]
     required_nodes:      list[CapabilityNode]
     optional_nodes:      list[CapabilityNode]
-    exploitability:      int                  # 0-100
+    exploitability:      int                  
     verified:            bool = False
     verification_evidence: str = ""
     endpoints_involved:  list[str] = field(default_factory=list)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Chain rules library
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 CHAIN_RULES: list[ChainRule] = [
 
@@ -545,9 +545,9 @@ CHAIN_RULES: list[ChainRule] = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Capability classifier
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class CapabilityClassifier:
     """
@@ -563,43 +563,43 @@ class CapabilityClassifier:
         severity: str      = (finding.get("severity") or "").upper()
         meta:     dict     = finding.get("_auth_diff") or finding.get("_meta") or {}
 
-        # ── Mass assignment → can elevate privilege ───────────────────────────
+
         if "mass assignment" in category or "mass assignment" in title:
             caps.add(CAP_ELEVATE_PRIVILEGE)
-            # Check if it sets a premium/paid flag specifically
+
             param = (finding.get("parameter") or "").lower()
             if any(k in param for k in ["premium", "plan", "subscription", "tier"]):
                 caps.add(CAP_EXPOSE_INTERNALS)
 
-        # ── IDOR/BOLA → can access foreign resource ───────────────────────────
+
         if any(k in category for k in ["idor", "bola", "object level"]):
             caps.add(CAP_ACCESS_FOREIGN)
 
-        # ── Race condition → can execute twice ───────────────────────────────
+
         if "race condition" in category or "race condition" in title:
             caps.add(CAP_EXECUTE_TWICE)
 
-        # ── JWT → can forge identity ──────────────────────────────────────────
+
         if "jwt" in category or "jwt" in title or "alg:none" in title:
             caps.add(CAP_FORGE_IDENTITY)
-            caps.add(CAP_ACCESS_FOREIGN)  # can access any user's account
+            caps.add(CAP_ACCESS_FOREIGN)  
 
-        # ── Workflow/MFA bypass → can bypass workflow ─────────────────────────
+
         if any(k in category for k in ["workflow", "mfa", "bypass"]):
             caps.add(CAP_BYPASS_WORKFLOW)
 
-        # ── BOPLA / hidden param / limit-offset → can dump/expose ────────────
+
         if any(k in category for k in ["bopla", "property", "pagination", "limit"]):
             caps.add(CAP_DUMP_RECORDS)
             caps.add(CAP_EXPOSE_INTERNALS)
 
-        # ── Privilege escalation / BFLA → admin access ───────────────────────
+
         if any(k in category for k in ["privilege", "function level", "bfla"]):
             caps.add(CAP_ACCESS_ADMIN)
             if severity == "CRITICAL":
                 caps.add(CAP_ELEVATE_PRIVILEGE)
 
-        # ── JS secrets / auth diff credential leak → has credential ──────────
+
         if "javascript" in category or "secret" in title or "credential" in title:
             caps.add(CAP_HAS_CREDENTIAL)
 
@@ -609,25 +609,25 @@ class CapabilityClassifier:
                 caps.add(CAP_HAS_CREDENTIAL)
             caps.add(CAP_UNAUTH_DATA)
             if field_cat in ("IDENTIFIER",):
-                caps.add(CAP_ACCESS_FOREIGN)  # leaked IDs → IDOR potential
+                caps.add(CAP_ACCESS_FOREIGN)  
 
-        # ── Price manipulation → can manipulate price ─────────────────────────
+
         if "price manipulation" in category or "price" in title:
             caps.add(CAP_MANIPULATE_PRICE)
 
-        # ── Negative quantity → can use negative value ────────────────────────
+
         if "negative" in category or "negative" in title:
             caps.add(CAP_NEGATIVE_VALUE)
 
-        # ── Coupon abuse → can stack coupons ─────────────────────────────────
+
         if "coupon" in category or "coupon" in title:
             caps.add(CAP_STACK_COUPONS)
 
-        # ── State machine → can force state ──────────────────────────────────
+
         if "state machine" in category or "state" in title:
             caps.add(CAP_FORCE_STATE)
 
-        # ── Hidden endpoint (from hunter) → has privileged path ──────────────
+
         if meta.get("hunter") or "hidden" in category or "internal" in title:
             caps.add(CAP_HIDDEN_PATH)
             if any(k in (finding.get("endpoint") or "") for k in [
@@ -635,11 +635,11 @@ class CapabilityClassifier:
             ]):
                 caps.add(CAP_ACCESS_ADMIN)
 
-        # ── Parameter pollution → can pollute params ──────────────────────────
+
         if "parameter pollution" in category or "pollution" in title:
             caps.add(CAP_POLLUTE_PARAM)
 
-        # ── Auth diff unauth data → has unauth data ───────────────────────────
+
         if "auth diff" in category:
             caps.add(CAP_UNAUTH_DATA)
             caps.add(CAP_EXPOSE_INTERNALS)
@@ -647,9 +647,9 @@ class CapabilityClassifier:
         return caps
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Chain detector
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class ChainDetector:
     """
@@ -667,7 +667,7 @@ class ChainDetector:
         if not findings:
             return []
 
-        # Build capability nodes
+
         nodes: list[CapabilityNode] = []
         for f in findings:
             caps = self._classifier.classify(f)
@@ -685,29 +685,29 @@ class ChainDetector:
         if not nodes:
             return []
 
-        # Build global capability → node map
+
         cap_map: dict[str, list[CapabilityNode]] = {}
         for node in nodes:
             for cap in node.capabilities:
                 cap_map.setdefault(cap, []).append(node)
 
-        # Match each chain rule
+
         matches: list[ChainMatch] = []
         seen_chains: set[str] = set()
 
         for rule in CHAIN_RULES:
-            # Check all required capabilities are present
+
             if not all(cap in cap_map for cap in rule.required_caps):
                 continue
 
-            # Collect required nodes (one per required cap, best confidence)
+
             required_nodes: list[CapabilityNode] = []
             for cap in rule.required_caps:
                 best = max(cap_map[cap], key=lambda n: n.confidence + (50 if n.confirmed else 0))
                 if best not in required_nodes:
                     required_nodes.append(best)
 
-            # Collect optional nodes
+
             optional_nodes: list[CapabilityNode] = []
             for cap in rule.optional_caps:
                 if cap in cap_map:
@@ -715,7 +715,7 @@ class ChainDetector:
                     if best not in required_nodes and best not in optional_nodes:
                         optional_nodes.append(best)
 
-            # Dedup chain by frozenset of contributing endpoint+category combos
+
             all_contributing = required_nodes + optional_nodes
             chain_key = rule.chain_id + "|" + "|".join(
                 sorted(f"{n.endpoint}:{n.category}" for n in required_nodes)
@@ -724,10 +724,10 @@ class ChainDetector:
                 continue
             seen_chains.add(chain_key)
 
-            # Score exploitability
+
             score = self._score(rule, required_nodes, optional_nodes)
 
-            # Only report chains with meaningful exploitability
+
             if score < 25:
                 continue
 
@@ -749,26 +749,26 @@ class ChainDetector:
         required_nodes: list[CapabilityNode],
         optional_nodes: list[CapabilityNode],
     ) -> int:
-        score = 30  # base score for matching required caps
+        score = 30  
 
-        # Confidence of required findings
+
         if required_nodes:
             avg_conf = sum(n.confidence for n in required_nodes) / len(required_nodes)
-            score += int(avg_conf * 0.3)   # up to +30
+            score += int(avg_conf * 0.3)   
 
-        # Confirmation bonus
+
         confirmed_count = sum(1 for n in required_nodes if n.confirmed)
-        score += confirmed_count * 10       # up to +20 (2 confirmed)
+        score += confirmed_count * 10       
 
-        # Optional capabilities present
-        score += len(optional_nodes) * 5    # up to +20
 
-        # Same endpoint increases confidence
+        score += len(optional_nodes) * 5    
+
+
         endpoints = {n.endpoint for n in required_nodes}
         if len(endpoints) == 1 and "" not in endpoints:
-            score += 10   # all required findings on same endpoint
+            score += 10   
 
-        # Severity weight
+
         sev_bonus = {"CRITICAL": 10, "HIGH": 6, "MEDIUM": 3, "LOW": 0}
         for n in required_nodes:
             score += sev_bonus.get(n.severity, 0)
@@ -776,9 +776,9 @@ class ChainDetector:
         return min(100, score)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Active chain verifier
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class ChainVerifier:
     """
@@ -797,7 +797,7 @@ class ChainVerifier:
         match.verification_evidence in place. Returns the updated match.
         """
         if match.exploitability < 60:
-            return match  # too low confidence to bother verifying
+            return match  
 
         if len(match.required_nodes) < 2:
             return match
@@ -811,7 +811,7 @@ class ChainVerifier:
                 return await self._verify_jwt_chain(match)
             elif chain_id == "CHAIN_6":
                 return await self._verify_idor_dump_chain(match)
-            # Other chains: mark as structurally verified (both findings confirmed)
+
             elif all(n.confirmed for n in match.required_nodes):
                 match.verified = True
                 match.verification_evidence = (
@@ -842,7 +842,7 @@ class ChainVerifier:
         if not mass_assign_node or not admin_node:
             return match
 
-        # Step 1: Execute mass assignment
+
         req      = mass_assign_node.finding.get("request", {})
         method   = req.get("method", "PUT")
         url      = req.get("url", mass_assign_node.endpoint)
@@ -857,7 +857,7 @@ class ChainVerifier:
         if s1 not in (200, 201, 204):
             return match
 
-        # Step 2: Hit admin endpoint
+
         admin_url = admin_node.endpoint
         s2, _, b2, _ = await self._scanner._request(
             "GET", admin_url,
@@ -924,9 +924,9 @@ class ChainVerifier:
         return match
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Finding generator
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class ChainFindingGenerator:
     """
@@ -943,7 +943,7 @@ class ChainFindingGenerator:
     def _to_finding(self, match: ChainMatch) -> dict:
         rule = match.rule
 
-        # Build step descriptions from contributing nodes
+
         steps = []
         for i, node in enumerate(match.required_nodes[:3], 1):
             f = node.finding
@@ -954,7 +954,7 @@ class ChainFindingGenerator:
 
         steps_text = "\n".join(steps)
 
-        # Format narrative
+
         step1 = match.required_nodes[0] if match.required_nodes else None
         step2 = match.required_nodes[1] if len(match.required_nodes) > 1 else step1
 
@@ -966,7 +966,7 @@ class ChainFindingGenerator:
             endpoint=match.endpoints_involved[0] if match.endpoints_involved else "?",
         )
 
-        # Evidence block
+
         evidence_parts = [
             f"Chain: {rule.name}",
             f"Exploitability: {match.exploitability}/100",
@@ -1030,9 +1030,9 @@ class ChainFindingGenerator:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main engine class (public API)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class ChainEngine:
     """
@@ -1059,11 +1059,11 @@ class ChainEngine:
         Returns new Finding-compatible dicts for each chain detected.
         """
         if len(findings) < 2:
-            return []  # need at least 2 findings to form a chain
+            return []  
 
         print(f"  [chain_engine] analyzing {len(findings)} findings for exploit chains...")
 
-        # Detect chains
+
         matches = self._detector.detect(findings)
         if not matches:
             print("  [chain_engine] no exploit chains detected")
@@ -1071,7 +1071,7 @@ class ChainEngine:
 
         print(f"  [chain_engine] {len(matches)} potential chains found — verifying...")
 
-        # Verify high-confidence chains
+
         verify_tasks = [
             self._verifier.verify(m)
             for m in matches
@@ -1083,7 +1083,7 @@ class ChainEngine:
                 if isinstance(result, ChainMatch):
                     matches[i] = result
 
-        # Generate findings
+
         chain_findings = self._generator.generate(matches)
 
         verified_count = sum(1 for m in matches if m.verified)

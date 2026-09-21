@@ -47,18 +47,18 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs, urlencode
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Path-pattern parameter dictionary
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -68,7 +68,7 @@ def _blf_dbg(where: str, err: BaseException) -> None:
 
 _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
 
-    # ── Betting / Gaming ──────────────────────────────────────────────────────
+
     (["bet", "place-bet", "place_bet", "wager"],
      {"match_id": 1, "market_id": 1, "selection_id": 1,
       "odds": 1.85, "stake": 10.00, "bet_type": "single",
@@ -99,7 +99,7 @@ _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
     (["stream", "live-stream", "watch"],
      {"match_id": 1, "quality": "hd", "token": ""}),
 
-    # ── Fintech / Payments ────────────────────────────────────────────────────
+
     (["deposit", "top-up", "topup", "fund", "add-money"],
      {"amount": 100.00, "currency": "USD", "payment_method": "card",
       "card_number": "4111111111111111", "cvv": "123",
@@ -144,7 +144,7 @@ _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
     (["balance", "wallet", "account-balance"],
      {"user_id": 1, "currency": "USD", "include_bonus": True}),
 
-    # ── Auth / Account ────────────────────────────────────────────────────────
+
     (["login", "signin", "sign-in", "auth", "authenticate"],
      {"username": "test@example.com", "password": "password123",
       "remember_me": False, "device_id": "dev-001"}),
@@ -180,7 +180,7 @@ _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
      {"device_id": "dev-001", "device_name": "Chrome/Linux",
       "user_id": 1, "limit": 3}),
 
-    # ── Admin / Management ────────────────────────────────────────────────────
+
     (["admin", "management", "manage", "ops",
       "operations", "sys", "system", "internal"],
      {"user_id": 1, "action": "get",
@@ -198,7 +198,7 @@ _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
      {"platform": "android", "version": "latest",
       "channel": "stable", "user_id": 1}),
 
-    # ── E-commerce / Orders ───────────────────────────────────────────────────
+
     (["order", "purchase", "checkout", "cart"],
      {"product_id": 1, "quantity": 1, "price": 99.99,
       "currency": "USD", "coupon_code": "",
@@ -215,7 +215,7 @@ _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
       "price": 9.99, "currency": "USD",
       "trial": False}),
 
-    # ── IDOR / Resource Access ────────────────────────────────────────────────
+
     (["report", "statement", "history", "transactions", "activity"],
      {"user_id": 1, "account_id": 1,
       "from_date": "2024-01-01", "to_date": "2024-12-31",
@@ -230,7 +230,7 @@ _PATH_PARAM_DB: list[tuple[list[str], dict]] = [
       "purpose": "kyc", "overwrite": False}),
 ]
 
-# Fields whose presence in a body means the endpoint is already well-enriched
+
 _CRITICAL_ATTACK_FIELDS: frozenset[str] = frozenset({
     "amount", "currency", "stake", "odds", "bet_id", "price",
     "fee", "discount", "transfer_id", "quantity", "qty",
@@ -238,7 +238,7 @@ _CRITICAL_ATTACK_FIELDS: frozenset[str] = frozenset({
     "plan", "user_id", "account_id", "payment_method",
 })
 
-# ── Method promotion list ─────────────────────────────────────────────────────
+
 _PROMOTE_TO_POST = [
     "login", "register", "signup", "signin",
     "deposit", "withdraw", "transfer", "refund",
@@ -252,9 +252,9 @@ _PROMOTE_TO_POST = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _url_path_segments(url: str) -> list[str]:
     try:
@@ -303,7 +303,7 @@ def _extract_fields_from_json(obj: Any, depth: int = 0) -> dict:
 def _extract_fields_from_error(body: str) -> dict:
     fields: dict = {}
 
-    # FastAPI/Pydantic: {"detail": [{"loc": ["body", "field"], ...}]}
+
     try:
         obj = json.loads(body)
         detail = obj.get("detail") or obj.get("details")
@@ -318,7 +318,7 @@ def _extract_fields_from_error(body: str) -> dict:
     except (json.JSONDecodeError, TypeError, AttributeError):
         pass
 
-    # Django REST / Flask: {"field_name": ["error message"]}
+
     try:
         obj = json.loads(body)
         errors = obj.get("errors") or obj.get("field_errors") or {}
@@ -329,7 +329,7 @@ def _extract_fields_from_error(body: str) -> dict:
     except (json.JSONDecodeError, TypeError, AttributeError):
         pass
 
-    # Free-text: "field_name is required / invalid"
+
     field_pattern = re.compile(
         r'\b([a-z][a-z0-9_]{1,40})\b'
         r'\s*(?:is\s+(?:required|invalid|missing|not\s+found|'
@@ -342,7 +342,7 @@ def _extract_fields_from_error(body: str) -> dict:
                         "detail", "description", "type"):
             fields[name] = None
 
-    # "Missing required fields: field1, field2"
+
     missing_pattern = re.compile(
         r'(?:missing|required)\s+(?:required\s+)?fields?\s*:?\s*'
         r'([a-z0-9_,\s]+)',
@@ -425,14 +425,14 @@ def _extract_schema_fields(body: str) -> dict:
     except (json.JSONDecodeError, TypeError):
         return fields
 
-    # JSON Schema properties
+
     props = obj.get("properties") or {}
     if isinstance(props, dict):
         for k, v in props.items():
             schema_type = v.get("type") if isinstance(v, dict) else None
             fields[k] = _infer_value_from_schema_type(schema_type)
 
-    # OpenAPI requestBody
+
     req_body = (
         obj.get("requestBody", {}).get("content", {})
            .get("application/json", {}).get("schema", {})
@@ -441,7 +441,7 @@ def _extract_schema_fields(body: str) -> dict:
         schema_type = v.get("type") if isinstance(v, dict) else None
         fields[k] = _infer_value_from_schema_type(schema_type)
 
-    # GraphQL introspection
+
     gql_fields = (
         obj.get("data", {}).get("__type", {}).get("fields") or []
     )
@@ -461,9 +461,9 @@ def _infer_value_from_schema_type(schema_type: str | None) -> Any:
     return ""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EndpointEnricher
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class EndpointEnricher:
     """
@@ -481,10 +481,10 @@ class EndpointEnricher:
         second_token:  str   = "",
         api_key_sid:    str  = "",
         api_key_secret: str  = "",
-        cookies:       dict  = None,    # BUG-A FIX: cookie auth support
-        extra_headers: dict  = None,    # BUG-A FIX: custom headers
-        proxy:         str   = "",      # BUG-H FIX: proxy support
-        verify_ssl:    bool  = True,    # BUG-B FIX: was hardcoded False
+        cookies:       dict  = None,    
+        extra_headers: dict  = None,    
+        proxy:         str   = "",      
+        verify_ssl:    bool  = True,    
         verbose:       bool  = False,
         timeout_s:     int   = 10,
         concurrency:   int   = 8,
@@ -517,7 +517,7 @@ class EndpointEnricher:
             "already_had_body": 0,
         }
 
-    # ── Public API ─────────────────────────────────────────────────────────
+
 
     async def enrich(self, endpoints: list[dict], session) -> list[dict]:
         """
@@ -544,11 +544,11 @@ class EndpointEnricher:
             results.extend(promoted)
             self._stats["promoted"] = len(promoted)
 
-        # BUG-E FIX: removed misleading "or True" — summary always prints once
+
         self._print_summary()
         return results
 
-    # ── Per-endpoint enrichment ────────────────────────────────────────────
+
 
     async def _enrich_one(self, ep: dict, session, sem: asyncio.Semaphore) -> dict:
         async with sem:
@@ -559,10 +559,10 @@ class EndpointEnricher:
             body   = dict(ep.get("body") or {})
             params = dict(ep.get("params") or {})
 
-            # WEAK-5 FIX: domain-aware skip threshold.
-            # Only skip when body is substantial AND contains a known
-            # financial/attack-relevant field — avoids skipping endpoints
-            # that have 2+ keys but are missing critical attack fields.
+
+
+
+
             _body_is_fully_enriched = (
                 body and
                 len(body) >= 5 and
@@ -581,7 +581,7 @@ class EndpointEnricher:
 
             pattern_fields = _match_path_patterns(url)
 
-            # Merge: response > error > schema > patterns
+
             merged_body: dict = {}
             merged_body.update(pattern_fields)
             merged_body.update(schema_fields)
@@ -616,7 +616,7 @@ class EndpointEnricher:
             result["params"] = params
             return result
 
-    # ── HTTP probe ─────────────────────────────────────────────────────────
+
 
     async def _probe_endpoint(
         self, url: str, method: str, body: dict, params: dict, session,
@@ -631,9 +631,9 @@ class EndpointEnricher:
         error_fields:    dict = {}
         schema_fields:   dict = {}
 
-        # Build headers — extra_headers applied first, then auth on top
+
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if self.extra_headers:                          # BUG-A FIX
+        if self.extra_headers:                          
             headers.update(self.extra_headers)
         if self.auth_token:
             token = self.auth_token
@@ -650,12 +650,12 @@ class EndpointEnricher:
             timeout = aiohttp.ClientTimeout(total=self.timeout_s)
             req_kwargs: dict = {
                 "headers": headers,
-                "ssl":     self.verify_ssl,             # BUG-B FIX
+                "ssl":     self.verify_ssl,             
                 "timeout": timeout,
             }
-            if self.cookies:                            # BUG-A FIX
+            if self.cookies:                            
                 req_kwargs["cookies"] = self.cookies
-            if self.proxy:                              # BUG-H FIX
+            if self.proxy:                              
                 req_kwargs["proxy"] = self.proxy
             if params:
                 req_kwargs["params"] = params
@@ -691,7 +691,7 @@ class EndpointEnricher:
 
         return response_fields, error_fields, schema_fields
 
-    # ── Method promotion ───────────────────────────────────────────────────
+
 
     def _promote_get_endpoints(self, endpoints: list[dict]) -> list[dict]:
         existing_post_urls: set[str] = {
@@ -734,7 +734,7 @@ class EndpointEnricher:
 
         return promoted
 
-    # ── Summary ────────────────────────────────────────────────────────────
+
 
     def _print_summary(self) -> None:
         s = self._stats
@@ -753,9 +753,9 @@ class EndpointEnricher:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BLFinder integration hook
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def enrich_endpoints(
     endpoints:     list[dict],
@@ -764,10 +764,10 @@ async def enrich_endpoints(
     second_token:  str   = "",
     api_key_sid:    str  = "",
     api_key_secret: str  = "",
-    cookies:       dict  = None,    # BUG-A FIX
-    extra_headers: dict  = None,    # BUG-A FIX
-    proxy:         str   = "",      # BUG-H FIX
-    verify_ssl:    bool  = True,    # BUG-B FIX
+    cookies:       dict  = None,    
+    extra_headers: dict  = None,    
+    proxy:         str   = "",      
+    verify_ssl:    bool  = True,    
     timeout_s:     int   = 10,
     concurrency:   int   = 8,
     verbose:       bool  = False,
@@ -799,16 +799,16 @@ async def enrich_endpoints(
         promote_get   = promote_get,
     )
 
-    # BUG-B FIX: ssl= driven by verify_ssl, not hardcoded False
+
     connector = aiohttp.TCPConnector(ssl=verify_ssl, limit=concurrency)
     timeout   = aiohttp.ClientTimeout(total=timeout_s)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         return await enricher.enrich(endpoints, session)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI entry point
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 async def _cli_main() -> None:
     import argparse
@@ -854,7 +854,7 @@ EXAMPLES:
 
     args = p.parse_args()
 
-    # Parse cookies and headers from CLI
+
     cookies: dict = {}
     for c in args.cookie:
         if "=" in c:
@@ -889,7 +889,7 @@ EXAMPLES:
             method = ep.get("method", "GET").upper()
             body   = ep.get("body") or {}
 
-            # WEAK-5 FIX: use domain-aware threshold
+
             if body and len(body) >= 5 and any(k in _CRITICAL_ATTACK_FIELDS for k in body):
                 enriched.append(ep_copy)
                 continue

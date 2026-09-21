@@ -21,10 +21,10 @@ import json
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -74,10 +74,10 @@ def _build_poc(finding, token: str) -> dict:
     evidence = getattr(finding, "evidence",     "See description")
     rec    = getattr(finding, "recommendation", "")
 
-    # FIX (BUG-8 from scanner_integration review): use a placeholder instead
-    # of the raw token in stored PoC output so credentials are not persisted
-    # in reports, the database, or HackerOne drafts.  The real token is used
-    # only for live requests, never stored in the PoC dict.
+
+
+
+
     token_display = "<YOUR_BEARER_TOKEN>" if token else ""
     auth_hdr  = f' -H "Authorization: Bearer {token_display}"' if token_display else ""
     body_part = ""
@@ -371,9 +371,9 @@ def apply_patch() -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIX (BUG-6): disable_endpoint_validation()
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def disable_endpoint_validation() -> bool:
     """
@@ -394,9 +394,9 @@ def disable_endpoint_validation() -> bool:
     except ImportError:
         return False
 
-    # Check whether the scanner exposes a _validate_endpoint hook.
-    # If it does, replace it.  If not, replace the EndpointValidator
-    # attribute in __aenter__ so it never runs validate().
+
+
+
     if hasattr(BLFScanner, "_validate_endpoint"):
         async def _always_valid(self, endpoint):
             return True
@@ -404,14 +404,14 @@ def disable_endpoint_validation() -> bool:
         BLFScanner._validate_endpoint = _always_valid
         return True
 
-    # Fallback: patch __aenter__ to set _endpoint_validator to None after
-    # it is initialised, which causes all conditional checks of the form
-    # `if self._endpoint_validator:` to skip the validation block.
+
+
+
     _orig_aenter = BLFScanner.__aenter__
 
     async def _aenter_no_validation(self):
         result = await _orig_aenter(self)
-        # Null out the validator so every endpoint passes through
+
         self._endpoint_validator = None
         return result
 
@@ -419,9 +419,9 @@ def disable_endpoint_validation() -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Self-test
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 if __name__ == "__main__":
     import warnings
@@ -503,7 +503,7 @@ if __name__ == "__main__":
             all_pass = False
         print(f"  [{'PASS' if ok else 'FAIL'}] poc['{k}'] present and non-empty")
 
-    # FIX (BUG-8): token placeholder must appear, not raw token
+
     assert "<YOUR_BEARER_TOKEN>" in f.poc["curl"],          "placeholder in curl"
     assert "<YOUR_BEARER_TOKEN>" in f.poc["python_script"], "placeholder in python"
     assert "<YOUR_BEARER_TOKEN>" in f.poc["burp_raw"],      "placeholder in burp"

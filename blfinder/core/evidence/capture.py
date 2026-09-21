@@ -34,7 +34,7 @@ class RequestRecord:
     headers: dict
     body: str | dict | None = None
     timestamp: float = field(default_factory=time.time)
-    label: str = ""                     # e.g. "baseline", "attack", "cross_user"
+    label: str = ""                     
 
     def to_burp_format(self) -> str:
         """Return raw HTTP in Burp Suite Repeater format."""
@@ -95,8 +95,8 @@ class RequestResponsePair:
     """A matched request + response pair with context label."""
     request: RequestRecord
     response: ResponseRecord
-    label: str = ""                     # "baseline", "attack", "no_auth", "user2"
-    note: str = ""                      # Human-readable context
+    label: str = ""                     
+    note: str = ""                      
 
     def to_burp_format(self) -> str:
         return (
@@ -126,7 +126,7 @@ class EvidencePackage:
         pkg.build()   # Runs diff + impact analysis
     """
 
-    # Identity
+
     finding_title: str = ""
     endpoint: str = ""
     vulnerability_type: str = ""
@@ -134,19 +134,19 @@ class EvidencePackage:
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     )
 
-    # Core evidence pairs
-    baseline: RequestResponsePair | None = None         # Normal authenticated request
-    attack: RequestResponsePair | None = None           # Exploit request
-    no_auth: RequestResponsePair | None = None          # Same request with no token
-    cross_user: RequestResponsePair | None = None       # Same request with User 2 token
-    extra_pairs: list[RequestResponsePair] = field(default_factory=list)  # Additional pairs
 
-    # Analysis results (populated by build())
-    diff_report: Any = None                             # DiffReport from diff_engine
-    impact_report: Any = None                           # ImpactReport from impact_assessor
-    verified_curl: str = ""                             # A curl that was confirmed working
+    baseline: RequestResponsePair | None = None         
+    attack: RequestResponsePair | None = None           
+    no_auth: RequestResponsePair | None = None          
+    cross_user: RequestResponsePair | None = None       
+    extra_pairs: list[RequestResponsePair] = field(default_factory=list)  
 
-    # Metadata
+
+    diff_report: Any = None                             
+    impact_report: Any = None                           
+    verified_curl: str = ""                             
+
+
     confidence: int = 0
     confirmed: bool = False
     fp_notes: list[str] = field(default_factory=list)
@@ -165,7 +165,7 @@ class EvidencePackage:
                 self.attack.response,
             )
 
-        # Assess impact of the attack response
+
         attack_body = self.attack.response.body if self.attack else ""
         baseline_body = self.baseline.response.body if self.baseline else ""
         if attack_body:
@@ -175,7 +175,7 @@ class EvidencePackage:
                 endpoint=self.endpoint,
             )
 
-        # Generate verified curl from the attack request
+
         if self.attack:
             self.verified_curl = self.attack.request.to_curl()
 
@@ -370,7 +370,7 @@ class EvidenceCapture:
         pkg.no_auth    = self._pairs.get("no_auth")
         pkg.cross_user = self._pairs.get("cross_user")
 
-        # Any extra pairs
+
         known_labels = {"baseline", "attack", "no_auth", "cross_user"}
         pkg.extra_pairs = [
             pair for label, pair in self._pairs.items()

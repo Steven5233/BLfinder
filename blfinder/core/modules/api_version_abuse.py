@@ -27,8 +27,8 @@ from urllib.parse import urlparse, urljoin
 @dataclass
 class APIVersion:
     """A discovered API version."""
-    version_string: str         # "v1", "v2", "2024-01-01"
-    base_path:      str         # "/api/v1"
+    version_string: str         
+    base_path:      str         
     is_live:        bool = False
     discovered_endpoints: list[str] = field(default_factory=list)
     has_auth_weaknesses: bool = False
@@ -68,15 +68,15 @@ class APIVersionScanner:
     """
 
     _VERSION_PATHS = [
-        # Numeric versions
+
         "/v1", "/v2", "/v3", "/v4",
         "/api/v1", "/api/v2", "/api/v3", "/api/v4",
         "/api/1", "/api/2", "/api/3",
         "/1", "/2", "/3",
-        # Named versions
+
         "/api/beta", "/api/legacy", "/api/internal",
         "/api/dev", "/api/old", "/api/deprecated",
-        # Date-based versions
+
         "/api/2023-01-01", "/api/2022-01-01", "/api/2021-01-01",
         "/api/2020-01-01",
     ]
@@ -99,7 +99,7 @@ class APIVersionScanner:
         self._attach    = scanner._attach
         self._finalize  = scanner._finalize_finding
 
-    # ── Public entry point ────────────────────────────────────────────────────
+
 
     async def scan(
         self,
@@ -108,7 +108,7 @@ class APIVersionScanner:
     ) -> VersionAbuseResult:
         result = VersionAbuseResult(target=base_url)
 
-        # Step 1: Discover all live API versions
+
         versions = await self._discover_versions(base_url)
         result.versions_found = versions
 
@@ -119,7 +119,7 @@ class APIVersionScanner:
             live = [v.version_string for v in versions if v.is_live]
             print(f"  [*] API versions found: {live}")
 
-        # Step 2: Run attacks in parallel
+
         checks = await asyncio.gather(
             self._test_version_downgrade(base_url, versions, known_endpoints or [], result),
             self._test_deprecated_endpoints(base_url, versions, result),
@@ -134,7 +134,7 @@ class APIVersionScanner:
 
         return result
 
-    # ── Version discovery ─────────────────────────────────────────────────────
+
 
     async def _discover_versions(self, base_url: str) -> list[APIVersion]:
         parsed = urlparse(base_url)
@@ -147,7 +147,7 @@ class APIVersionScanner:
             if status not in (200, 201, 401, 403, 404):
                 return None
             if status in (200, 201, 401, 403):
-                # Check for version hint in response headers
+
                 ver_str = path.strip("/").split("/")[-1]
                 return APIVersion(
                     version_string=ver_str,
@@ -170,7 +170,7 @@ class APIVersionScanner:
 
         return found
 
-    # ── Version downgrade attack ──────────────────────────────────────────────
+
 
     async def _test_version_downgrade(
         self,
@@ -185,16 +185,16 @@ class APIVersionScanner:
         parsed = urlparse(base_url)
         base   = f"{parsed.scheme}://{parsed.netloc}"
 
-        # Detect the "latest" version path from known_endpoints
+
         latest_ver = self._detect_latest_version(known_endpoints)
         old_versions = [v for v in versions if v.version_string != latest_ver and v.is_live]
 
         if not old_versions or not known_endpoints:
             return
 
-        for endpoint in known_endpoints[:10]:   # Cap
+        for endpoint in known_endpoints[:10]:   
             for old_ver in old_versions[:3]:
-                # Replace version in path
+
                 old_url = self._swap_version(endpoint, old_ver.base_path, base)
                 if not old_url or old_url == endpoint:
                     continue
@@ -208,7 +208,7 @@ class APIVersionScanner:
                 if status not in (200, 201, 401, 403):
                     continue
 
-                # Auth-required on latest = free on old version?
+
                 latest_status, _, _, _ = await self._request("GET", endpoint)
 
                 if latest_status in (401, 403) and status in (200, 201):
@@ -249,7 +249,7 @@ class APIVersionScanner:
                     self._attach(f, pkg)
                     result.downgrade_findings.append(f)
 
-    # ── Deprecated endpoint discovery ─────────────────────────────────────────
+
 
     async def _test_deprecated_endpoints(
         self,
@@ -280,11 +280,11 @@ class APIVersionScanner:
                 if _body_is_error(resp_body):
                     continue
 
-                # FP: canary — a nonsense path must be rejected
+
                 canary_url = f"{base}{ver.base_path}/__canary_blfinder__"
                 cs, _, _, _ = await self._request("GET", canary_url)
                 if cs == 200:
-                    continue  # Server 200s everything
+                    continue  
 
                 pkg = self._build_pkg(
                     ev,
@@ -324,7 +324,7 @@ class APIVersionScanner:
                 self._attach(f, pkg)
                 result.deprecated_admin_findings.append(f)
 
-    # ── BOPLA via version ─────────────────────────────────────────────────────
+
 
     async def _test_bopla_via_version(
         self,
@@ -349,7 +349,7 @@ class APIVersionScanner:
         old_versions = [v for v in versions if v.version_string != latest_ver and v.is_live]
 
         for endpoint in known_endpoints[:5]:
-            # Get latest version response
+
             _, _, latest_body, _ = await self._request("GET", endpoint)
             latest_data = _parse_json(latest_body)
             if not isinstance(latest_data, dict):
@@ -421,7 +421,7 @@ class APIVersionScanner:
                     self._attach(f, pkg)
                     result.bopla_findings.append(f)
 
-    # ── Rate limit bypass via old version ─────────────────────────────────────
+
 
     async def _test_rate_limit_bypass(
         self,
@@ -436,7 +436,7 @@ class APIVersionScanner:
         base     = f"{parsed.scheme}://{parsed.netloc}"
         auth_paths = ["/auth/login", "/login", "/token", "/auth/token", "/sign_in"]
 
-        # Check if latest version has rate limiting
+
         latest_429 = False
         for auth_path in auth_paths:
             url = f"{base}/api/v3{auth_path}"
@@ -454,7 +454,7 @@ class APIVersionScanner:
                 break
 
         if not latest_429:
-            return  # Latest version doesn't rate limit either — nothing to compare
+            return  
 
         old_versions = [v for v in versions if v.is_live]
         for ver in old_versions[:3]:
@@ -515,7 +515,7 @@ class APIVersionScanner:
                     result.rate_limit_findings.append(f)
                     break
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+
 
     def _detect_latest_version(self, endpoints: list[str]) -> str:
         for ep in endpoints:
@@ -543,7 +543,7 @@ class APIVersionScanner:
         return None
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _parse_json(body: str) -> Any:
     try:

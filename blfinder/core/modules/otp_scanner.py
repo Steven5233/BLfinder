@@ -100,9 +100,9 @@ from dataclasses import dataclass, field as dc_field
 
 from ..models import Finding, Severity, ProofOfConcept
 
-_HARD_MAX_SAMPLES = 100_000     # absolute ceiling regardless of what's requested
+_HARD_MAX_SAMPLES = 100_000     
 _HARD_MAX_CONCURRENCY = 50
-_DEFAULT_SEQUENTIAL_DELAY = 0.1  # seconds between sequential guesses
+_DEFAULT_SEQUENTIAL_DELAY = 0.1  
 
 _BLOCK_STATUS_CODES = {429, 403, 423}
 _BLOCK_BODY_PHRASES = (
@@ -118,7 +118,7 @@ class OTPScanResult:
     otp_url: str
     digits: int
     attempts_made: int = 0
-    lockout_attempt_index: int | None = None   # None = never observed
+    lockout_attempt_index: int | None = None   
     measured_rate_per_sec: float = 0.0
     concurrency_attempts: int = 0
     concurrency_processed: int = 0
@@ -156,7 +156,7 @@ class OTPRateLimitScanner:
         self._config = scanner.config
         self._request = scanner._request
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def scan(
         self,
@@ -176,11 +176,11 @@ class OTPRateLimitScanner:
     ) -> tuple[OTPScanResult, list[Finding]]:
         digits = max(1, min(digits, 12))
         keyspace = 10 ** digits
-        # Never let the sample budget exceed the actual keyspace — beyond
-        # that point every further "attempt" would just repeat a code
-        # already tried this run, so it's clamped to whichever is smaller:
-        # what was requested, the hard ceiling, or the digit count's own
-        # full keyspace.
+
+
+
+
+
         samples = max(1, min(samples, _HARD_MAX_SAMPLES, keyspace))
         concurrency = max(1, min(concurrency, _HARD_MAX_CONCURRENCY))
         extra_body = extra_body or {}
@@ -196,14 +196,14 @@ class OTPRateLimitScanner:
                 )
             real_value = ""
 
-        # Single continuing cursor shared across every test in this scan —
-        # Test 1's sequential sweep, Test 2's concurrent burst, and Test 3's
-        # header-spoof retries all draw the next unused codes from the same
-        # 000000, 000001, 000002, ... enumeration rather than each starting
-        # back at zero, so nothing gets needlessly repeated within one run.
+
+
+
+
+
         cursor = [0]
 
-        # ── Test 1: sequential lockout-threshold detection ──────────────────
+
         elapsed_samples: list[float] = []
 
         for i in range(samples):
@@ -222,7 +222,7 @@ class OTPRateLimitScanner:
                 result.accidental_match = True
                 result.accidental_match_code = code
                 findings.append(self._build_brute_force_confirmed_finding(result, code, i + 1))
-                return result, findings  # stop immediately — do not continue probing
+                return result, findings  
 
             if self._looks_blocked(status, headers, body):
                 result.lockout_attempt_index = i + 1
@@ -241,19 +241,19 @@ class OTPRateLimitScanner:
         if result.lockout_attempt_index is None:
             findings.append(self._build_no_rate_limit_finding(result))
 
-        # ── Test 4: real-value confirmation beyond the allowed attempt budget ──
-        # Runs immediately after the decoy barrage above, using the operator's
-        # own test-account OTP as the very next attempt. Deliberately placed
-        # here (not at the end) so the real code is submitted as soon as
-        # possible after the decoys, minimizing the risk of it expiring
-        # before we get to use it.
+
+
+
+
+
+
         if real_value and not result.accidental_match:
             await self._real_value_confirmation_test(
                 otp_url, method, field, extra_body, in_query,
                 real_value, success_marker, expected_limit, result, findings, verbose,
             )
 
-        # ── Test 2: concurrent burst race-condition check ───────────────────
+
         if not result.accidental_match:
             processed = await self._concurrency_burst_test(
                 otp_url, method, field, digits, keyspace, extra_body, in_query,
@@ -267,7 +267,7 @@ class OTPRateLimitScanner:
             ):
                 findings.append(self._build_race_condition_finding(result))
 
-        # ── Test 3: client-IP header spoofing bypass (only if a real lockout exists) ──
+
         if result.lockout_attempt_index is not None and not result.accidental_match:
             bypassed = await self._header_spoof_bypass_test(
                 otp_url, method, field, digits, keyspace, extra_body, in_query,
@@ -279,7 +279,7 @@ class OTPRateLimitScanner:
 
         return result, findings
 
-    # ── Test 2 implementation ───────────────────────────────────────────────
+
 
     async def _concurrency_burst_test(
         self, otp_url, method, field, digits, keyspace, extra_body, in_query,
@@ -311,7 +311,7 @@ class OTPRateLimitScanner:
             print(f"  [otp] concurrency burst: {processed}/{concurrency} processed without a block signal")
         return processed
 
-    # ── Test 3 implementation ───────────────────────────────────────────────
+
 
     async def _header_spoof_bypass_test(
         self, otp_url, method, field, digits, keyspace, extra_body, in_query,
@@ -344,7 +344,7 @@ class OTPRateLimitScanner:
                 return True
         return False
 
-    # ── Request helpers ──────────────────────────────────────────────────────
+
 
     def _payload_kwargs(self, field, code, extra_body, in_query) -> dict:
         if in_query:
@@ -381,7 +381,7 @@ class OTPRateLimitScanner:
     def _random_ip(self) -> str:
         return ".".join(str(random.randint(1, 254)) for _ in range(4))
 
-    # ── Finding builders ─────────────────────────────────────────────────────
+
 
     def _build_no_rate_limit_finding(self, result: OTPScanResult) -> Finding:
         space = 10 ** result.digits
@@ -661,7 +661,7 @@ class OTPRateLimitScanner:
         )
         return finding
 
-    # ── Test 4 implementation ───────────────────────────────────────────────
+
 
     async def _real_value_confirmation_test(
         self, otp_url, method, field, extra_body, in_query,
@@ -709,9 +709,9 @@ class OTPRateLimitScanner:
     def _looks_like_success(self, status: int, headers: dict, body: str, success_marker: str) -> bool:
         if success_marker:
             return success_marker in (body or "")
-        # Fallback heuristic when no explicit marker is supplied: a 2xx that
-        # isn't itself a block signal is the best-effort signal available.
-        # --otp-success-marker is strongly recommended for reliable detection.
+
+
+
         if self._looks_blocked(status, headers, body):
             return False
         return 200 <= status < 300

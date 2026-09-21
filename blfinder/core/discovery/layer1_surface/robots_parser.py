@@ -41,7 +41,7 @@ from ..models import (
 from ..layer5_dedup.normaliser import normalise_url, extract_id_params, dedup_key
 
 
-# ── Heuristics for API-like paths ─────────────────────────────────────────────
+
 _API_SIGNALS = re.compile(
     r'/(?:api|v\d|graphql|rpc|rest|service|endpoint|internal|admin|manage)',
     re.I
@@ -50,7 +50,7 @@ _HTML_EXTENSIONS = frozenset({
     ".html", ".htm", ".php", ".asp", ".aspx", ".jsp", ".cfm",
     ".xml", ".rss", ".atom", ".txt", ".pdf",
 })
-_WILDCARD_ONLY = re.compile(r'^[/*?]+$')   # e.g. Disallow: /*  or  /
+_WILDCARD_ONLY = re.compile(r'^[/*?]+$')   
 
 
 def _looks_like_api_path(path: str) -> bool:
@@ -62,8 +62,8 @@ def _looks_like_api_path(path: str) -> bool:
     for ext in _HTML_EXTENSIONS:
         if stripped.lower().endswith(ext):
             return False
-    # Prefer paths that look API-y but don't require it
-    # (any hidden path is worth probing)
+
+
     return len(stripped) >= 2
 
 
@@ -93,7 +93,7 @@ def _priority(tags: list[str], is_disallowed: bool) -> int:
     return 3
 
 
-# ── robots.txt parser ─────────────────────────────────────────────────────────
+
 
 def parse_robots(content: str) -> tuple[list[str], list[str], list[str]]:
     """
@@ -126,7 +126,7 @@ def parse_robots(content: str) -> tuple[list[str], list[str], list[str]]:
     return disallowed, allowed, sitemaps
 
 
-# ── sitemap.xml parser ────────────────────────────────────────────────────────
+
 
 def parse_sitemap(content: str, base_url: str) -> tuple[list[str], list[str]]:
     """
@@ -139,14 +139,14 @@ def parse_sitemap(content: str, base_url: str) -> tuple[list[str], list[str]]:
     try:
         root = ET.fromstring(content)
     except ET.ParseError:
-        # Try stripping the namespace and retry
+
         content_stripped = re.sub(r'\s+xmlns[^"]*"[^"]*"', '', content)
         try:
             root = ET.fromstring(content_stripped)
         except ET.ParseError:
             return [], []
 
-    # Strip namespace from tag names
+
     def tag(el: ET.Element) -> str:
         t = el.tag
         if t.startswith("{"):
@@ -156,7 +156,7 @@ def parse_sitemap(content: str, base_url: str) -> tuple[list[str], list[str]]:
     for child in root:
         child_tag = tag(child)
         if child_tag == "sitemap":
-            # Sitemap index
+
             loc = child.find(".//{*}loc")
             if loc is not None and loc.text:
                 nested_maps.append(loc.text.strip())
@@ -165,7 +165,7 @@ def parse_sitemap(content: str, base_url: str) -> tuple[list[str], list[str]]:
             if loc is not None and loc.text:
                 page_urls.append(loc.text.strip())
 
-    # Handle flat sitemap (direct <url><loc>…) or <loc> at root
+
     if not page_urls and not nested_maps:
         for el in root.iter():
             if tag(el) == "loc" and el.text:
@@ -176,7 +176,7 @@ def parse_sitemap(content: str, base_url: str) -> tuple[list[str], list[str]]:
     return page_urls, nested_maps
 
 
-# ── Main async class ──────────────────────────────────────────────────────────
+
 
 class RobotsParser:
 
@@ -216,7 +216,7 @@ class RobotsParser:
 
         def add_ep(path: str, is_disallowed: bool, source_note: str):
             """Validate path and add a DiscoveredEndpoint if not duplicate."""
-            # Strip wildcard chars that robots.txt allows but we can't use
+
             clean_path = path.split("*")[0].rstrip("$").rstrip("/") or "/"
             if not _looks_like_api_path(clean_path):
                 return
@@ -241,7 +241,7 @@ class RobotsParser:
                 normalised_template=tmpl,
             ))
 
-        # ── robots.txt ────────────────────────────────────────────────────────
+
         robots_url = f"{base}/robots.txt"
         robots_txt = await fetch(robots_url)
         sitemaps_to_fetch: list[str] = []
@@ -262,7 +262,7 @@ class RobotsParser:
                     f"{len(sitemaps)} sitemaps"
                 )
 
-        # Also try common sitemap locations even if not listed in robots.txt
+
         default_sitemaps = [
             f"{base}/sitemap.xml",
             f"{base}/sitemap_index.xml",
@@ -272,9 +272,9 @@ class RobotsParser:
         ]
         all_sitemaps = list(dict.fromkeys(sitemaps_to_fetch + default_sitemaps))
 
-        # ── sitemap.xml (recursive, max 5 levels) ─────────────────────────────
+
         fetched_sitemaps: set[str] = set()
-        queue = all_sitemaps[:10]   # safety cap
+        queue = all_sitemaps[:10]   
 
         while queue and len(fetched_sitemaps) < 20:
             sm_url = queue.pop(0)
@@ -294,7 +294,7 @@ class RobotsParser:
 
             for page_url in page_urls:
                 page_parsed = urlparse(page_url)
-                # Only process pages on the same host
+
                 if page_parsed.netloc != parsed.netloc:
                     continue
                 path = page_parsed.path

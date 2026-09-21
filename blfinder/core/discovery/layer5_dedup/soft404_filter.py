@@ -68,10 +68,10 @@ from typing import Any, Optional
 import os as _os
 import sys as _sys
 
-# ── Debug logging for silently-swallowed exceptions ────────────────────────
-# Set BLFINDER_DEBUG=1 in the environment to see what these except blocks
-# were hiding (parse failures, timeouts, malformed responses, etc.) instead
-# of endpoints silently disappearing with no trace.
+
+
+
+
 _BLF_DEBUG = bool(_os.environ.get("BLFINDER_DEBUG"))
 
 
@@ -88,16 +88,16 @@ except ImportError:
 from ..models import DiscoveredEndpoint, DiscoveryConfig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Canary path generator
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _random_token(length: int = 18) -> str:
     chars = string.ascii_lowercase + string.digits
     return "blfinder_" + "".join(random.choices(chars, k=length))
 
 
-# Recognisable error phrases for Oracle 3
+
 _ERROR_PHRASES = [
     "page not found", "404", "not found", "doesn't exist",
     "does not exist", "no resource", "resource not found",
@@ -106,7 +106,7 @@ _ERROR_PHRASES = [
     "endpoint not found", "no such", "unavailable",
 ]
 
-# JSON error keys for Oracle 4
+
 _JSON_ERROR_KEYS = {
     "error", "errors", "message", "msg", "detail",
     "details", "code", "status", "reason", "description",
@@ -153,9 +153,9 @@ def _body_size_band(size: int, tolerance: float = 0.05) -> tuple[int, int]:
     return size - delta, size + delta
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Per-domain soft-404 profile
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 @dataclass
 class Soft404Profile:
@@ -165,24 +165,24 @@ class Soft404Profile:
     """
     domain:               str
     canary_hashes:        set[str]           = field(default_factory=set)
-    canary_size_band:     Optional[tuple]    = None   # (min, max) bytes
+    canary_size_band:     Optional[tuple]    = None   
     canary_error_phrase:  Optional[str]      = None
     canary_json_sig:      Optional[str]      = None
-    all_canaries_same:    bool               = False  # if True, high confidence
-    is_catch_all:         bool               = False  # returns 200 for everything
+    all_canaries_same:    bool               = False  
+    is_catch_all:         bool               = False  
     built:                bool               = False
 
 
 @dataclass
 class FilterResult:
     is_soft_404:      bool
-    oracle_fired:     str   = ""   # which oracle triggered
-    confidence_boost: float = 0.0  # +0.10 if passed all oracles on 200
+    oracle_fired:     str   = ""   
+    confidence_boost: float = 0.0  
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main filter class
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class Soft404Filter:
     """
@@ -225,7 +225,7 @@ class Soft404Filter:
         if config.auth_token:
             headers["Authorization"] = f"Bearer {config.auth_token}"
 
-        # 3 distinct canary paths across different depth levels
+
         canary_paths = [
             f"/{_random_token()}",
             f"/api/{_random_token()}",
@@ -244,7 +244,7 @@ class Soft404Filter:
                     ssl=False,
                 ) as resp:
                     body = await resp.text(errors="replace")
-                    # Only fingerprint if status is 200 (the tricky catch-all case)
+
                     if resp.status == 200:
                         return body
             except Exception as e:
@@ -254,7 +254,7 @@ class Soft404Filter:
 
         results = await asyncio.gather(*[fetch_canary(p) for p in canary_paths])
 
-        # Collect canary fingerprints
+
         hashes_seen: list[str] = []
         for body in results:
             if body is None:
@@ -265,17 +265,17 @@ class Soft404Filter:
             hashes_seen.append(h)
             profile.canary_hashes.add(h)
 
-            # Oracle 3: error phrase anchor
+
             phrase = _extract_error_phrase(body)
             if phrase and not profile.canary_error_phrase:
                 profile.canary_error_phrase = phrase
 
-            # Oracle 4: JSON error signature
+
             sig = _extract_json_error_signature(body)
             if sig and not profile.canary_json_sig:
                 profile.canary_json_sig = sig
 
-        # Oracle 2: size-variance band
+
         if len(canary_sizes) >= 2:
             avg = sum(canary_sizes) / len(canary_sizes)
             all_close = all(
@@ -289,7 +289,7 @@ class Soft404Filter:
                     mx + max(10, int(mx * 0.05)),
                 )
 
-        # Did all 3 canaries return the same hash? → strong catch-all signal
+
         if len(hashes_seen) >= 2 and len(set(hashes_seen)) == 1:
             profile.all_canaries_same = True
             profile.is_catch_all      = True
@@ -323,26 +323,26 @@ class Soft404Filter:
         domain  = urlparse(url).netloc
         profile = self._profiles.get(domain)
 
-        # Always-fail conditions
+
         if status == 0 or not body:
             return FilterResult(is_soft_404=True, oracle_fired="zero_body")
         if len(body) < 10:
             return FilterResult(is_soft_404=True, oracle_fired="too_small")
 
-        # Status codes that are clearly not real content
+
         if status in (404, 410):
             return FilterResult(is_soft_404=True, oracle_fired="404_status")
 
         if profile is None or not profile.built:
-            # No profile — only apply basic heuristics
+
             return FilterResult(is_soft_404=False, confidence_boost=0.0)
 
-        # Oracle 1 — body hash match
+
         bh = _body_hash(body)
         if bh in profile.canary_hashes:
             return FilterResult(is_soft_404=True, oracle_fired="oracle1_hash")
 
-        # Oracle 2 — size band match (only when all canaries had same size)
+
         if profile.canary_size_band:
             lo, hi = profile.canary_size_band
             if lo <= len(body) <= hi:
@@ -350,14 +350,14 @@ class Soft404Filter:
                     is_soft_404=True, oracle_fired="oracle2_size_band"
                 )
 
-        # Oracle 3 — error phrase anchor
+
         if profile.canary_error_phrase:
             if profile.canary_error_phrase in body.lower():
                 return FilterResult(
                     is_soft_404=True, oracle_fired="oracle3_phrase"
                 )
 
-        # Oracle 4 — JSON error signature
+
         if profile.canary_json_sig:
             sig = _extract_json_error_signature(body)
             if sig == profile.canary_json_sig:
@@ -365,7 +365,7 @@ class Soft404Filter:
                     is_soft_404=True, oracle_fired="oracle4_json_sig"
                 )
 
-        # Passed all oracles — boost confidence if status is good
+
         boost = 0.10 if status in (200, 201, 204) else 0.0
         return FilterResult(is_soft_404=False, confidence_boost=boost)
 
@@ -381,7 +381,7 @@ class Soft404Filter:
 
         Returns (kept, dropped).
         """
-        # Build profiles for all unique domains
+
         from urllib.parse import urlparse
         domains = {urlparse(ep.url).netloc for ep in endpoints}
         await asyncio.gather(*[
@@ -396,9 +396,9 @@ class Soft404Filter:
         dropped: list[DiscoveredEndpoint] = []
 
         for ep in endpoints:
-            # We don't have a live response here — use structural signals only
-            # (live probing happens in the wordlist/version modules)
-            # For spec/headless-verified endpoints, skip soft-404 filtering
+
+
+
             if ep.spec_verified or ep.live_verified:
                 kept.append(ep)
                 continue
@@ -407,7 +407,7 @@ class Soft404Filter:
             profile = self._profiles.get(domain)
 
             if profile and profile.is_catch_all and not ep.spec_verified:
-                # Catch-all server: only keep endpoints from authoritative sources
+
                 if ep.confidence < 0.80:
                     dropped.append(ep)
                     continue

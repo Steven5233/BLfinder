@@ -32,8 +32,8 @@ from typing import Optional
 from core.intelligence.platform_profiler import (
     PlatformProfiler, PlatformProfile,
     PLATFORM_FINTECH, PLATFORM_STREAMING,
-    # PLATFORM_BANKING / PLATFORM_ECOMMERCE intentionally NOT imported —
-    # no attack modules exist yet. Re-add when modules are implemented.
+
+
     PLATFORM_UNKNOWN,
     KNOWN_SPOTIFY, KNOWN_STRIPE, KNOWN_PAYPAL,
     KNOWN_WISE, KNOWN_REVOLUT, KNOWN_FLUTTERWAVE, KNOWN_PAYSTACK,
@@ -51,9 +51,9 @@ from core.intelligence.domain_chains import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RC-5 FIX: Convert platform finding dict → Finding dataclass
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _dict_to_finding(d: dict):
     """
@@ -90,7 +90,7 @@ def _dict_to_finding(d: dict):
             endpoint          = d.get("endpoint", ""),
             parameter         = d.get("parameter", ""),
         )
-        # RC-5: attach real HTTP proof fields if present
+
         if d.get("curl_command"):
             f.poc = d["curl_command"]
         if d.get("request_log"):
@@ -104,13 +104,13 @@ def _dict_to_finding(d: dict):
             )
         return f
     except (ImportError, TypeError, AttributeError):
-        # Return the dict as-is if Finding is not available
+
         return d
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Endpoint relevance router
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _KNOWN_MODULE_NAMES = frozenset({
     "amount_sign_flip",
@@ -219,7 +219,7 @@ def _endpoint_matches_module(
         ),
     }
 
-    # BUG-20 FIX: warn on unknown module names
+
     if module_name not in routes:
         if verbose:
             print(
@@ -232,9 +232,9 @@ def _endpoint_matches_module(
     return routes[module_name]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PlatformScanner
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class PlatformScanner:
     """
@@ -286,13 +286,13 @@ class PlatformScanner:
         known   = self._profile.known_platform
         verbose = getattr(self._config, "verbose", False)
 
-        # BUG-4 FIX: PLATFORM_UNKNOWN is the only truly silent case.
+
         if ptype == PLATFORM_UNKNOWN:
             return []
 
         if ptype not in (PLATFORM_FINTECH, PLATFORM_STREAMING):
-            # Known type but no attack modules yet
-            # (covers PLATFORM_BANKING, PLATFORM_ECOMMERCE, future types)
+
+
             print(
                 f"  [platform] no domain modules configured for "
                 f"'{ptype}' — skipped (detection only)"
@@ -363,7 +363,7 @@ class PlatformScanner:
             elif isinstance(r, Exception) and verbose:
                 print(f"  [platform] module error: {r}")
 
-        # RC-5 FIX: convert dicts → Finding objects
+
         for d in raw_dicts:
             findings.append(_dict_to_finding(d))
 

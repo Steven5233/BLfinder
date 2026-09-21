@@ -67,9 +67,9 @@ except ImportError:
 from urllib.parse import urlparse, urljoin
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Wordlist seeds (imported by platform_profiler._default_seeds)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 PLATFORM_SEEDS: dict[str, list[str]] = {
     "STREAMING": [
@@ -106,9 +106,9 @@ PLATFORM_SEEDS: dict[str, list[str]] = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared helpers
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _try_json(body: str) -> Any:
     try:
@@ -154,8 +154,8 @@ def _make_finding(
     confirmed:    bool = False,
     parameter:    str  = "",
     response_summary: str = "",
-    # RC-5: attach real HTTP proof
-    request_log:  list = None,   # [{label, method, url, headers, body, status, resp_body}]
+
+    request_log:  list = None,   
     curl_command: str  = "",
 ) -> dict:
     """
@@ -179,7 +179,7 @@ def _make_finding(
         "confidence":       confidence,
         "endpoint":         endpoint,
         "parameter":        parameter,
-        # RC-5: real HTTP proof attached
+
         "request_log":      request_log or [],
         "curl_command":     curl_command,
     }
@@ -214,11 +214,11 @@ def _build_curl(method: str, url: str, body: dict, token: str = "") -> str:
     return " \\\n  ".join(parts)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RC-1 FIX: Improved _response_indicates_success with canary validation
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Fields that confirm a financial operation actually succeeded server-side
+
+
+
+
 _FINANCIAL_SUCCESS_FIELDS = {
     "id", "transaction_id", "payment_id", "charge_id", "order_id",
     "transfer_id", "reference", "ref", "receipt_number", "trace_id",
@@ -226,7 +226,7 @@ _FINANCIAL_SUCCESS_FIELDS = {
     "currency", "balance", "credited", "net", "gross",
 }
 
-# Error strings that indicate the operation was rejected
+
 _ERROR_STRINGS = (
     "error", "invalid", "failed", "unauthorized", "forbidden",
     "not found", "rejected", "denied", "exception", "bad request",
@@ -246,24 +246,24 @@ def _response_looks_successful(body: str, status: int) -> bool:
 
     body_lower = body.lower()
 
-    # Gate A: Must not contain dominant error signals
+
     error_count = sum(1 for s in _ERROR_STRINGS if s in body_lower)
     if error_count >= 2:
         return False
 
     if status in (200, 201, 202, 204):
-        # Gate B: For 200/201, prefer responses with success fields
+
         if status == 204:
-            return True  # No Content = success
+            return True  
         data = _try_json(body)
         if isinstance(data, dict):
-            # Check for any known success field
+
             has_success_field = bool(
                 set(k.lower() for k in data.keys()) & _FINANCIAL_SUCCESS_FIELDS
             )
             if has_success_field:
                 return error_count == 0
-        # Fallback: simple string signals
+
         success_signals = ["success", "true", "created", "completed", "accepted", "ok"]
         return any(s in body_lower for s in success_signals) and error_count == 0
 
@@ -282,9 +282,9 @@ async def _canary_probe(scanner, url: str, method: str, invalid_body: dict) -> i
         return 0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RC-3 FIX: Diff confirmation helper
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 def _bodies_differ_meaningfully(base: str, tampered: str, threshold: float = 0.05) -> bool:
     """
@@ -298,7 +298,7 @@ def _bodies_differ_meaningfully(base: str, tampered: str, threshold: float = 0.0
     a large shared envelope.
     """
     if not base or not tampered:
-        return bool(tampered and not base)  # getting data when we had none
+        return bool(tampered and not base)  
     if _HAS_SEMANTIC_DIFF:
         try:
             sim = SemanticDiff.compare(base[:4000], tampered[:4000]).semantic_similarity
@@ -309,9 +309,9 @@ def _bodies_differ_meaningfully(base: str, tampered: str, threshold: float = 0.0
     return (1.0 - sim) > threshold
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SPA / CDN response detector (unchanged — already correct)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _HTML_SIGNALS = (
     b"<!doctype html", b"<html", b"<head>", b"<body",
@@ -402,9 +402,9 @@ def _is_same_size_as_baseline(body_len: int, scanner, url: str) -> bool:
     return (matching / len(other_sizes)) >= 0.60
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FINTECH MODULES  (RC-1, RC-2, RC-3 fixes applied throughout)
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class FintechAttackModules:
     """
@@ -413,7 +413,7 @@ class FintechAttackModules:
     and returns list[dict] findings compatible with BLFScanner's pipeline.
     """
 
-    # ── MODULE F1: Amount Sign Flip ───────────────────────────────────────────
+
 
     async def check_amount_sign_flip(
         self, scanner, url: str, method: str,
@@ -435,7 +435,7 @@ class FintechAttackModules:
             for neg_val in negative_values:
                 tampered = {**body, key: neg_val}
 
-                # RC-2: Canary probe — send string where number expected
+
                 canary_body = {**body, key: "CANARY_INVALID_AMOUNT"}
                 canary_status = await _canary_probe(scanner, url, method, canary_body)
 
@@ -447,12 +447,12 @@ class FintechAttackModules:
                 if s not in (200, 201, 202):
                     continue
 
-                # RC-2 FIX: canary must NOT succeed — if it does, endpoint
-                # accepts anything and our result is a false positive
+
+
                 if canary_status in (200, 201, 202):
                     continue
 
-                # RC-1 FIX: Use improved success detection
+
                 if not _response_looks_successful(rb, s):
                     continue
 
@@ -460,7 +460,7 @@ class FintechAttackModules:
                 if not data:
                     continue
 
-                # RC-3 FIX: Check response actually differs from baseline
+
                 if not _bodies_differ_meaningfully(base_body, rb):
                     continue
 
@@ -500,7 +500,7 @@ class FintechAttackModules:
                         return findings
         return findings
 
-    # ── MODULE F2: Currency Confusion ─────────────────────────────────────────
+
 
     async def check_currency_confusion(
         self, scanner, url: str, method: str,
@@ -526,11 +526,11 @@ class FintechAttackModules:
             for low_currency, _ in high_low_pairs:
                 tampered = {**body, key: low_currency}
 
-                # RC-2: Canary — send obviously invalid currency code
+
                 canary_body   = {**body, key: "XXXXXXX_INVALID"}
                 canary_status = await _canary_probe(scanner, url, method, canary_body)
                 if canary_status in (200, 201):
-                    continue  # endpoint accepts any currency string → FP risk
+                    continue  
 
                 try:
                     s, _, rb, _ = await scanner._request(method, url, json=tampered)
@@ -589,7 +589,7 @@ class FintechAttackModules:
                     return findings
         return findings
 
-    # ── MODULE F3: Idempotency Abuse ──────────────────────────────────────────
+
 
     async def check_idempotency_abuse(
         self, scanner, url: str, method: str,
@@ -629,7 +629,7 @@ class FintechAttackModules:
             first_id  = _get(first_data, "id") or _get(first_data, "transaction_id")
             second_id = _get(second_data, "id") or _get(second_data, "transaction_id")
             if first_id and second_id and first_id != second_id:
-                # RC-3 FIX: verify responses actually differ — duplicate IDs confirm
+
                 findings.append(_make_finding(
                     title="Idempotency Key Replay — Duplicate Transactions Created",
                     severity="CRITICAL",
@@ -658,7 +658,7 @@ class FintechAttackModules:
                 ))
         return findings
 
-    # ── MODULE F4: Refund Overflow ────────────────────────────────────────────
+
 
     async def check_refund_overflow(
         self, scanner, url: str, method: str,
@@ -677,7 +677,7 @@ class FintechAttackModules:
             overflow_amount = original_amount * 10
             tampered = {**body, key: overflow_amount}
 
-            # RC-2: Canary — send negative value (should also fail)
+
             canary_body   = {**body, key: -overflow_amount}
             canary_status = await _canary_probe(scanner, url, method, canary_body)
 
@@ -688,7 +688,7 @@ class FintechAttackModules:
             if s not in (200, 201):
                 continue
 
-            # RC-1 FIX
+
             if not _response_looks_successful(rb, s):
                 continue
 
@@ -696,7 +696,7 @@ class FintechAttackModules:
             if not data:
                 continue
 
-            # RC-3 FIX: body must differ from baseline
+
             if not _bodies_differ_meaningfully(base_body, rb):
                 continue
 
@@ -732,7 +732,7 @@ class FintechAttackModules:
                 return findings
         return findings
 
-    # ── MODULE F5: Webhook Forgery ────────────────────────────────────────────
+
 
     async def check_webhook_forgery(
         self, scanner, url: str, method: str,
@@ -761,11 +761,11 @@ class FintechAttackModules:
         ]
 
         for payload in forged_payloads:
-            # RC-2: Canary — send completely garbled payload
+
             canary_payload = {"event": "CANARY_INVALID_EVENT_XYZ", "data": None}
             canary_status  = await _canary_probe(scanner, url, "POST", canary_payload)
             if canary_status in (200, 201, 202, 204):
-                continue  # endpoint accepts anything — FP risk
+                continue  
 
             try:
                 s, _, rb, _ = await scanner._request(
@@ -814,7 +814,7 @@ class FintechAttackModules:
                 return findings
         return findings
 
-    # ── MODULE F6: Fee Bypass ─────────────────────────────────────────────────
+
 
     async def check_fee_bypass(
         self, scanner, url: str, method: str,
@@ -846,7 +846,7 @@ class FintechAttackModules:
                 continue
             tampered = {**body, **extra}
 
-            # RC-2: Canary — send clearly invalid fee type
+
             canary_body   = {**body, list(extra.keys())[0]: "CANARY_STRING"}
             canary_status = await _canary_probe(scanner, url, method, canary_body)
 
@@ -859,7 +859,7 @@ class FintechAttackModules:
             if not _response_looks_successful(rb, s):
                 continue
 
-            # RC-3 FIX: Body must differ
+
             if not _bodies_differ_meaningfully(base_body, rb):
                 continue
 
@@ -903,7 +903,7 @@ class FintechAttackModules:
                     return findings
         return findings
 
-    # ── MODULE F7: KYC / SCA Bypass ───────────────────────────────────────────
+
 
     async def check_kyc_sca_bypass(
         self, scanner, url: str, method: str,
@@ -929,11 +929,11 @@ class FintechAttackModules:
                 bypass_attempts.append((reduced, key, "OMITTED"))
 
         for tampered, key, val in bypass_attempts[:8]:
-            # RC-1/RC-2: canary validation
+
             canary_body   = {**body, key: "CANARY_BYPASS_XYZ_999"} if val != "OMITTED" else tampered
             canary_status = await _canary_probe(scanner, url, method, canary_body)
             if val != "OMITTED" and canary_status in (200, 201):
-                continue  # endpoint accepts any value for this field
+                continue  
 
             try:
                 s, _, rb, _ = await scanner._request(method, url, json=tampered)
@@ -944,7 +944,7 @@ class FintechAttackModules:
             if not rb or len(rb) < 10:
                 continue
 
-            # RC-3 FIX: Body must differ from baseline
+
             if not _bodies_differ_meaningfully(base_body, rb):
                 continue
 
@@ -981,7 +981,7 @@ class FintechAttackModules:
                     return findings
         return findings
 
-    # ── MODULE F8: Transfer IDOR ──────────────────────────────────────────────
+
 
     async def check_transfer_idor(
         self, scanner, url: str, method: str,
@@ -1012,7 +1012,7 @@ class FintechAttackModules:
                 if s != 200:
                     continue
 
-                # RC-3 FIX: Must differ meaningfully from base
+
                 if not _bodies_differ_meaningfully(base_body, rb, threshold=0.10):
                     continue
 
@@ -1025,7 +1025,7 @@ class FintechAttackModules:
                 if not exposed:
                     continue
 
-                # RC-3: Cross-user confirmation
+
                 second_token = getattr(scanner.config, "second_user_token", "")
                 confirmed = False
                 if second_token:
@@ -1064,9 +1064,9 @@ class FintechAttackModules:
         return findings
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SPOTIFY / STREAMING MODULES
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 class SpotifyAttackModules:
     """
@@ -1074,7 +1074,7 @@ class SpotifyAttackModules:
     RC-1/RC-2/RC-3 fixes applied throughout.
     """
 
-    # ── MODULE S1: Subscription Scope Probe ───────────────────────────────────
+
 
     async def check_subscription_scope(
         self, scanner, url: str, method: str,
@@ -1110,20 +1110,20 @@ class SpotifyAttackModules:
 
         rb_free_bytes = rb_free.encode("utf-8", errors="replace") if rb_free else b""
 
-        # Gate 1: Must be real API response
+
         if _is_spa_shell(rb_free, rb_free_bytes):
             return findings
         if not _is_api_response(hdrs_free if isinstance(hdrs_free, dict) else {}, rb_free):
             return findings
 
-        # Gate 2: Not SPA shell by size pattern
+
         if _is_same_size_as_baseline(len(rb_free_bytes), scanner, url):
             return findings
 
         free_data = _try_json(rb_free)
         base_data = _try_json(base_body)
 
-        # Gate 3: Free vs unauthenticated must differ
+
         unauth_body = ""
         try:
             s_unauth, _, rb_unauth, _ = await scanner._request(
@@ -1139,7 +1139,7 @@ class SpotifyAttackModules:
             if sim_free_vs_unauth >= _MAX_SIMILARITY_TO_UNAUTH:
                 return findings
 
-        # Probe with premium token
+
         rb_premium = ""
         s_prem = 0
         try:
@@ -1151,13 +1151,13 @@ class SpotifyAttackModules:
         except Exception:
             rb_premium = ""
 
-        # Gate 4: Free vs premium must differ
+
         if rb_premium:
             sim_free_vs_prem = _similarity(rb_free, rb_premium)
             if sim_free_vs_prem >= _MAX_SIMILARITY_FREE_VS_PREMIUM:
                 return findings
 
-        # Check for confirmed premium fields
+
         premium_data = _try_json(rb_premium) if rb_premium else {}
         premium_fields = [
             "audio_quality", "bitrate", "download_url", "offline_uri",
@@ -1201,7 +1201,7 @@ class SpotifyAttackModules:
             ))
             return findings
 
-        # Gate 5: MEDIUM only with clear signals and meaningful body
+
         if not _body_has_meaningful_fields(rb_free):
             return findings
 
@@ -1242,7 +1242,7 @@ class SpotifyAttackModules:
         ))
         return findings
 
-    # ── MODULE S2: Stream Count Manipulation ──────────────────────────────────
+
 
     async def check_stream_count_manipulation(
         self, scanner, url: str, method: str,
@@ -1263,7 +1263,7 @@ class SpotifyAttackModules:
         if not any(k in body for k in play_event_keys):
             return findings
 
-        # RC-2: Canary — send clearly invalid play event
+
         canary_body   = {**body, "track_id": "CANARY_INVALID", "played_ms": -1}
         canary_status = await _canary_probe(scanner, url, method, canary_body)
 
@@ -1320,7 +1320,7 @@ class SpotifyAttackModules:
             ))
         return findings
 
-    # ── MODULE S3: Download Token Replay ─────────────────────────────────────
+
 
     async def check_download_token_replay(
         self, scanner, url: str, method: str,
@@ -1404,7 +1404,7 @@ class SpotifyAttackModules:
                 ))
         return findings
 
-    # ── MODULE S4: Device Limit Bypass ────────────────────────────────────────
+
 
     async def check_device_limit_bypass(
         self, scanner, url: str, method: str,
@@ -1462,7 +1462,7 @@ class SpotifyAttackModules:
             ))
         return findings
 
-    # ── MODULE S5: Playlist / Resource IDOR ───────────────────────────────────
+
 
     async def check_playlist_idor(
         self, scanner, url: str, method: str,
@@ -1502,7 +1502,7 @@ class SpotifyAttackModules:
             if s2 != 200:
                 continue
 
-            # RC-3 FIX: must differ from original response
+
             if not _bodies_differ_meaningfully(base_body, rb2, threshold=0.10):
                 continue
 

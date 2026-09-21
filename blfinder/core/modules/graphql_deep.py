@@ -31,7 +31,7 @@ from typing import Any
 class GraphQLType:
     """A single type from the GraphQL schema."""
     name:        str
-    kind:        str      # OBJECT | SCALAR | ENUM | INTERFACE | UNION
+    kind:        str      
     fields:      list[str] = field(default_factory=list)
     is_sensitive: bool = False
 
@@ -57,12 +57,12 @@ class GraphQLDeepResult:
     alias_idor_found:       bool = False
     batch_bypass_found:     bool = False
     mutation_privesc_found: bool = False
-    depth_limit:            int | None = None    # None = no limit detected
+    depth_limit:            int | None = None    
     unrestricted_fields:    dict[str, list[str]] = field(default_factory=dict)
     findings:               list = field(default_factory=list)
 
 
-# ── Sensitive type / field detection ──────────────────────────────────────────
+
 
 _SENSITIVE_TYPE_KEYWORDS = [
     "user", "admin", "account", "payment", "invoice",
@@ -98,17 +98,17 @@ class GraphQLDeepScanner:
         self._attach    = scanner._attach
         self._finalize  = scanner._finalize_finding
 
-    # ── Public entry point ────────────────────────────────────────────────────
+
 
     async def scan(self, endpoint: str) -> GraphQLDeepResult:
         """Run the full GraphQL attack suite against an endpoint."""
         result = GraphQLDeepResult(endpoint=endpoint)
 
-        # Confirm it's a real GraphQL endpoint
+
         if not await self._confirm_graphql(endpoint):
             return result
 
-        # Run all checks concurrently
+
         checks = await asyncio.gather(
             self._extract_schema(endpoint, result),
             self._test_alias_idor(endpoint, result),
@@ -125,7 +125,7 @@ class GraphQLDeepScanner:
 
         return result
 
-    # ── Confirmation ──────────────────────────────────────────────────────────
+
 
     async def _confirm_graphql(self, endpoint: str) -> bool:
         """Confirm endpoint is a real GraphQL API before attacking."""
@@ -149,7 +149,7 @@ class GraphQLDeepScanner:
         except (json.JSONDecodeError, ValueError):
             return False
 
-    # ── Schema extraction ─────────────────────────────────────────────────────
+
 
     async def _extract_schema(
         self, endpoint: str, result: GraphQLDeepResult
@@ -195,7 +195,7 @@ class GraphQLDeepScanner:
             name = type_def.get("name", "")
             kind = type_def.get("kind", "OBJECT")
             if name.startswith("__"):
-                continue    # Skip meta-types
+                continue    
             fields = [
                 f["name"]
                 for f in (type_def.get("fields") or [])
@@ -263,7 +263,7 @@ class GraphQLDeepScanner:
             self._attach(f, pkg)
             result.findings.append(f)
 
-    # ── Alias-based IDOR ──────────────────────────────────────────────────────
+
 
     async def _test_alias_idor(
         self, endpoint: str, result: GraphQLDeepResult
@@ -272,7 +272,7 @@ class GraphQLDeepScanner:
         Test alias-based IDOR: query multiple user IDs in one request.
         { a: user(id: "victim") { email }  b: user(id: "attacker") { email } }
         """
-        # Try to find the user query name from schema
+
         user_queries = ["user", "account", "profile", "me", "viewer"]
         if result.schema:
             user_queries = [
@@ -317,7 +317,7 @@ class GraphQLDeepScanner:
                 alias_b = response_data.get("alias_b")
 
                 if alias_a and alias_b and isinstance(alias_a, dict):
-                    # Both returned data — different users accessible
+
                     confirmed = (
                         alias_a.get("id") != alias_b.get("id")
                         if alias_b and isinstance(alias_b, dict) else False
@@ -363,7 +363,7 @@ class GraphQLDeepScanner:
                     result.alias_idor_found = True
                     break
 
-    # ── Batch rate limit bypass ───────────────────────────────────────────────
+
 
     async def _test_batch_bypass(
         self, endpoint: str, result: GraphQLDeepResult
@@ -391,7 +391,7 @@ class GraphQLDeepScanner:
         if status != 200:
             return
 
-        # Check if all 100 queries were processed
+
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
@@ -405,7 +405,7 @@ class GraphQLDeepScanner:
             if isinstance(item, dict) and "data" in item
         )
 
-        if success_count >= 50:    # Server processed most/all queries
+        if success_count >= 50:    
             pkg = self._build_pkg(
                 ev,
                 title="GraphQL Batch Rate Limit Bypass",
@@ -444,7 +444,7 @@ class GraphQLDeepScanner:
             result.findings.append(f)
             result.batch_bypass_found = True
 
-    # ── Mutation privilege escalation ─────────────────────────────────────────
+
 
     async def _test_mutation_privesc(
         self, endpoint: str, result: GraphQLDeepResult
@@ -492,15 +492,15 @@ class GraphQLDeepScanner:
             except (json.JSONDecodeError, ValueError):
                 continue
 
-            # Check if mutation returned errors (expected good behaviour)
+
             if isinstance(data, dict) and data.get("errors"):
-                continue  # Server rejected — not vulnerable
+                continue  
 
             resp_data = data.get("data", {}) if isinstance(data, dict) else {}
             if not resp_data:
                 continue
 
-            # Look for the target field being reflected
+
             confirmed = False
             for _, v in resp_data.items():
                 if isinstance(v, dict) and v.get(check_field) == check_value:
@@ -546,7 +546,7 @@ class GraphQLDeepScanner:
                 result.findings.append(f)
                 result.mutation_privesc_found = True
 
-    # ── Nested query depth attack ─────────────────────────────────────────────
+
 
     async def _test_depth_attack(
         self, endpoint: str, result: GraphQLDeepResult
@@ -620,7 +620,7 @@ class GraphQLDeepScanner:
             )
             result.findings.append(f)
 
-    # ── Field-level auth bypass ───────────────────────────────────────────────
+
 
     async def _test_field_auth_bypass(
         self, endpoint: str, result: GraphQLDeepResult
@@ -649,13 +649,13 @@ class GraphQLDeepScanner:
                 continue
 
             if isinstance(data, dict) and data.get("errors"):
-                continue  # Expected — field not available
+                continue  
 
             resp_data = data.get("data", {}) if isinstance(data, dict) else {}
             if not resp_data:
                 continue
 
-            # Check if restricted field is in response
+
             resp_str = json.dumps(resp_data)
             if field_name in resp_str or field_name.lower() in resp_str.lower():
                 if field_name not in result.unrestricted_fields:

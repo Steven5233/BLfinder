@@ -39,7 +39,7 @@ except ImportError:
     _HAS_CURSES = False
 
 
-# ── ANSI colors (Termux-compatible) ──────────────────────────────────────────
+
 _ANSI = {
     "CRITICAL": "\033[1;31m",
     "HIGH":     "\033[1;33m",
@@ -59,29 +59,29 @@ _ANSI = {
 @dataclass
 class DashboardState:
     """Shared mutable state between scanner and dashboard."""
-    # Progress
+
     total_endpoints:   int = 0
     scanned_endpoints: int = 0
     current_endpoint:  str = ""
     scan_start_time:   float = field(default_factory=time.time)
 
-    # Stats
+
     total_requests:    int = 0
     total_429s:        int = 0
     total_findings:    int = 0
     queue_size:        int = 0
 
-    # Findings (recent N shown)
-    findings:          list[dict] = field(default_factory=list)   # {title, severity, confirmed}
+
+    findings:          list[dict] = field(default_factory=list)   
     max_findings_shown: int = 5
 
-    # Control
+
     paused:            bool = False
     verbose:           bool = False
     quit_requested:    bool = False
     report_on_quit:    bool = True
 
-    # Target
+
     target:            str = ""
 
     @property
@@ -141,7 +141,7 @@ class LiveDashboard:
         self._running    = False
         self._stdscr     = None
 
-    # ── Public API ────────────────────────────────────────────────────────────
+
 
     async def run(self):
         """Start the dashboard. Returns when quit is requested."""
@@ -157,7 +157,7 @@ class LiveDashboard:
         self._running = False
         self.state.quit_requested = True
 
-    # ── Curses mode ───────────────────────────────────────────────────────────
+
 
     async def _run_curses(self):
         """Run the dashboard using Python curses."""
@@ -169,7 +169,7 @@ class LiveDashboard:
         try:
             curses.wrapper(self._curses_loop)
         except Exception as e:
-            # Fall back to ANSI if curses fails
+
             self._use_curses = False
 
     def _curses_loop(self, stdscr):
@@ -178,22 +178,22 @@ class LiveDashboard:
         stdscr.nodelay(True)
         stdscr.timeout(self.refresh_ms)
 
-        # Initialize colors
+
         curses.start_color()
         curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_RED,     -1)  # CRITICAL
-        curses.init_pair(2, curses.COLOR_YELLOW,  -1)  # HIGH
-        curses.init_pair(3, curses.COLOR_BLUE,    -1)  # MEDIUM
-        curses.init_pair(4, curses.COLOR_GREEN,   -1)  # LOW/confirmed
-        curses.init_pair(5, curses.COLOR_CYAN,    -1)  # info/header
-        curses.init_pair(6, curses.COLOR_WHITE,   -1)  # normal
-        curses.init_pair(7, curses.COLOR_MAGENTA, -1)  # accent
+        curses.init_pair(1, curses.COLOR_RED,     -1)  
+        curses.init_pair(2, curses.COLOR_YELLOW,  -1)  
+        curses.init_pair(3, curses.COLOR_BLUE,    -1)  
+        curses.init_pair(4, curses.COLOR_GREEN,   -1)  
+        curses.init_pair(5, curses.COLOR_CYAN,    -1)  
+        curses.init_pair(6, curses.COLOR_WHITE,   -1)  
+        curses.init_pair(7, curses.COLOR_MAGENTA, -1)  
 
         while self._running and not self.state.quit_requested:
             try:
                 self._draw_curses(stdscr)
 
-                # Non-blocking key read
+
                 key = stdscr.getch()
                 if key != -1:
                     self._handle_key(chr(key) if 0 < key < 256 else "")
@@ -217,7 +217,7 @@ class LiveDashboard:
 
             row = 0
 
-            # ── Header ────────────────────────────────────────────────────────
+
             header = f" BLFinder v3.1"
             stdscr.addstr(row, 0, "─" * w, curses.color_pair(5))
             row += 1
@@ -227,12 +227,12 @@ class LiveDashboard:
                 stdscr.addstr(row, w - len(elapsed_str), elapsed_str, curses.color_pair(6))
             row += 1
 
-            # Target
+
             target_str = f" Target: {state.target}"[:w-1]
             stdscr.addstr(row, 0, target_str, curses.color_pair(5))
             row += 1
 
-            # Progress bar
+
             bar_width = max(10, w - 20)
             filled    = int(bar_width * state.progress_pct)
             bar       = "█" * filled + "░" * (bar_width - filled)
@@ -240,16 +240,16 @@ class LiveDashboard:
             stdscr.addstr(row, 0, f" [{bar}]{prog_str}", curses.color_pair(4))
             row += 1
 
-            # Current endpoint
+
             ep_str = f" ⟳ {state.current_endpoint}"
             stdscr.addstr(row, 0, ep_str[:w-1], curses.color_pair(6) | curses.A_DIM)
             row += 1
 
-            # Divider
+
             stdscr.addstr(row, 0, "─" * w, curses.color_pair(5))
             row += 1
 
-            # ── Findings ──────────────────────────────────────────────────────
+
             if not state.findings:
                 stdscr.addstr(row, 0, " No findings yet...", curses.color_pair(6) | curses.A_DIM)
                 row += 1
@@ -272,7 +272,7 @@ class LiveDashboard:
                     if row >= height - 3:
                         break
 
-            # Fill remaining space to divider
+
             while row < height - 3:
                 try:
                     stdscr.addstr(row, 0, " " * w)
@@ -280,7 +280,7 @@ class LiveDashboard:
                     pass
                 row += 1
 
-            # ── Stats bar ─────────────────────────────────────────────────────
+
             row = height - 3
             stdscr.addstr(row, 0, "─" * w, curses.color_pair(5))
             row += 1
@@ -293,7 +293,7 @@ class LiveDashboard:
             stdscr.addstr(row, 0, stats_str[:w-1], curses.color_pair(6))
             row += 1
 
-            # Controls
+
             pause_label = "[R]esume" if state.paused else "[P]ause"
             ctrl_str = f" {pause_label} [V]erbose [Q]uit"
             if state.paused:
@@ -320,7 +320,7 @@ class LiveDashboard:
             self.state.quit_requested = True
             self._running = False
 
-    # ── ANSI fallback mode ────────────────────────────────────────────────────
+
 
     async def _run_ansi(self):
         """
@@ -334,7 +334,7 @@ class LiveDashboard:
         while self._running and not self.state.quit_requested:
             state = self.state
 
-            # Clear line and print progress
+
             pct   = int(state.progress_pct * 20)
             bar   = "█" * pct + "░" * (20 - pct)
             spin  = spinner_chars[spin_idx % len(spinner_chars)]
@@ -350,7 +350,7 @@ class LiveDashboard:
             sys.stdout.write(line)
             sys.stdout.flush()
 
-            # Print new findings
+
             if len(state.findings) > last_finding_count:
                 new_findings = state.findings[last_finding_count:]
                 for f in new_findings:
@@ -365,10 +365,10 @@ class LiveDashboard:
 
             await asyncio.sleep(self.refresh_ms / 1000)
 
-        # Final newline
+
         print()
 
-    # ── Context manager ───────────────────────────────────────────────────────
+
 
     async def __aenter__(self):
         self._task = asyncio.create_task(self.run())
@@ -383,7 +383,7 @@ class LiveDashboard:
                 self._task.cancel()
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _has_tty() -> bool:
     """Check if we're running in an interactive terminal."""

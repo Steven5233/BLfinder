@@ -50,9 +50,9 @@ class CORSScanner:
         self._scanner = scanner
         self._config = scanner.config
         self._request = scanner._request
-        self._reported: set[tuple] = set()   # (host, check_name) already reported
+        self._reported: set[tuple] = set()   
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def check(self, url: str, method: str = "GET") -> list[Finding]:
         findings: list[Finding] = []
@@ -166,7 +166,7 @@ class CORSScanner:
 
         return findings
 
-    # ── Helpers ──────────────────────────────────────────────────────────────
+
 
     def _get_header(self, headers: dict, name: str) -> str | None:
         if not headers:
@@ -304,7 +304,7 @@ fetch("{url}", {{
             parameter="Origin header",
         )
         finding.poc = poc
-        # Stash the ready-to-host HTML exploit alongside the finding for
-        # report generators that want to attach it (e.g. HackerOne write-up).
-        finding.html_poc = self._html_poc(url, method, origin)  # type: ignore[attr-defined]
+
+
+        finding.html_poc = self._html_poc(url, method, origin)  
         return finding

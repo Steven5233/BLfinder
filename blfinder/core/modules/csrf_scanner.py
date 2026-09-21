@@ -117,10 +117,10 @@ class CSRFScanner:
         self._scanner = scanner
         self._config = scanner.config
         self._request = scanner._request
-        self._reported: set[tuple] = set()   # (host, path_template)
+        self._reported: set[tuple] = set()   
         self._active_replay_enabled = bool(getattr(self._config, "run_csrf", False))
 
-    # ── Public API ───────────────────────────────────────────────────────────
+
 
     async def check(
         self,
@@ -137,10 +137,10 @@ class CSRFScanner:
         if method.upper() not in _STATE_CHANGING_METHODS:
             return findings
         if not getattr(self._config, "cookies", None):
-            # No cookie-based session in play — classic CSRF doesn't apply.
+
             return findings
         if status == 0 or status >= 500:
-            return findings  # baseline request itself failed; nothing to reproduce
+            return findings  
 
         parsed = urlparse(url)
         host = parsed.netloc
@@ -154,40 +154,40 @@ class CSRFScanner:
         params = params or {}
         body = body or {}
 
-        # ── Layer 1: passive discovery ──────────────────────────────────────
+
         token_locations = self._find_tokens(params, body, headers or {})
         samesite = self._extract_samesite(headers or {})
 
         if not self._active_replay_enabled:
-            # Without opt-in active replay we can only report *hardening
-            # gaps* we're fully confident about from passive data — never a
-            # "confirmed exploitable" verdict, since we haven't proven the
-            # forged request actually achieves the same effect.
+
+
+
+
             f = self._maybe_build_passive_finding(url, method, host, token_locations, samesite)
             if f:
                 self._reported.add(dedup_key)
                 findings.append(f)
             return findings
 
-        # ── Layer 2: forged cross-site replay (the core proof) ──────────────
+
         replay = await self._forged_replay(url, method, params, body, token_locations, base_body)
         if replay is None:
-            return findings  # request errored out; can't safely conclude anything
+            return findings  
 
         forged_status, forged_body, achieved_same_effect, diff_note = replay
         if not achieved_same_effect:
-            # Origin/Referer + token stripping was enough to make the server
-            # reject or meaningfully change behavior — defenses are working.
+
+
             return findings
 
-        # ── Layer 3: is the token cosmetic? (only if one exists) ────────────
+
         token_is_cosmetic = False
         if token_locations:
             token_is_cosmetic = await self._token_validation_depth_check(
                 url, method, params, body, token_locations, base_body,
             )
 
-        # ── Layer 4: cheap downgrade checks ─────────────────────────────────
+
         get_downgrade_works = await self._check_get_downgrade(url, method, params, body, base_body)
         content_type_bypass = await self._check_content_type_bypass(url, method, params, body, base_body)
 
@@ -204,7 +204,7 @@ class CSRFScanner:
         findings.append(finding)
         return findings
 
-    # ── Layer 1 helpers ──────────────────────────────────────────────────────
+
 
     def _find_tokens(self, params: dict, body: dict, headers: dict) -> list[tuple]:
         """Returns list of (location, path) for token-shaped fields."""
@@ -250,11 +250,11 @@ class CSRFScanner:
     def _maybe_build_passive_finding(
         self, url, method, host, token_locations, samesite,
     ) -> Finding | None:
-        # Only worth reporting passively when there is genuinely no
-        # meaningful defense signal at all: no token anywhere AND the
-        # cookie has no SameSite restriction. Anything less certain needs
-        # the active replay (Layer 2) to avoid a bare "looks unprotected"
-        # false positive.
+
+
+
+
+
         if token_locations or samesite in ("Strict", "Lax"):
             return None
 
@@ -297,7 +297,7 @@ class CSRFScanner:
         )
         return finding
 
-    # ── Layer 2: forged replay ───────────────────────────────────────────────
+
 
     async def _forged_replay(
         self, url, method, params, body, token_locations, base_body,
@@ -310,9 +310,9 @@ class CSRFScanner:
                 self._blank_path(forged_params, path)
             elif location == "body":
                 self._blank_path(forged_body, path)
-            # header/cookie tokens: a real cross-site form can't set custom
-            # headers or third-party cookies anyway, so we simply omit the
-            # forged_headers below rather than trying to strip them here.
+
+
+
 
         forged_headers = {
             "Origin": f"https://attacker-{self._nonce()}.test",
@@ -333,7 +333,7 @@ class CSRFScanner:
         if status == 0:
             return None
 
-        # Reject rejected: explicit defense worked.
+
         if status in (401, 403):
             return status, resp_body, False, "Forged request rejected with 401/403"
 
@@ -346,9 +346,9 @@ class CSRFScanner:
 
         if _HAS_SEMANTIC_DIFF and base_body:
             diff = SemanticDiff.compare(base_body, resp_body, context={"endpoint": url}, threshold=0.2)
-            # High semantic similarity + no structural regression + status
-            # class matches the original success class → the forged request
-            # produced an equivalent effect to the legitimate one.
+
+
+
             same_effect = (
                 diff.semantic_similarity >= 0.75
                 and not diff.sensitive_changes
@@ -360,14 +360,14 @@ class CSRFScanner:
             )
             return status, resp_body, same_effect, note
 
-        # No semantic diff available / no baseline body to compare — fall
-        # back to a conservative status-code-only signal (2xx and no
-        # explicit failure tokens). Marked in the note so the composite
-        # finding's confidence reflects the weaker evidence.
+
+
+
+
         same_effect = status < 300 and failure_hits == 0
         return status, resp_body, same_effect, "Status-code-only signal (no semantic diff / baseline available)"
 
-    # ── Layer 3: token validation depth ─────────────────────────────────────
+
 
     async def _token_validation_depth_check(
         self, url, method, params, body, token_locations, base_body,
@@ -376,12 +376,12 @@ class CSRFScanner:
         (i.e. the server checks presence but not correctness)."""
         body_or_query_tokens = [t for t in token_locations if t[0] in ("query", "body")]
         if not body_or_query_tokens:
-            return False  # only header/cookie tokens found — nothing to tamper here safely
+            return False  
 
         location, path = body_or_query_tokens[0]
         tampered_params = dict(params)
         tampered_body = self._deep_copy(body)
-        tampered_value = "0" * 16  # implausible-but-well-formed-looking tampered token
+        tampered_value = "0" * 16  
 
         if location == "query":
             self._set_path(tampered_params, path, tampered_value)
@@ -409,16 +409,16 @@ class CSRFScanner:
         failure_hits = sum(1 for t in _FAILURE_TOKENS if t in lower)
         return status < 300 and failure_hits == 0
 
-    # ── Layer 4: downgrade checks ────────────────────────────────────────────
+
 
     async def _check_get_downgrade(self, url, method, params, body, base_body) -> bool:
         if method.upper() == "GET":
             return False
         flat_params = dict(params)
-        # Flatten a shallow body into query params for the GET attempt —
-        # deep/nested bodies aren't representable as a simple query string
-        # and are skipped (GET downgrade is only meaningful for simple forms
-        # anyway, which is exactly the CSRF-relevant case).
+
+
+
+
         if isinstance(body, dict) and all(not isinstance(v, (dict, list)) for v in body.values()):
             flat_params.update({k: str(v) for k, v in body.items()})
 
@@ -454,7 +454,7 @@ class CSRFScanner:
             return diff.semantic_similarity >= 0.6
         return status < 300
 
-    # ── Composite finding ────────────────────────────────────────────────────
+
 
     def _build_composite_finding(
         self, url, method, host, token_locations, samesite, token_is_cosmetic,
@@ -547,7 +547,7 @@ class CSRFScanner:
             video_note="Screen-record the victim's browser performing the action "
                         "after visiting an unrelated attacker-controlled page.",
         )
-        finding.html_poc = html_poc  # type: ignore[attr-defined]
+        finding.html_poc = html_poc  
         return finding
 
     def _html_poc(self, url: str, method: str) -> str:
@@ -563,7 +563,7 @@ class CSRFScanner:
 </body>
 </html>"""
 
-    # ── Path/dict helpers ────────────────────────────────────────────────────
+
 
     def _normalize_path(self, path: str) -> str:
         return re.sub(r"/\d+(?=/|$)", "/{id}", path)
@@ -600,7 +600,7 @@ class CSRFScanner:
     def _nonce(self, n: int = 8) -> str:
         return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
-    # ── PoC helpers ──────────────────────────────────────────────────────────
+
 
     def _curl(self, url, method, host) -> str:
         return (

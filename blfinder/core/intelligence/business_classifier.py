@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-# ── Endpoint profiles ─────────────────────────────────────────────────────────
+
 
 ENDPOINT_PROFILES: dict[str, dict] = {
     "payment": {
@@ -155,7 +155,7 @@ ENDPOINT_PROFILES: dict[str, dict] = {
     },
 }
 
-# Default profile — run everything
+
 DEFAULT_PROFILE: dict = {
     "url_patterns": [],
     "body_signals": [],
@@ -171,7 +171,7 @@ class EndpointProfile:
     """Classification result for a single endpoint."""
     endpoint:         str
     profile_name:     str
-    confidence:       float         # 0.0–1.0
+    confidence:       float         
     priority_modules: list[str] = field(default_factory=list)
     skip_modules:     list[str] = field(default_factory=list)
     estimated_bounty: str = ""
@@ -191,7 +191,7 @@ class AttackPlan:
     unclassified:        list[str] = field(default_factory=list)
     estimated_scan_time: float = 0.0
     high_value_count:    int = 0
-    attack_queue:        list[tuple] = field(default_factory=list)  # (url, [modules])
+    attack_queue:        list[tuple] = field(default_factory=list)  
 
     def print_report(self, verbose: bool = False):
         """Print a pre-scan attack plan to terminal."""
@@ -200,7 +200,7 @@ class AttackPlan:
         print(f"    Unclassified       : {len(self.unclassified)}")
         print()
 
-        # Group by profile
+
         by_profile: dict[str, list[EndpointProfile]] = {}
         for ep in self.classified:
             by_profile.setdefault(ep.profile_name, []).append(ep)
@@ -258,19 +258,19 @@ class BusinessClassifier:
             score   = 0.0
             signals = []
 
-            # URL pattern matching
+
             for pattern in profile["url_patterns"]:
                 if pattern in url_lower:
                     score += 1.0
                     signals.append(f"URL contains '{pattern}'")
 
-            # Body/param signal matching
+
             for signal in profile["body_signals"]:
                 if any(signal in key.lower() for key in all_signals):
                     score += 0.75
                     signals.append(f"Body/param has '{signal}'")
 
-            # Normalize by number of patterns
+
             total_patterns = len(profile["url_patterns"]) + len(profile["body_signals"])
             if total_patterns > 0:
                 score = score / total_patterns
@@ -280,7 +280,7 @@ class BusinessClassifier:
                 best_profile = profile_name
                 best_signals = signals
 
-        # Minimum confidence threshold
+
         if best_score < 0.05 or best_profile is None:
             return EndpointProfile(
                 endpoint=endpoint,
@@ -297,7 +297,7 @@ class BusinessClassifier:
         return EndpointProfile(
             endpoint=endpoint,
             profile_name=best_profile,
-            confidence=min(1.0, best_score * 3),   # Scale for readability
+            confidence=min(1.0, best_score * 3),   
             priority_modules=profile["priority_modules"],
             skip_modules=profile["skip_modules"],
             estimated_bounty=profile["estimated_bounty"],
@@ -326,17 +326,17 @@ class BusinessClassifier:
                 if profile.is_high_value:
                     plan.high_value_count += 1
 
-        # Sort by bounty score descending
+
         plan.classified.sort(key=lambda x: x.bounty_score, reverse=True)
 
-        # Build ordered attack queue
+
         for profile in plan.classified:
             plan.attack_queue.append((
                 profile.endpoint,
                 profile.priority_modules,
             ))
         for url in plan.unclassified:
-            plan.attack_queue.append((url, []))  # Run all modules
+            plan.attack_queue.append((url, []))  
 
         return plan
 
@@ -362,7 +362,7 @@ class BusinessClassifier:
         return ordered
 
 
-# ── All module names for reference ────────────────────────────────────────────
+
 
 _ALL_MODULES = [
     "price_manipulation", "negative_quantity", "workflow_bypass",

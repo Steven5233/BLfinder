@@ -42,9 +42,9 @@ from __future__ import annotations
 from ..models import DiscoveredEndpoint, SOURCE_WORDLIST
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tag → priority maps
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 _PRIORITY_1_TAGS = frozenset({
     "admin", "payment", "transfer", "withdraw", "internal",
@@ -59,7 +59,7 @@ _PRIORITY_4_TAGS = frozenset({
     "dev", "qa", "uat",
 })
 
-# Source layers ordered by inherent reliability
+
 _SOURCE_RELIABILITY: dict[str, float] = {
     "layer2:openapi":    0.95,
     "layer3:headless":   0.90,
@@ -86,35 +86,35 @@ def compute_priority(ep: DiscoveredEndpoint) -> int:
     """
     tags = set(ep.tags)
 
-    # Priority 1 overrides
+
     if tags & _PRIORITY_1_TAGS:
         return 1
 
-    # Auth-bypass confirmed by version permuter
+
     if ep.confidence >= 0.88 and "version" in ep.source:
         return 1
 
-    # Spec-verified POST/PUT/PATCH with a body schema → high attack value
+
     if ep.spec_verified and ep.method in ("POST", "PUT", "PATCH") and ep.schema_hint:
         return 1
 
-    # Priority 2
+
     if tags & _PRIORITY_2_TAGS:
         return 2
 
-    # Any endpoint with ID params is high IDOR value
+
     if ep.id_params and ep.confidence >= 0.75:
         return 2
 
-    # Live-verified (headless saw it being called)
+
     if ep.live_verified:
         return 2
 
-    # Priority 4 — noise/debug
+
     if tags & _PRIORITY_4_TAGS and not ep.spec_verified:
         return 4
 
-    # Wordlist-only low-confidence paths
+
     if ep.source == SOURCE_WORDLIST and ep.confidence < 0.65:
         return 4
 
@@ -123,8 +123,8 @@ def compute_priority(ep: DiscoveredEndpoint) -> int:
 
 def adjust_confidence(
     ep:               DiscoveredEndpoint,
-    source_count:     int   = 1,    # how many layers independently found this
-    soft404_boost:    float = 0.0,  # from Soft404Filter.check()
+    source_count:     int   = 1,    
+    soft404_boost:    float = 0.0,  
     is_catch_all_domain: bool = False,
 ) -> float:
     """
@@ -138,7 +138,7 @@ def adjust_confidence(
     if ep.live_verified:
         score += 0.15
 
-    score += soft404_boost   # +0.10 when soft-404 filter passes on 200
+    score += soft404_boost   
 
     if ep.schema_hint:
         score += 0.08
@@ -149,7 +149,7 @@ def adjust_confidence(
     if ep.id_params:
         score += 0.05
 
-    # Penalties
+
     if ep.source == SOURCE_WORDLIST and source_count == 1:
         score -= 0.10
     if set(ep.tags) & _PRIORITY_4_TAGS and not ep.spec_verified:
@@ -191,7 +191,7 @@ def score_and_sort(
         )
         ep.priority = compute_priority(ep)
 
-    # Sort: priority asc, then confidence desc
+
     endpoints.sort(key=lambda e: (e.priority, -e.confidence))
     return endpoints
 
@@ -212,5 +212,5 @@ def build_source_count_map(
     return {k: len(v) for k, v in counts.items()}
 
 
-# Allow Optional import without circular issues
+
 from typing import Optional
