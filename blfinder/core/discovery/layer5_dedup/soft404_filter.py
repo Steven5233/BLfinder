@@ -99,11 +99,11 @@ def _random_token(length: int = 18) -> str:
 
 
 _ERROR_PHRASES = [
-    "page not found", "404", "not found", "doesn't exist",
+    "page not found", "not found", "doesn't exist",
     "does not exist", "no resource", "resource not found",
     "cannot find", "could not find", "nothing here",
     "unknown route", "invalid path", "route not found",
-    "endpoint not found", "no such", "unavailable",
+    "endpoint not found", "no such",
 ]
 
 

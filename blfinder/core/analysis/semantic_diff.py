@@ -17,6 +17,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 from .field_extractor import VolatileFieldExtractor
+from ..response_heuristics import looks_like_error
 
 
 @dataclass
@@ -344,11 +345,9 @@ class SemanticDiff:
 
 
             success_tokens = ["success", "created", "order_id", "transaction", "confirmed"]
-            failure_tokens = ["error", "invalid", "denied", "forbidden", "rejected"]
-
             body_b_lower = body_b.lower()
             has_success = any(t in body_b_lower for t in success_tokens)
-            has_failure = any(t in body_b_lower for t in failure_tokens)
+            has_failure = looks_like_error(body_b)
 
             if has_failure and not has_success:
                 result.fp_signals.append(

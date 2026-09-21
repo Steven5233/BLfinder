@@ -79,11 +79,13 @@ class ScanCheckpoint:
             with open(tmp_path, "wb") as fh:
                 pickle.dump(self, fh, protocol=pickle.HIGHEST_PROTOCOL)
             os.replace(tmp_path, self.path)
-        except Exception:
-
-
-
-            pass
+        except Exception as e:
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                print(
+                    f"  [!] Checkpoint save failed ({e}) — "
+                    f"--resume progress will not be preserved until this is fixed"
+                )
 
     @classmethod
     def load(cls, path: str) -> "ScanCheckpoint":

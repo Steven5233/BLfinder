@@ -45,6 +45,7 @@ import json
 from urllib.parse import urlparse
 
 from ..models import Finding, Severity, ProofOfConcept
+from ..response_heuristics import looks_like_error
 
 
 
@@ -314,12 +315,7 @@ class JWTAlgConfusionScanner:
     def _looks_ok(self, body: str, status: int) -> bool:
         if self._resp_ok:
             return self._resp_ok(body, status)
-        if not body:
-            return False
-        lower = body.lower()
-        return status in (200, 201) and not any(
-            s in lower for s in ("unauthorized", "forbidden", "invalid token", "error")
-        )
+        return status in (200, 201) and not looks_like_error(body, status)
 
     async def _try_check(self, url, method, token_hash, check_name, variants, build):
         key = (token_hash, check_name)
