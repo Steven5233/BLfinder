@@ -283,14 +283,19 @@ class ResponseClassifier:
 
 
 
-_WAF_SIGNALS = [
+_WAF_SIGNALS_STRONG = [
     re.compile(p, re.I) for p in [
         r"cloudflare", r"akamai", r"imperva", r"sucuri", r"barracuda",
-        r"access denied", r"request blocked", r"security violation",
         r"mod_security", r"your request has been blocked",
         r"ddos protection", r"<title>.*blocked.*</title>",
         r"<title>.*attention required",
         r"ray id:", r"cf-ray",
+    ]
+]
+
+_WAF_SIGNALS_WEAK = [
+    re.compile(p, re.I) for p in [
+        r"access denied", r"request blocked", r"security violation",
     ]
 ]
 
@@ -355,7 +360,9 @@ def _is_waf_block(body: str) -> bool:
     if not body:
         return False
     bl = body.lower()
-    return sum(1 for p in _WAF_SIGNALS if p.search(bl)) >= 1
+    if any(p.search(bl) for p in _WAF_SIGNALS_STRONG):
+        return True
+    return sum(1 for p in _WAF_SIGNALS_WEAK if p.search(bl)) >= 2
 
 
 def _is_generic_404_json(body: str, status: int) -> bool:

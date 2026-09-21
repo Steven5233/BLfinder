@@ -49,7 +49,7 @@ class ConfidenceEngine:
         failure_tokens = [
             "error", "invalid", "unauthorized", "forbidden", "rejected",
             "denied", "not found", "bad request", "validation failed",
-            "exception", "stack trace", "400", "401", "403",
+            "exception", "stack trace",
         ]
         tampered_lower = tampered_body.lower()
         base_lower = baseline_body.lower()
@@ -66,6 +66,10 @@ class ConfidenceEngine:
         elif failure_hits > success_hits:
             score -= 20
             fp_checks.append(f"Failure tokens ({failure_hits}) exceed success tokens ({success_hits}) — likely error response")
+
+        if tampered_status in (400, 401, 403, 404, 422):
+            score -= 15
+            fp_checks.append(f"Tampered request returned {tampered_status} — likely rejected")
 
 
 
@@ -108,9 +112,9 @@ class ConfidenceEngine:
                 reasons.append(f"New JSON keys in tampered response: {list(new_keys)[:5]}")
 
 
-            sensitive = ["password", "secret", "token", "key", "ssn", "cvv",
-                         "private", "internal", "admin", "hash", "salt"]
-            sens_found = [k for k in new_data if any(s in k.lower() for s in sensitive)]
+            sensitive = ["password", "secret", "token", "apikey", "api_key",
+                         "ssn", "cvv", "private", "internal", "admin", "hash", "salt"]
+            sens_found = [k for k in new_data if any(s in k.lower().replace("-", "_") for s in sensitive)]
             if sens_found:
                 score += 20
                 reasons.append(f"Sensitive fields in response: {sens_found[:3]}")
@@ -162,7 +166,7 @@ def _safe_json(body: str):
     try:
         return json.loads(body)
     except Exception:
-        return {}
+        return None
 
 
 def severity_from_confidence(finding: Finding) -> Finding:
