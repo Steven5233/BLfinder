@@ -870,13 +870,22 @@ class PlatformProfiler:
                     hits.append(f"host matches {pattern}")
 
             for hdr, val in pdata.get("header_signals", {}).items():
-                if hdr.lower() in header_str:
-                    score += 30
-                    hits.append(f"header: {hdr}")
+                actual = headers.get(hdr) or next(
+                    (v for k, v in headers.items() if k.lower() == hdr.lower()), None
+                )
+                if actual is None:
+                    continue
+                if val:
+                    if val.lower() in actual.lower():
+                        score += 30
+                        hits.append(f"header: {hdr}={val}")
+                else:
+                    score += 10
+                    hits.append(f"header: {hdr} present")
 
             for path in pdata.get("path_signals", []):
                 if path in path_str or path in url:
-                    score += 20
+                    score += 10
                     hits.append(f"path: {path}")
 
             for sig in pdata.get("body_signals", []):
