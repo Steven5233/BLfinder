@@ -329,7 +329,10 @@ class TenantBOLAScanner:
             return False
         lower = body.lower()
         return status in (200, 201) and not any(
-            s in lower for s in ("unauthorized", "forbidden", "not found", "error")
+            s in lower for s in (
+                "unauthorized", "forbidden", "not found",
+                '"error"', "internal server error", "stack trace",
+            )
         )
 
 

@@ -283,47 +283,45 @@ class IDORMassEnumerator:
                 status, _, resp_body, _ = await self._request(
                     method, test_url
                 )
-                if status == 200 and len(resp_body) > 50:
-
-                    if not _body_is_error(resp_body):
-                        ev  = self._new_ev()
-                        pkg = self._build_pkg(
-                            ev,
-                            title=f"BOLA Cross-Endpoint — ID {id_value} on {ep_url}",
-                            endpoint=test_url,
-                            vuln_type="BOLA",
-                            confidence=65,
-                        )
-                        from ..models import Finding, Severity
-                        f = Finding(
-                            title=(
-                                f"BOLA — Harvested ID `{id_value}` "
-                                f"accessible on {ep_url}"
-                            ),
-                            severity=Severity.HIGH,
-                            category="Business Logic — IDOR/BOLA (Cross-Endpoint)",
-                            description=(
-                                f"ID `{id_value}` discovered on one endpoint was "
-                                f"also accessible on `{test_url}` — "
-                                "same ID namespace reuse across object types."
-                            ),
-                            request={"method": method, "url": test_url},
-                            response_summary=f"HTTP {status} — {resp_body[:200]}",
-                            evidence=(
-                                f"Harvested ID {id_value} → "
-                                f"HTTP {status} on {test_url}"
-                            ),
-                            recommendation=(
-                                "Validate that IDs are scoped to the correct "
-                                "object type. Do not share ID namespaces."
-                            ),
-                            cwe="CWE-639", cvss=8.1,
-                            owasp="API1:2023 Broken Object Level Authorization",
-                            endpoint=test_url, parameter=f"path[{i}]",
-                            confidence=65,
-                        )
-                        self._attach(f, pkg)
-                        findings.append(f)
+                if status == 200 and not _body_is_error(resp_body):
+                    ev  = self._new_ev()
+                    pkg = self._build_pkg(
+                        ev,
+                        title=f"BOLA Cross-Endpoint — ID {id_value} on {ep_url}",
+                        endpoint=test_url,
+                        vuln_type="BOLA",
+                        confidence=65,
+                    )
+                    from ..models import Finding, Severity
+                    f = Finding(
+                        title=(
+                            f"BOLA — Harvested ID `{id_value}` "
+                            f"accessible on {ep_url}"
+                        ),
+                        severity=Severity.HIGH,
+                        category="Business Logic — IDOR/BOLA (Cross-Endpoint)",
+                        description=(
+                            f"ID `{id_value}` discovered on one endpoint was "
+                            f"also accessible on `{test_url}` — "
+                            "same ID namespace reuse across object types."
+                        ),
+                        request={"method": method, "url": test_url},
+                        response_summary=f"HTTP {status} — {resp_body[:200]}",
+                        evidence=(
+                            f"Harvested ID {id_value} → "
+                            f"HTTP {status} on {test_url}"
+                        ),
+                        recommendation=(
+                            "Validate that IDs are scoped to the correct "
+                            "object type. Do not share ID namespaces."
+                        ),
+                        cwe="CWE-639", cvss=8.1,
+                        owasp="API1:2023 Broken Object Level Authorization",
+                        endpoint=test_url, parameter=f"path[{i}]",
+                        confidence=65,
+                    )
+                    self._attach(f, pkg)
+                    findings.append(f)
         return findings
 
     def harvest_ids(self, response_body: str):
@@ -536,9 +534,7 @@ def _classify_status(
     body_hash = _hash(body)
     if body_hash == owned_hash:
         return ResourceStatusType.OWNED
-    if len(body) > 20:
-        return ResourceStatusType.EXISTS
-    return ResourceStatusType.UNKNOWN
+    return ResourceStatusType.EXISTS
 
 
 def _find_id_fields(body: dict) -> list[tuple[str, Any]]:

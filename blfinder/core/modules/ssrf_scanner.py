@@ -280,8 +280,9 @@ class SSRFScanner:
             if status == 0:
                 continue
 
+            scan_body = resp_body.replace(payload_url, "").replace(quote(payload_url, safe=""), "")
             for sig_re, sig_name in _METADATA_SIGNATURES:
-                if sig_re.search(resp_body):
+                if sig_re.search(scan_body):
                     scheme_note = await self._protocol_acceptance_note(
                         method, url, location, param_path, params, body,
                     )
