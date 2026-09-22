@@ -774,6 +774,22 @@ EXAMPLES:
     flows.add_argument("--refresh-token",   default="",  help="Initial refresh token value")
     flows.add_argument("--login-url",       default="",  help="Login endpoint for auto token refresh")
     flows.add_argument("--login-body",      default="",  help='Login body JSON (e.g. {"user":"u","pass":"p"})')
+    flows.add_argument(
+        "--auth-check-url", default="", dest="auth_check_url",
+        help=(
+            "URL to probe before scanning to confirm the token/cookies/API key "
+            "actually work (default: the target URL). For a conclusive check, "
+            "point this at an endpoint that requires authentication."
+        ),
+    )
+    flows.add_argument(
+        "--skip-auth-check", action="store_true", dest="skip_auth_check",
+        help="Skip the pre-scan credential validation request.",
+    )
+    flows.add_argument(
+        "--ignore-auth-check", action="store_true", dest="ignore_auth_check",
+        help="Run the pre-scan credential check but continue scanning even if it fails.",
+    )
     flows.add_argument("--blind-idor",      action="store_true", help="Enable blind IDOR oracle scanning")
     flows.add_argument(
         "--samples", type=int, default=4, metavar="N",
@@ -2201,6 +2217,15 @@ async def main() -> int:
     config.refresh_config    = build_refresh_config(args)
     config.oracle_samples    = args.samples
     config.run_blind_idor    = args.blind_idor
+
+
+    if not args.skip_auth_check:
+        from core.auth.preflight import run_auth_preflight, print_auth_check_result
+        auth_result = await run_auth_preflight(config, check_url=args.auth_check_url)
+        print_auth_check_result(auth_result)
+        if auth_result.performed and not auth_result.passed and not args.ignore_auth_check:
+            print("  [!] Aborting before scan. Use --ignore-auth-check to proceed anyway.")
+            return 1
 
 
     prof_settings = profile.get("settings", {})
