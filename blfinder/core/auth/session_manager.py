@@ -200,7 +200,8 @@ class SessionManager:
     async def ensure_valid(self, request_fn: Callable[[], Awaitable[tuple]]) -> bool:
         """
         Ensure the current token is valid before making a request.
-        If token is expired or we've seen repeated 401s, trigger refresh.
+        If token is expired, missing (no login performed yet), or we've
+        seen repeated 401s, trigger refresh/login.
 
         Args:
             request_fn: The async request callable (for re-login if needed)
@@ -209,12 +210,18 @@ class SessionManager:
             True if session is valid (or was successfully refreshed)
             False if refresh failed and session is invalid
         """
-        if not self.state.is_expired() and self._401_count < 2:
+        needs_first_login = (
+            not self.state.token
+            and self.refresh_config is not None
+            and (self.refresh_config.login_url or self.refresh_config.refresh_url)
+        )
+
+        if not needs_first_login and not self.state.is_expired() and self._401_count < 2:
             return True
 
         async with self._refresh_lock:
 
-            if not self.state.is_expired() and self._401_count < 2:
+            if not needs_first_login and not self.state.is_expired() and self._401_count < 2:
                 return True
 
             if self.state.refresh_count >= self._max_refresh_attempts:
@@ -376,8 +383,21 @@ class SessionManager:
 
 
         if self.refresh_config.login_url and self.refresh_config.login_body:
-            return await self._refresh_via_login()
+            success = await self._refresh_via_login()
+            if success:
+                return True
 
+        if self.state.refresh_count >= self._max_refresh_attempts:
+            print(
+                "  [!] ════════════════════════════════════════════════\n"
+                "  [!] AUTHENTICATION FAILED — could not obtain a valid \n"
+                "  [!] session token after repeated attempts. Remaining \n"
+                "  [!] requests will run UNAUTHENTICATED and most/all   \n"
+                "  [!] findings will be suppressed — this does NOT mean\n"
+                "  [!] the target is secure. Check your login/refresh  \n"
+                "  [!] configuration.                                 \n"
+                "  [!] ════════════════════════════════════════════════"
+            )
         return False
 
     async def _refresh_via_refresh_token(self) -> bool:
@@ -399,16 +419,27 @@ class SessionManager:
                 timeout=__import__("aiohttp").ClientTimeout(total=15),
             ) as resp:
                 if resp.status not in (200, 201):
+                    print(
+                        f"  [!] Token refresh failed — {rc.refresh_url} "
+                        f"returned HTTP {resp.status}"
+                    )
                     return False
                 text = await resp.text()
                 new_token = _extract_json_value(text, rc.access_token_path)
+                if not new_token:
+                    new_token = _extract_json_value_fallback(text)
                 if new_token:
                     self.state.token = new_token
                     self.state.token_acquired_at = time.time()
                     self.absorb_response(dict(resp.headers), text, rc.refresh_url, resp.status)
                     return True
-        except Exception:
-            pass
+                print(
+                    f"  [!] Token refresh got HTTP {resp.status} but could not find a "
+                    f"token at path '{rc.access_token_path}' in the response — "
+                    f"check --refresh-token-path"
+                )
+        except Exception as e:
+            print(f"  [!] Token refresh request to {rc.refresh_url} failed: {e}")
         return False
 
     async def _refresh_via_login(self) -> bool:
@@ -426,16 +457,27 @@ class SessionManager:
                 timeout=__import__("aiohttp").ClientTimeout(total=15),
             ) as resp:
                 if resp.status not in (200, 201):
+                    print(
+                        f"  [!] Login failed — {rc.login_url} "
+                        f"returned HTTP {resp.status}. Scan may proceed unauthenticated."
+                    )
                     return False
                 text = await resp.text()
                 new_token = _extract_json_value(text, rc.login_token_path)
+                if not new_token:
+                    new_token = _extract_json_value_fallback(text)
                 if new_token:
                     self.state.token = new_token
                     self.state.token_acquired_at = time.time()
                     self.absorb_response(dict(resp.headers), text, rc.login_url, resp.status)
                     return True
-        except Exception:
-            pass
+                print(
+                    f"  [!] Login got HTTP {resp.status} but could not find a token "
+                    f"at path '{rc.login_token_path}' in the response — "
+                    f"check --login-token-path. Scan may proceed unauthenticated."
+                )
+        except Exception as e:
+            print(f"  [!] Login request to {rc.login_url} failed: {e}")
         return False
 
 
@@ -458,3 +500,28 @@ def _extract_json_value(body: str, path: str) -> str:
         return str(current) if current else ""
     except (json.JSONDecodeError, ValueError, AttributeError):
         return ""
+
+
+def _extract_json_value_fallback(body: str) -> str:
+    """
+    When the configured token path doesn't match, try the common shapes
+    a login/refresh endpoint uses before giving up. Only used as a
+    fallback so a misconfigured --login-token-path doesn't silently
+    leave the scanner running unauthenticated.
+    """
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    for path in SessionManager._TOKEN_JSON_PATHS:
+        current = data
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                current = None
+                break
+            current = current[key]
+        if current and isinstance(current, str) and len(current) >= 8:
+            return current
+    return ""

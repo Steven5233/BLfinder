@@ -881,7 +881,11 @@ class BLFScanner:
             "Content-Type":     "application/json",
             "X-Requested-With": "XMLHttpRequest",
         }
-        t = token if token is not None else self.config.auth_token
+        t = token if token is not None else (
+            self._session_mgr.state.token
+            if self._session_mgr and self._session_mgr.state.token
+            else self.config.auth_token
+        )
         sid, secret = (
             api_key if api_key is not None
             else (self.config.api_key_sid, self.config.api_key_secret)
