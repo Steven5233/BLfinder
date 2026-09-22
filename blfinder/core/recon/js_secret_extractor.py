@@ -341,6 +341,13 @@ class JSSecretExtractor:
     _MAX_JS_SIZE   = 5 * 1024 * 1024    
     _MAX_JS_FILES  = 30                  
 
+    _KNOWN_VENDOR_SDK_MARKERS = (
+        "amplitude", "segment", "mixpanel", "google-analytics", "gtag",
+        "googletagmanager", "sentry", "bugsnag", "intercom", "hotjar",
+        "fullstory", "hubspot", "fbevents", "facebook.net", "stripe-js",
+        "recaptcha", "datadog", "newrelic", "clarity.ms", "hs-scripts",
+    )
+
     def __init__(self, verbose: bool = False):
         self.verbose   = verbose
         self._seen_secrets: set[str] = set()
@@ -518,7 +525,6 @@ class JSSecretExtractor:
         """Extract secrets and endpoints from JS content."""
         secrets:   list[SecretFinding] = []
         endpoints: list[str] = []
-        lines      = content.split("\n")
 
         for pattern_def in _SECRET_PATTERNS:
             for match in pattern_def.pattern.finditer(content):
@@ -529,11 +535,11 @@ class JSSecretExtractor:
 
                 pos         = match.start()
                 line_num    = content[:pos].count("\n") + 1
-                context     = self._get_context(lines, line_num - 1)
+                context     = self._get_context(content, match.start(), match.end())
 
 
                 is_fp, fp_reason = self._is_false_positive(
-                    value, context, pattern_def
+                    value, context, pattern_def, source_url
                 )
 
 
@@ -566,10 +572,19 @@ class JSSecretExtractor:
         return secrets, endpoints
 
     def _is_false_positive(
-        self, value: str, context: str, pattern_def: SecretPattern
+        self, value: str, context: str, pattern_def: SecretPattern,
+        source_url: str = "",
     ) -> tuple[bool, str]:
         """Check if a found value is likely a false positive."""
 
+        if pattern_def.category == "internal_endpoint":
+            src_lower = source_url.lower()
+            if any(m in src_lower for m in self._KNOWN_VENDOR_SDK_MARKERS):
+                return True, (
+                    "Source file is a known third-party analytics/vendor SDK — "
+                    "'internal' endpoint almost certainly belongs to the vendor, "
+                    "not the target application"
+                )
 
         for fp_pat in pattern_def.false_positive_patterns:
             if fp_pat.search(value) or fp_pat.search(context):
@@ -633,11 +648,13 @@ class JSSecretExtractor:
 
         return min(100, score)
 
-    def _get_context(self, lines: list[str], line_idx: int) -> str:
-        """Get surrounding code context for a finding."""
-        start = max(0, line_idx - 1)
-        end   = min(len(lines), line_idx + 2)
-        return " | ".join(lines[start:end]).strip()
+    def _get_context(self, content: str, start: int, end: int, window: int = 100) -> str:
+        """Get surrounding source text for a finding, centred on the actual
+        match position (character offsets). Line-based windowing breaks on
+        minified bundles where the whole file is one line."""
+        lo = max(0, start - window)
+        hi = min(len(content), end + window)
+        return content[lo:hi].strip()
 
     def _is_js_url(self, url: str) -> bool:
         """Check if a URL points to a JavaScript file."""
