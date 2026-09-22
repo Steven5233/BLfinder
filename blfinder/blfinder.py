@@ -1273,7 +1273,7 @@ async def cmd_show_history(args: argparse.Namespace) -> None:
                 program=args.program or None,
                 limit=50,
             )
-            db.print_findings(findings)
+            db.print_findings(findings, verbose=args.verbose)
     except Exception as e:
         print(f"[!] Database error: {e}")
 
@@ -1291,7 +1291,7 @@ async def cmd_search(args: argparse.Namespace, query: str) -> None:
         async with ScanDatabase(db_path) as db:
             findings = await db.search(query)
             print(f"\n[*] Search results for '{query}': {len(findings)} findings\n")
-            db.print_findings(findings)
+            db.print_findings(findings, verbose=args.verbose)
     except Exception as e:
         print(f"[!] Database error: {e}")
 

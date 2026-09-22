@@ -710,7 +710,7 @@ class ScanDatabase:
                 print(f"   [{f.severity}] {f.title[:50]}")
         print(f"{'─'*50}\n")
 
-    def print_findings(self, findings: list[DBFinding]):
+    def print_findings(self, findings: list[DBFinding], verbose: bool = False):
         """Print a list of findings to terminal."""
         if not findings:
             print("No findings found.")
@@ -724,6 +724,25 @@ class ScanDatabase:
             print(f"     Status:   {f.status}")
             if f.h1_report_id:
                 print(f"     H1 Report: https://hackerone.com/reports/{f.h1_report_id}")
+            if verbose:
+                if f.category:
+                    print(f"     Category:       {f.category}")
+                if f.parameter:
+                    print(f"     Parameter:      {f.parameter}")
+                if f.cwe or f.owasp or f.cvss:
+                    print(f"     CWE/OWASP/CVSS: {f.cwe or '-'} / {f.owasp or '-'} / {f.cvss or '-'}")
+                if f.description:
+                    print(f"     Description:    {f.description}")
+                if f.evidence:
+                    print(f"     Evidence:       {f.evidence}")
+                if f.recommendation:
+                    print(f"     Recommendation: {f.recommendation}")
+                if f.verified_curl:
+                    print(f"     Curl:           {f.verified_curl}")
+                if f.dedup_hash:
+                    print(f"     Dedup hash:     {f.dedup_hash}")
+                if f.created_at:
+                    print(f"     Created:        {f.created_at}")
             print()
 
 
