@@ -558,18 +558,20 @@ class AdaptiveRateLimiter:
         self.consecutive_429: dict[str, int]   = defaultdict(int)
         self.consecutive_ok:  dict[str, int]   = defaultdict(int)
         self.last_request:    dict[str, float]  = {}
+        self._locks:          dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def get_domain(self, url: str) -> str:
         return urlparse(url).netloc
 
     async def wait(self, url: str):
-        domain     = self.get_domain(url)
-        delay      = self.delays.get(domain, self.base_delay)
-        since_last = time.time() - self.last_request.get(domain, 0)
-        wait_time  = max(0.0, delay - since_last)
-        if wait_time > 0:
-            await asyncio.sleep(wait_time)
-        self.last_request[domain] = time.time()
+        domain = self.get_domain(url)
+        async with self._locks[domain]:
+            delay      = self.delays.get(domain, self.base_delay)
+            since_last = time.time() - self.last_request.get(domain, 0)
+            wait_time  = max(0.0, delay - since_last)
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self.last_request[domain] = time.time()
 
     def record(self, url: str, status: int, elapsed: float):
         domain = self.get_domain(url)
