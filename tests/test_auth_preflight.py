@@ -101,3 +101,60 @@ def test_identical_response_regardless_of_auth_is_inconclusive():
     assert result.performed is True
     assert result.passed is True
     assert result.inconclusive is True
+
+
+def test_response_that_only_differs_by_a_nonce_is_still_inconclusive():
+    """Both requests get HTTP 200 and near-identical bodies — auth had no
+    real effect — but each response embeds a fresh per-request token, so a
+    naive byte-equality check would wrongly call this a 'different response'
+    PASS. It must be recognised as the same underlying content."""
+    import itertools
+    counter = itertools.count()
+
+    async def handler(request):
+        n = next(counter)
+        return web.Response(
+            text=f'{{"request_id": "req_{n}_abcdef", "page": "home", "items": [1,2,3]}}',
+            status=200,
+        )
+
+    async def scenario():
+        server = await _serve(handler)
+        try:
+            config = make_config(
+                target_url=f"http://127.0.0.1:{server.port}/",
+                auth_token="some-token",
+            )
+            return await run_auth_preflight(config)
+        finally:
+            await server.close()
+
+    result = run(scenario())
+    assert result.performed is True
+    assert result.inconclusive is True
+
+
+def test_genuinely_different_authenticated_content_is_not_inconclusive():
+    async def handler(request):
+        if request.headers.get("Authorization") == "Bearer good-token":
+            return web.Response(
+                text='{"user": {"id": 42, "email": "jane@example.com", "balance": 4250}}',
+                status=200,
+            )
+        return web.Response(text='{"public": true, "page": "home"}', status=200)
+
+    async def scenario():
+        server = await _serve(handler)
+        try:
+            config = make_config(
+                target_url=f"http://127.0.0.1:{server.port}/",
+                auth_token="good-token",
+            )
+            return await run_auth_preflight(config)
+        finally:
+            await server.close()
+
+    result = run(scenario())
+    assert result.performed is True
+    assert result.passed is True
+    assert result.inconclusive is False

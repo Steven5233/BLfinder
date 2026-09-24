@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 import aiohttp
 
 from .session_manager import SessionManager, RefreshConfig
+from ..verifier import _similarity
+
+SAME_RESPONSE_SIMILARITY_THRESHOLD = 0.95
 
 
 @dataclass
@@ -130,14 +133,15 @@ async def run_auth_preflight(config, check_url: str = "") -> AuthCheckResult:
 
         if (
             unauthed_status == authed_status
-            and unauthed_body == authed_body
             and unauthed_status != -1
+            and _similarity(unauthed_body, authed_body) >= SAME_RESPONSE_SIMILARITY_THRESHOLD
         ):
             result.passed = True
             result.inconclusive = True
             result.reason = (
                 f"Authenticated and unauthenticated requests to {url} returned "
-                f"an identical HTTP {authed_status} response — this may mean the "
+                f"an equivalent HTTP {authed_status} response (same content, "
+                "ignoring timestamps/nonces/tokens) — this may mean the "
                 "credentials had no effect, or simply that this URL doesn't "
                 "require auth. Pass --auth-check-url pointing at an "
                 "authenticated-only endpoint (e.g. /api/me) for a conclusive check"
