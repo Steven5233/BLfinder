@@ -45,7 +45,6 @@ ENDPOINT_PROFILES: dict[str, dict] = {
             "account_enumeration", "graphql", "soft_delete_bypass",
             "parameter_pollution",
         ],
-        "estimated_bounty": "$1,000–$10,000",
         "bounty_score": 90,
     },
     "authentication": {
@@ -66,7 +65,6 @@ ENDPOINT_PROFILES: dict[str, dict] = {
             "price_manipulation", "coupon_stacking",
             "integer_overflow", "soft_delete_bypass",
         ],
-        "estimated_bounty": "$500–$5,000",
         "bounty_score": 75,
     },
     "admin": {
@@ -87,7 +85,6 @@ ENDPOINT_PROFILES: dict[str, dict] = {
             "coupon_stacking", "time_bypass",
             "parameter_pollution", "integer_overflow",
         ],
-        "estimated_bounty": "$2,000–$15,000",
         "bounty_score": 95,
     },
     "user_data": {
@@ -107,7 +104,6 @@ ENDPOINT_PROFILES: dict[str, dict] = {
             "race_condition", "integer_overflow",
             "coupon_stacking", "time_bypass",
         ],
-        "estimated_bounty": "$300–$3,000",
         "bounty_score": 60,
     },
     "financial_transfer": {
@@ -129,7 +125,6 @@ ENDPOINT_PROFILES: dict[str, dict] = {
             "graphql", "coupon_stacking",
             "soft_delete_bypass", "parameter_pollution",
         ],
-        "estimated_bounty": "$2,000–$20,000",
         "bounty_score": 98,
     },
     "reward_loyalty": {
@@ -150,7 +145,6 @@ ENDPOINT_PROFILES: dict[str, dict] = {
             "graphql", "integer_overflow",
             "soft_delete_bypass",
         ],
-        "estimated_bounty": "$200–$3,000",
         "bounty_score": 55,
     },
 }
@@ -161,7 +155,6 @@ DEFAULT_PROFILE: dict = {
     "body_signals": [],
     "priority_modules": [],
     "skip_modules": [],
-    "estimated_bounty": "$100–$5,000",
     "bounty_score": 50,
 }
 
@@ -174,7 +167,6 @@ class EndpointProfile:
     confidence:       float         
     priority_modules: list[str] = field(default_factory=list)
     skip_modules:     list[str] = field(default_factory=list)
-    estimated_bounty: str = ""
     bounty_score:     int = 0
     signals:          list[str] = field(default_factory=list)
 
@@ -209,11 +201,12 @@ class AttackPlan:
             by_profile.items(),
             key=lambda x: -max(e.bounty_score for e in x[1]),
         ):
-            profile = ENDPOINT_PROFILES.get(profile_name, DEFAULT_PROFILE)
+            score = max(e.bounty_score for e in eps)
+            priority = "High" if score >= 75 else "Medium" if score >= 50 else "Low"
             print(
                 f"  [{profile_name.upper():<20}] "
                 f"{len(eps):>3} endpoint(s) | "
-                f"Bounty: {profile.get('estimated_bounty', '?')}"
+                f"Priority: {priority}"
             )
             if verbose:
                 for ep in eps[:3]:
@@ -288,7 +281,6 @@ class BusinessClassifier:
                 confidence=0.0,
                 priority_modules=[],
                 skip_modules=[],
-                estimated_bounty=DEFAULT_PROFILE["estimated_bounty"],
                 bounty_score=DEFAULT_PROFILE["bounty_score"],
                 signals=["No clear business profile detected"],
             )
@@ -300,7 +292,6 @@ class BusinessClassifier:
             confidence=min(1.0, best_score * 3),   
             priority_modules=profile["priority_modules"],
             skip_modules=profile["skip_modules"],
-            estimated_bounty=profile["estimated_bounty"],
             bounty_score=profile["bounty_score"],
             signals=best_signals[:5],
         )
