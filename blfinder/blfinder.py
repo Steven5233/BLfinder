@@ -1455,10 +1455,16 @@ async def run_source_only(args: argparse.Namespace) -> int:
     client (respecting --cookie/--header/--proxy/--rate/--timeout), so the
     only network traffic generated is:
       1. one request to the target URL,
-      2. Phase A's ~18 source-exposure probes against that host,
-      3. one request per discovered/explicit JS file for Phase B.
-    No cookie or token is required — pass them only if you specifically
-    want authenticated pages included in the scan.
+      2. Phase A's ~65 source-exposure probes against the host root,
+      3. Phase A2's backup-archive/database-dump probes,
+      4. Phase A3's directory-listing check at the root and across a bounded
+         set of common subdirectories, following any sensitive-looking
+         linked files it finds,
+      5. one request per discovered/explicit JS file for Phase B.
+    Everything from step 2 onward is driven entirely by the single target
+    URL — no wordlist or prior discovery run is required. No cookie or
+    token is required either; pass them only if you specifically want
+    authenticated pages included in the scan.
     """
     if not args.target:
         print("[!] --source-only requires -t/--target")

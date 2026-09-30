@@ -5,8 +5,9 @@ Source Code Exposure & Static Bug-Pattern Scanner
 Every other module in BLFinder attacks the API from the outside (fuzzing
 parameters, replaying requests). This module instead goes after cases where
 the *source code itself* leaks to the outside — either as raw files
-(exposed .git/.env/backup/credential files) or as reconstructable JS via
-exposed source maps — and then statically greps that source for
+(exposed .git/.env/backup/credential files), as reconstructable JS via
+exposed source maps, as an open directory listing, or as a stray backup
+archive/database dump — and then statically greps that source for
 code-level bug patterns that no black-box request would ever surface
 (disabled TLS verification, eval/innerHTML sinks, postMessage handlers with
 no origin check, hardcoded internal hostnames, commented-out auth checks).
@@ -16,16 +17,40 @@ already handles credential/API-key pattern matching well. This module's job
 is CODE-LOGIC bugs and SOURCE EXPOSURE, not secrets — the two are
 complementary and both may fire on the same file.
 
-Two independent phases:
+Four phases, all driven from a single target URL — no external wordlist or
+discovery engine required:
 
   Phase A — Source exposure sweep (runs once per host)
-      Probes a curated list of VCS/config/backup/credential-file paths
-      (.git/HEAD, .env, .aws/credentials, .vscode/sftp.json, id_rsa, ...).
-      Every candidate has its own content validator — never just "got a
-      200" — and every probe is checked against a soft-404/SPA-catch-all
-      canary fingerprint first, the same anti-false-positive technique used
-      by the wordlist discovery layer. A generic SPA that 200s everything
-      will not generate a single finding here.
+      Probes a large, curated list of VCS/config/backup/credential-file
+      paths (.git/HEAD, .git/logs/HEAD, .env, .aws/credentials,
+      .vscode/sftp.json, id_rsa, kubeconfig, terraform.tfstate, framework
+      config files for Rails/Django/Laravel/Drupal/Magento/Joomla/Spring/
+      .NET, ...). Every candidate has its own content validator — never
+      just "got a 200" — and every probe is checked against a
+      soft-404/SPA-catch-all canary fingerprint first, the same
+      anti-false-positive technique used by the wordlist discovery layer.
+      A generic SPA that 200s everything will not generate a single
+      finding here.
+
+  Phase A2 — Backup archive / database dump sweep
+      Probes common backup filenames (backup.zip, www.tar.gz, dump.sql,
+      ...) combined with names derived from the target hostname itself.
+      Validated by ASCII-safe magic bytes (ZIP), a binary-content heuristic
+      (high invalid-UTF-8 ratio combined with an archive-ish Content-Type,
+      since gzip/tar signatures don't survive text decoding), or a SQL-dump
+      text signature — never a bare 200.
+
+  Phase A3 — Directory listing discovery
+      Every response this module sees (root, subdirectory probes, or any
+      URL the rest of the scanner passes through `check()`) is checked
+      against an autoindex/"Index of /" signature. A confirmed listing is
+      reported on its own, and its linked entries are filtered to the
+      ones that look sensitive by name (extension or keyword) and fetched;
+      each is run through every Phase A/A2 content validator to classify
+      it, or reported as an unclassified lead if none match. A bounded
+      sweep of common subdirectories (admin/, api/, backup/, wp-content/,
+      ...) feeds this same pipeline so folders reachable only by guessing
+      their name are found too, not just ones linked from the homepage.
 
   Phase B — Source map reconstruction + static bug-pattern scan
       When a response looks like JS (content-type or `.js` URL), the module
@@ -38,19 +63,23 @@ Two independent phases:
 
 Resource caps are intentionally conservative (this runs on a phone over
 cellular via Termux): map files >2MB are skipped, at most 20 JS files per
-host are processed, and the combined reconstructed-source scanned per host
-is capped at ~500KB.
+host are processed, the combined reconstructed-source scanned per host is
+capped at ~500KB, exposure/archive/subdirectory probes run with bounded
+concurrency (10 in flight), and following sensitive-looking links found in
+directory listings is capped at 40 fetches per host.
 
-Every static-pattern finding is reported as `confirmed=False` with an
-explicit "requires manual triage" framing — regex-matched code patterns are
-leads, not proof, and this module never inflates a heuristic match into a
-false sense of certainty. Only Phase A's file-exposure findings (backed by
-a specific content validator, e.g. an actual private-key header or a
-parsed git ref) are reported as confirmed.
+Every static-pattern finding and every unclassified directory-listing lead
+is reported as `confirmed=False` with an explicit "requires manual triage"
+framing — regex/filename matches are leads, not proof, and this module
+never inflates a heuristic match into a false sense of certainty. Only
+findings backed by a specific content validator (a parsed git ref, a real
+JSON key structure, a SQL-dump signature, an actual private-key header) or
+a confirmed directory-listing signature are reported as confirmed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import random
@@ -60,12 +89,13 @@ from urllib.parse import urljoin, urlparse
 
 from ..models import Finding, Severity, ProofOfConcept
 
-_MAX_MAP_BYTES = 2 * 1024 * 1024          
-_MAX_JS_FILES_PER_HOST = 20                
-_MAX_RECONSTRUCTED_CHARS = 500_000         
-
-
-
+_MAX_MAP_BYTES = 2 * 1024 * 1024
+_MAX_JS_FILES_PER_HOST = 20
+_MAX_RECONSTRUCTED_CHARS = 500_000
+_MAX_CONCURRENT_PROBES = 10
+_MAX_LISTING_FOLLOWS_PER_HOST = 40
+_MAX_LISTING_HREFS = 40
+_MAX_ARCHIVE_BASENAMES = 12
 
 
 def _is_git_ref(body: str, headers: dict) -> bool:
@@ -73,6 +103,28 @@ def _is_git_ref(body: str, headers: dict) -> bool:
 
 def _is_git_config(body: str, headers: dict) -> bool:
     return "[core]" in body and "repositoryformatversion" in body
+
+def _is_git_index(body: str, headers: dict) -> bool:
+    return body.startswith("DIRC")
+
+def _is_git_packed_refs(body: str, headers: dict) -> bool:
+    stripped = body.strip()
+    if stripped.startswith("# pack-refs"):
+        return True
+    return bool(re.search(r"^[0-9a-f]{40}\s+refs/", body, re.MULTILINE))
+
+def _is_git_reflog(body: str, headers: dict) -> bool:
+    return bool(re.search(r"^[0-9a-f]{40}\s[0-9a-f]{40}\s.+?\t", body, re.MULTILINE))
+
+def _is_svn_wc_db(body: str, headers: dict) -> bool:
+    return body.startswith("SQLite format 3")
+
+def _is_hg_requires(body: str, headers: dict) -> bool:
+    lines = [l.strip() for l in body.splitlines() if l.strip()]
+    if not lines or len(lines) > 20:
+        return False
+    known = {"revlogv1", "store", "fncache", "dotencode", "generaldelta", "sparserevlog", "persistent-nodemap", "shared", "narrowhg"}
+    return all(re.match(r"^[a-z0-9_-]+$", l) for l in lines) and any(l in known for l in lines)
 
 def _is_env_file(body: str, headers: dict) -> bool:
     lines = [l for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
@@ -86,6 +138,9 @@ def _is_aws_credentials(body: str, headers: dict) -> bool:
 
 def _is_ssh_private_key(body: str, headers: dict) -> bool:
     return bool(re.search(r"-----BEGIN (RSA|OPENSSH|EC|DSA) ?PRIVATE KEY-----", body))
+
+def _is_generic_private_key(body: str, headers: dict) -> bool:
+    return bool(re.search(r"-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----", body))
 
 def _is_vscode_sftp(body: str, headers: dict) -> bool:
     try:
@@ -112,30 +167,304 @@ def _is_htpasswd(body: str, headers: dict) -> bool:
     lines = [l for l in body.splitlines() if l.strip()]
     return bool(lines) and all(re.match(r"^[^:]+:\$?\w*\$?[\w./$]+$", l) for l in lines[:5])
 
+def _is_htaccess_auth(body: str, headers: dict) -> bool:
+    return "AuthUserFile" in body or ("AuthType Basic" in body and "AuthName" in body)
+
+def _is_web_config(body: str, headers: dict) -> bool:
+    return "<configuration" in body and ("<connectionStrings" in body or "<appSettings" in body)
+
+def _is_appsettings_json(body: str, headers: dict) -> bool:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    return isinstance(data, dict) and "ConnectionStrings" in data
+
+def _is_rails_database_yml(body: str, headers: dict) -> bool:
+    return "adapter:" in body and "password:" in body and bool(re.search(r"^\s*(development|production|test):\s*$", body, re.MULTILINE))
+
+def _is_rails_secrets_yml(body: str, headers: dict) -> bool:
+    return "secret_key_base:" in body
+
+def _is_rails_master_key(body: str, headers: dict) -> bool:
+    return bool(re.match(r"^[0-9a-f]{32}\s*$", body.strip()))
+
+def _is_git_credentials(body: str, headers: dict) -> bool:
+    return bool(re.search(r"https?://[^:/\s]+:[^@/\s]+@\S+", body))
+
+def _is_netrc(body: str, headers: dict) -> bool:
+    return bool(re.search(r"machine\s+\S+\s+login\s+\S+\s+password\s+\S+", body))
+
+def _is_pypirc(body: str, headers: dict) -> bool:
+    return "[pypi]" in body and ("password" in body.lower() or "repository" in body.lower())
+
+def _is_auth_json(body: str, headers: dict) -> bool:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    return isinstance(data, dict) and ("http-basic" in data or "github-oauth" in data)
+
+def _is_laravel_log(body: str, headers: dict) -> bool:
+    return bool(re.search(r"\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+\w+\.(ERROR|CRITICAL|ALERT|EMERGENCY)", body))
+
+def _is_gcp_service_account(body: str, headers: dict) -> bool:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    return isinstance(data, dict) and data.get("type") == "service_account" and "private_key" in data
+
+def _is_google_oauth_client(body: str, headers: dict) -> bool:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    section = data.get("installed") or data.get("web")
+    return isinstance(section, dict) and "client_secret" in section
+
+def _is_terraform_state(body: str, headers: dict) -> bool:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    return isinstance(data, dict) and "terraform_version" in data and "resources" in data
+
+def _is_kubeconfig(body: str, headers: dict) -> bool:
+    return "apiVersion:" in body and "clusters:" in body and "users:" in body and (
+        "client-key-data:" in body or "token:" in body or "password:" in body
+    )
+
+def _is_authorized_keys(body: str, headers: dict) -> bool:
+    lines = [l.strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
+    if not lines:
+        return False
+    return all(l.split(" ", 1)[0] in ("ssh-rsa", "ssh-ed25519", "ssh-dss", "ecdsa-sha2-nistp256") for l in lines[:5])
+
+def _is_ssh_config(body: str, headers: dict) -> bool:
+    return bool(re.search(r"^\s*Host\s+\S+", body, re.MULTILINE)) and "IdentityFile" in body
+
+def _is_pgpass(body: str, headers: dict) -> bool:
+    lines = [l for l in body.splitlines() if l.strip() and not l.strip().startswith("#")]
+    if not lines:
+        return False
+    matches = sum(1 for l in lines if len(l.split(":")) >= 5)
+    return matches >= max(1, len(lines) // 2)
+
+def _is_my_cnf(body: str, headers: dict) -> bool:
+    return "[client]" in body and bool(re.search(r"password\s*=", body))
+
+def _is_drupal_settings(body: str, headers: dict) -> bool:
+    return "$databases" in body and "'password'" in body
+
+def _is_magento_env(body: str, headers: dict) -> bool:
+    return "'password'" in body and "'connection'" in body and ("return array" in body or "return [" in body)
+
+def _is_joomla_config(body: str, headers: dict) -> bool:
+    return "$password" in body and "class JConfig" in body
+
+def _is_spring_config(body: str, headers: dict) -> bool:
+    return "spring.datasource.password" in body or (
+        "datasource:" in body and "password:" in body and "spring:" in body
+    )
+
+def _is_ds_store(body: str, headers: dict) -> bool:
+    return body.startswith("\x00\x00\x00\x01Bud1")
+
+
+def _content_type(headers: dict) -> str:
+    for k, v in (headers or {}).items():
+        if k.lower() == "content-type":
+            return (v or "").lower()
+    return ""
+
+_SQL_DUMP_RE = re.compile(
+    r"--\s*(MySQL dump|PostgreSQL database dump|phpMyAdmin SQL Dump)"
+    r"|CREATE TABLE.{0,3000}?INSERT INTO",
+    re.IGNORECASE | re.DOTALL,
+)
+
+def _is_sql_dump(body: str, headers: dict) -> bool:
+    return bool(_SQL_DUMP_RE.search(body[:20_000]))
+
+def _is_zip_signature(body: str, headers: dict) -> bool:
+    return body[:4] in ("PK\x03\x04", "PK\x05\x06", "PK\x07\x08")
+
+def _looks_like_binary_archive(body: str, headers: dict) -> bool:
+    if _is_zip_signature(body, headers):
+        return True
+    ct = _content_type(headers)
+    if not any(t in ct for t in ("zip", "gzip", "x-tar", "x-7z", "x-rar", "octet-stream")):
+        return False
+    sample = body[:2000]
+    if len(sample) < 200:
+        return False
+    replacement_ratio = sample.count("\ufffd") / len(sample)
+    return replacement_ratio > 0.05
+
+def _is_archive_or_dump(body: str, headers: dict) -> bool:
+    if not body:
+        return False
+    return _looks_like_binary_archive(body, headers) or _is_sql_dump(body, headers)
+
+
 _EXPOSURE_CHECKS = [
-    (".git/HEAD",              _is_git_ref,          "Exposed .git Repository (HEAD)",       Severity.CRITICAL, "CWE-527"),
-    (".git/config",            _is_git_config,       "Exposed .git Repository (config)",     Severity.CRITICAL, "CWE-527"),
-    (".env",                   _is_env_file,         "Exposed .env Configuration File",       Severity.CRITICAL, "CWE-200"),
-    (".env.local",             _is_env_file,         "Exposed .env.local Configuration File", Severity.CRITICAL, "CWE-200"),
-    (".env.production",        _is_env_file,         "Exposed .env.production File",          Severity.CRITICAL, "CWE-200"),
-    (".env.backup",            _is_env_file,         "Exposed .env Backup File",              Severity.CRITICAL, "CWE-200"),
-    (".aws/credentials",       _is_aws_credentials,  "Exposed AWS Credentials File",          Severity.CRITICAL, "CWE-522"),
-    (".ssh/id_rsa",            _is_ssh_private_key,  "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
-    ("id_rsa",                 _is_ssh_private_key,  "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
-    (".vscode/sftp.json",      _is_vscode_sftp,      "Exposed VS Code SFTP Credentials",      Severity.CRITICAL, "CWE-522"),
-    (".npmrc",                 _is_npmrc_token,       "Exposed .npmrc Registry Auth Token",    Severity.HIGH,     "CWE-522"),
-    ("config.php.bak",         _is_php_backup,        "Exposed PHP Config Backup File",       Severity.CRITICAL, "CWE-530"),
-    ("wp-config.php.bak",      _is_php_backup,        "Exposed WordPress Config Backup File", Severity.CRITICAL, "CWE-530"),
-    ("wp-config.php.save",     _is_php_backup,        "Exposed WordPress Config Backup File", Severity.CRITICAL, "CWE-530"),
-    ("docker-compose.yml",     _is_docker_compose,    "Exposed docker-compose.yml",           Severity.HIGH,     "CWE-200"),
-    ("docker-compose.yml.bak", _is_docker_compose,    "Exposed docker-compose.yml Backup",    Severity.HIGH,     "CWE-200"),
-    ("settings.py",            _is_django_settings,   "Exposed Django settings.py",           Severity.CRITICAL, "CWE-200"),
-    (".htpasswd",              _is_htpasswd,          "Exposed .htpasswd Credential File",    Severity.HIGH,     "CWE-522"),
+    (".git/HEAD",              _is_git_ref,            "Exposed .git Repository (HEAD)",        Severity.CRITICAL, "CWE-527"),
+    (".git/config",            _is_git_config,         "Exposed .git Repository (config)",      Severity.CRITICAL, "CWE-527"),
+    (".git/index",             _is_git_index,          "Exposed .git Repository (index)",       Severity.CRITICAL, "CWE-527"),
+    (".git/logs/HEAD",         _is_git_reflog,         "Exposed .git Repository (reflog)",      Severity.CRITICAL, "CWE-527"),
+    (".git/packed-refs",       _is_git_packed_refs,    "Exposed .git Repository (packed-refs)", Severity.CRITICAL, "CWE-527"),
+    (".svn/wc.db",             _is_svn_wc_db,          "Exposed .svn Repository (wc.db)",       Severity.CRITICAL, "CWE-527"),
+    (".hg/requires",           _is_hg_requires,        "Exposed .hg Repository (requires)",     Severity.HIGH,     "CWE-527"),
+    (".env",                   _is_env_file,           "Exposed .env Configuration File",       Severity.CRITICAL, "CWE-200"),
+    (".env.local",             _is_env_file,           "Exposed .env.local Configuration File", Severity.CRITICAL, "CWE-200"),
+    (".env.production",        _is_env_file,           "Exposed .env.production File",          Severity.CRITICAL, "CWE-200"),
+    (".env.staging",           _is_env_file,           "Exposed .env.staging File",             Severity.CRITICAL, "CWE-200"),
+    (".env.dev",               _is_env_file,           "Exposed .env.dev File",                 Severity.HIGH,     "CWE-200"),
+    (".env.backup",            _is_env_file,           "Exposed .env Backup File",              Severity.CRITICAL, "CWE-200"),
+    (".env.old",               _is_env_file,           "Exposed .env Backup File (.old)",       Severity.CRITICAL, "CWE-200"),
+    (".env~",                  _is_env_file,           "Exposed .env Backup File (~)",          Severity.CRITICAL, "CWE-200"),
+    (".aws/credentials",       _is_aws_credentials,    "Exposed AWS Credentials File",          Severity.CRITICAL, "CWE-522"),
+    (".ssh/id_rsa",            _is_ssh_private_key,    "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
+    ("id_rsa",                 _is_ssh_private_key,    "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
+    ("id_dsa",                 _is_ssh_private_key,    "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
+    ("id_ecdsa",               _is_ssh_private_key,    "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
+    ("id_ed25519",             _is_ssh_private_key,    "Exposed SSH Private Key",               Severity.CRITICAL, "CWE-522"),
+    ("server.key",             _is_generic_private_key,"Exposed Private Key File",              Severity.CRITICAL, "CWE-522"),
+    ("privatekey.key",         _is_generic_private_key,"Exposed Private Key File",              Severity.CRITICAL, "CWE-522"),
+    (".ssh/authorized_keys",   _is_authorized_keys,    "Exposed SSH authorized_keys",            Severity.LOW,      "CWE-200"),
+    (".ssh/config",            _is_ssh_config,         "Exposed SSH Client Config",              Severity.LOW,      "CWE-200"),
+    (".pgpass",                _is_pgpass,             "Exposed PostgreSQL .pgpass Credentials", Severity.CRITICAL, "CWE-522"),
+    (".my.cnf",                _is_my_cnf,             "Exposed MySQL Client Credentials (.my.cnf)", Severity.CRITICAL, "CWE-522"),
+    (".vscode/sftp.json",      _is_vscode_sftp,        "Exposed VS Code SFTP Credentials",      Severity.CRITICAL, "CWE-522"),
+    (".npmrc",                 _is_npmrc_token,        "Exposed .npmrc Registry Auth Token",    Severity.HIGH,     "CWE-522"),
+    (".git-credentials",       _is_git_credentials,    "Exposed .git-credentials File",         Severity.CRITICAL, "CWE-522"),
+    (".netrc",                 _is_netrc,              "Exposed .netrc Credentials File",       Severity.CRITICAL, "CWE-522"),
+    (".pypirc",                _is_pypirc,             "Exposed .pypirc Credentials File",      Severity.HIGH,     "CWE-522"),
+    ("auth.json",              _is_auth_json,          "Exposed Composer auth.json",            Severity.HIGH,     "CWE-522"),
+    ("config.php.bak",         _is_php_backup,         "Exposed PHP Config Backup File",        Severity.CRITICAL, "CWE-530"),
+    ("wp-config.php.bak",      _is_php_backup,         "Exposed WordPress Config Backup File",  Severity.CRITICAL, "CWE-530"),
+    ("wp-config.php.save",     _is_php_backup,         "Exposed WordPress Config Backup File",  Severity.CRITICAL, "CWE-530"),
+    ("wp-config.php.orig",     _is_php_backup,         "Exposed WordPress Config Backup File",  Severity.CRITICAL, "CWE-530"),
+    ("wp-config.php~",         _is_php_backup,         "Exposed WordPress Config Backup File",  Severity.CRITICAL, "CWE-530"),
+    ("docker-compose.yml",     _is_docker_compose,     "Exposed docker-compose.yml",            Severity.HIGH,     "CWE-200"),
+    ("docker-compose.yml.bak", _is_docker_compose,     "Exposed docker-compose.yml Backup",     Severity.HIGH,     "CWE-200"),
+    ("settings.py",            _is_django_settings,    "Exposed Django settings.py",            Severity.CRITICAL, "CWE-200"),
+    (".htpasswd",              _is_htpasswd,           "Exposed .htpasswd Credential File",     Severity.HIGH,     "CWE-522"),
+    (".htaccess",              _is_htaccess_auth,      "Exposed .htaccess Revealing Auth Config", Severity.LOW,   "CWE-200"),
+    ("web.config",             _is_web_config,         "Exposed IIS web.config",                Severity.HIGH,     "CWE-200"),
+    ("appsettings.json",       _is_appsettings_json,   "Exposed .NET appsettings.json",         Severity.HIGH,     "CWE-200"),
+    ("appsettings.Development.json", _is_appsettings_json, "Exposed .NET appsettings.Development.json", Severity.HIGH, "CWE-200"),
+    ("config/database.yml",    _is_rails_database_yml, "Exposed Rails database.yml",            Severity.CRITICAL, "CWE-200"),
+    ("config/secrets.yml",     _is_rails_secrets_yml,  "Exposed Rails secrets.yml",              Severity.CRITICAL, "CWE-200"),
+    ("config/master.key",      _is_rails_master_key,   "Exposed Rails master.key",               Severity.CRITICAL, "CWE-522"),
+    ("storage/logs/laravel.log", _is_laravel_log,      "Exposed Laravel Application Log",       Severity.MEDIUM,   "CWE-532"),
+    ("service-account.json",   _is_gcp_service_account,"Exposed GCP Service Account Key",       Severity.CRITICAL, "CWE-522"),
+    ("gcp-key.json",           _is_gcp_service_account,"Exposed GCP Service Account Key",       Severity.CRITICAL, "CWE-522"),
+    ("credentials.json",       _is_google_oauth_client,"Exposed Google OAuth Client Credentials", Severity.CRITICAL, "CWE-522"),
+    ("terraform.tfstate",      _is_terraform_state,    "Exposed Terraform State File",          Severity.CRITICAL, "CWE-200"),
+    ("terraform.tfstate.backup", _is_terraform_state,  "Exposed Terraform State Backup",        Severity.CRITICAL, "CWE-200"),
+    (".kube/config",           _is_kubeconfig,         "Exposed Kubernetes kubeconfig",         Severity.CRITICAL, "CWE-522"),
+    ("kubeconfig",             _is_kubeconfig,         "Exposed Kubernetes kubeconfig",         Severity.CRITICAL, "CWE-522"),
+    ("sites/default/settings.php", _is_drupal_settings,"Exposed Drupal settings.php",           Severity.CRITICAL, "CWE-200"),
+    ("app/etc/env.php",        _is_magento_env,        "Exposed Magento env.php",               Severity.CRITICAL, "CWE-200"),
+    ("configuration.php",      _is_joomla_config,      "Exposed Joomla configuration.php",      Severity.CRITICAL, "CWE-200"),
+    ("application.yml",        _is_spring_config,      "Exposed Spring Boot application.yml",   Severity.CRITICAL, "CWE-200"),
+    ("application.properties", _is_spring_config,      "Exposed Spring Boot application.properties", Severity.CRITICAL, "CWE-200"),
+    (".DS_Store",              _is_ds_store,           "Exposed .DS_Store (Directory Metadata)", Severity.LOW,     "CWE-200"),
 ]
 
+_HIGH_VALUE_CHECKS = [
+    (".git/HEAD",         _is_git_ref,             "Exposed .git Repository (HEAD)",   Severity.CRITICAL, "CWE-527"),
+    (".git/config",       _is_git_config,          "Exposed .git Repository (config)", Severity.CRITICAL, "CWE-527"),
+    (".env",              _is_env_file,            "Exposed .env Configuration File",  Severity.CRITICAL, "CWE-200"),
+    (".env.local",        _is_env_file,            "Exposed .env.local Configuration File", Severity.CRITICAL, "CWE-200"),
+    ("config.php.bak",    _is_php_backup,          "Exposed PHP Config Backup File",   Severity.CRITICAL, "CWE-530"),
+    ("web.config",        _is_web_config,          "Exposed IIS web.config",           Severity.HIGH,      "CWE-200"),
+    ("appsettings.json",  _is_appsettings_json,    "Exposed .NET appsettings.json",    Severity.HIGH,      "CWE-200"),
+    ("docker-compose.yml",_is_docker_compose,      "Exposed docker-compose.yml",       Severity.HIGH,      "CWE-200"),
+    (".ssh/id_rsa",       _is_ssh_private_key,     "Exposed SSH Private Key",          Severity.CRITICAL, "CWE-522"),
+    (".htpasswd",         _is_htpasswd,            "Exposed .htpasswd Credential File",Severity.HIGH,      "CWE-522"),
+]
+
+_CONTENT_VALIDATORS = [(v, t, s, c) for (_, v, t, s, c) in _EXPOSURE_CHECKS]
+_CONTENT_VALIDATORS.append((_is_archive_or_dump, "Exposed Backup/Archive File", Severity.HIGH, "CWE-530"))
+
+def _classify_body(body: str, headers: dict) -> tuple | None:
+    for validator, title, severity, cwe in _CONTENT_VALIDATORS:
+        try:
+            if validator(body, headers):
+                return title, severity, cwe
+        except Exception:
+            continue
+    return None
 
 
+_ARCHIVE_BASENAMES = [
+    "backup", "www", "site", "web", "html", "public_html", "source",
+    "src", "old", "dump", "database", "db", "db_backup", "full_backup",
+]
+_ARCHIVE_EXTENSIONS = [".zip", ".tar.gz", ".sql"]
 
+def _derive_hostname_basenames(host: str) -> list[str]:
+    name = host.split(":")[0]
+    parts = [p for p in name.split(".") if p]
+    candidates = []
+    if len(parts) >= 2:
+        candidates.append(parts[-2])
+    if parts:
+        candidates.append(parts[0])
+    return [c for c in dict.fromkeys(candidates) if c and c not in ("www", "api", "app")]
+
+
+_COMMON_SUBDIRS = [
+    "admin", "api", "app", "backend", "static", "assets", "uploads",
+    "backup", "old", "dev", "staging", "test", "src", "public", "vendor",
+    "include", "includes", "config", "tmp", "logs", "private",
+    "wp-content", "wp-admin",
+]
+
+_SENSITIVE_HINT_RE = re.compile(
+    r"\.(?:git|env|sql|zip|tar|gz|tgz|bak|old|save|swp|key|pem|pfx|p12|"
+    r"db|sqlite3?|log|yml|yaml|json|config|ini|conf)(?:[?#]|$)"
+    r"|secret|backup|dump|credential|password|private",
+    re.IGNORECASE,
+)
+
+_DIR_LISTING_TITLE_RE = re.compile(r"<title>\s*index of\s*/[^<]*</title>", re.IGNORECASE)
+_DIR_LISTING_H1_RE = re.compile(r"<h1>\s*index of\s*/[^<]*</h1>", re.IGNORECASE)
+_HREF_RE = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+def _is_directory_listing(body: str) -> bool:
+    sample = body[:4000]
+    if not sample:
+        return False
+    if not (_DIR_LISTING_TITLE_RE.search(sample) or _DIR_LISTING_H1_RE.search(sample)):
+        return False
+    return sample.lower().count("href=") >= 2
+
+def _extract_listing_hrefs(body: str, base_url: str) -> list[str]:
+    hrefs: list[str] = []
+    seen: set[str] = set()
+    base_netloc = urlparse(base_url).netloc
+    for m in _HREF_RE.finditer(body[:20_000]):
+        href = m.group(1)
+        if not href or href in ("../", "./", "/") or href.startswith("?"):
+            continue
+        if href.lower().startswith(("mailto:", "javascript:", "#")):
+            continue
+        absolute = urljoin(base_url, href)
+        if urlparse(absolute).netloc != base_netloc:
+            continue
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        hrefs.append(absolute)
+        if len(hrefs) >= _MAX_LISTING_HREFS:
+            break
+    return hrefs
 
 
 class _JSPattern:
@@ -266,11 +595,11 @@ class SourceCodeScanner:
         self._config = scanner.config
         self._request = scanner._request
         self._exposure_checked_hosts: set[str] = set()
-        self._reported: set[tuple] = set()          
+        self._reported: set[tuple] = set()
         self._js_files_scanned_per_host: dict[str, int] = {}
         self._reconstructed_chars_per_host: dict[str, int] = {}
-
-
+        self._listing_checked: set[str] = set()
+        self._listing_follow_budget: dict[str, int] = {}
 
     async def check(
         self,
@@ -287,11 +616,15 @@ class SourceCodeScanner:
             return findings
         headers = headers or {}
 
-
         if host not in self._exposure_checked_hosts:
             self._exposure_checked_hosts.add(host)
             findings.extend(await self._scan_source_exposure(parsed.scheme, host))
 
+        listing_finding, hrefs = self._check_directory_listing(host, url, body)
+        if listing_finding:
+            findings.append(listing_finding)
+        if hrefs:
+            findings.extend(await self._follow_sensitive_links(host, hrefs))
 
         if self._looks_like_js(url, headers, body):
             budget = self._js_files_scanned_per_host.get(host, 0)
@@ -301,37 +634,128 @@ class SourceCodeScanner:
 
         return findings
 
-
-
     async def _scan_source_exposure(self, scheme: str, host: str) -> list[Finding]:
         findings: list[Finding] = []
         base = f"{scheme}://{host}"
-
         canary_hash = await self._canary_hash(base)
 
-        for path, validator, title, severity, cwe in _EXPOSURE_CHECKS:
+        findings.extend(await self._probe_checks(host, base, canary_hash, _EXPOSURE_CHECKS))
+        findings.extend(await self._scan_archives(host, base, canary_hash))
+        findings.extend(await self._sweep_subdirs(host, base, canary_hash))
+
+        return findings
+
+    async def _probe_checks(self, host: str, base: str, canary_hash: str | None, checks: list) -> list[Finding]:
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_PROBES)
+
+        async def probe(entry) -> Finding | None:
+            path, validator, title, severity, cwe = entry
             key = (host, "exposure", path)
             if key in self._reported:
-                continue
+                return None
             probe_url = f"{base}/{path}"
+            async with sem:
+                try:
+                    pstatus, pheaders, pbody, _ = await self._request("GET", probe_url)
+                except Exception as e:
+                    if self._config.verbose:
+                        print(f"[!] SourceCodeScanner exposure probe error {probe_url}: {e}")
+                    return None
+            if pstatus not in (200, 201):
+                return None
+            if not pbody or len(pbody) < 5:
+                return None
+            if canary_hash and self._body_hash(pbody) == canary_hash:
+                return None
+            if not validator(pbody, pheaders or {}):
+                return None
+            self._reported.add(key)
+            return self._build_exposure_finding(probe_url, path, title, severity, cwe, pbody)
+
+        results = await asyncio.gather(*(probe(e) for e in checks), return_exceptions=True)
+        return [r for r in results if isinstance(r, Finding)]
+
+    async def _scan_archives(self, host: str, base: str, canary_hash: str | None) -> list[Finding]:
+        names = list(dict.fromkeys(_ARCHIVE_BASENAMES + _derive_hostname_basenames(host)))[:_MAX_ARCHIVE_BASENAMES]
+        checks = [
+            (f"{name}{ext}", _is_archive_or_dump, "Exposed Backup/Archive File", Severity.HIGH, "CWE-530")
+            for name in names
+            for ext in _ARCHIVE_EXTENSIONS
+        ]
+        return await self._probe_checks(host, base, canary_hash, checks)
+
+    async def _sweep_subdirs(self, host: str, base: str, canary_hash: str | None) -> list[Finding]:
+        findings: list[Finding] = []
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_PROBES)
+
+        async def probe_subdir(subdir: str):
+            subdir_url = f"{base}/{subdir}/"
+            async with sem:
+                try:
+                    sstatus, sheaders, sbody, _ = await self._request("GET", subdir_url)
+                except Exception:
+                    return None
+            if sstatus not in (200, 201) or not sbody:
+                return None
+            if canary_hash and self._body_hash(sbody) == canary_hash:
+                return None
+            return subdir, subdir_url, sheaders or {}, sbody
+
+        results = await asyncio.gather(*(probe_subdir(s) for s in _COMMON_SUBDIRS), return_exceptions=True)
+        live_subdirs = [r for r in results if isinstance(r, tuple)]
+
+        for subdir, subdir_url, _headers, sbody in live_subdirs:
+            listing_finding, hrefs = self._check_directory_listing(host, subdir_url, sbody)
+            if listing_finding:
+                findings.append(listing_finding)
+            if hrefs:
+                findings.extend(await self._follow_sensitive_links(host, hrefs))
+
+        for subdir, _url, _headers, _body in live_subdirs:
+            subdir_checks = [(f"{subdir}/{p}", v, t, s, c) for (p, v, t, s, c) in _HIGH_VALUE_CHECKS]
+            findings.extend(await self._probe_checks(host, base, canary_hash, subdir_checks))
+
+        return findings
+
+    def _check_directory_listing(self, host: str, url: str, body: str) -> tuple[Finding | None, list[str]]:
+        if not body or url in self._listing_checked:
+            return None, []
+        self._listing_checked.add(url)
+        if not _is_directory_listing(body):
+            return None, []
+        hrefs = _extract_listing_hrefs(body, url)
+        return self._build_listing_finding(url, hrefs), hrefs
+
+    async def _follow_sensitive_links(self, host: str, hrefs: list[str]) -> list[Finding]:
+        findings: list[Finding] = []
+        budget = self._listing_follow_budget.get(host, _MAX_LISTING_FOLLOWS_PER_HOST)
+        candidates = [h for h in hrefs if _SENSITIVE_HINT_RE.search(h)]
+
+        for link_url in candidates:
+            if budget <= 0:
+                break
+            key = (host, "listing_follow", link_url)
+            if key in self._reported:
+                continue
+            self._reported.add(key)
+            budget -= 1
             try:
-                pstatus, pheaders, pbody, _ = await self._request("GET", probe_url)
+                lstatus, lheaders, lbody, _ = await self._request("GET", link_url)
             except Exception as e:
                 if self._config.verbose:
-                    print(f"[!] SourceCodeScanner exposure probe error {probe_url}: {e}")
+                    print(f"[!] SourceCodeScanner listing-follow error {link_url}: {e}")
                 continue
-            if pstatus not in (200, 201):
+            if lstatus not in (200, 201) or not lbody:
                 continue
-            if not pbody or len(pbody) < 5:
-                continue
-            if canary_hash and self._body_hash(pbody) == canary_hash:
-                continue  
-            if not validator(pbody, pheaders or {}):
-                continue
+            classified = _classify_body(lbody, lheaders or {})
+            if classified:
+                title, severity, cwe = classified
+                path = urlparse(link_url).path.lstrip("/")
+                findings.append(self._build_exposure_finding(link_url, path, title, severity, cwe, lbody))
+            else:
+                findings.append(self._build_unclassified_listed_finding(link_url))
 
-            self._reported.add(key)
-            findings.append(self._build_exposure_finding(probe_url, path, title, severity, cwe, pbody))
-
+        self._listing_follow_budget[host] = budget
         return findings
 
     async def _canary_hash(self, base: str) -> str | None:
@@ -374,9 +798,16 @@ class SourceCodeScanner:
             ),
             "CWE-530": (
                 "Remove editor/deploy backup files (`*.bak`, `*.swp`, `*.save`, "
-                "`*~`) from the web root — configure your deploy pipeline to "
-                "exclude them, and add a web-server rule denying any request "
-                "for a path ending in a backup-file extension."
+                "`*~`) and backup archives/dumps from the web root — configure "
+                "your deploy pipeline to exclude them, and add a web-server "
+                "rule denying any request for a path ending in a backup-file "
+                "or archive extension."
+            ),
+            "CWE-532": (
+                "Move application log files outside the web-served document "
+                "root, or restrict access to them at the web server layer. "
+                "Review the exposed log for any leaked credentials, tokens, "
+                "or internal paths and rotate/redact as needed."
             ),
         }.get(cwe, "Remove this file from the publicly accessible web root.")
 
@@ -416,7 +847,88 @@ class SourceCodeScanner:
         )
         return finding
 
+    def _build_listing_finding(self, url: str, hrefs: list[str]) -> Finding:
+        preview = ", ".join(h.rsplit("/", 1)[-1] or h for h in hrefs[:15])
+        finding = Finding(
+            title="Directory Listing Enabled",
+            severity=Severity.MEDIUM,
+            category="Source Code Exposure",
+            description=(
+                f"`{url}` returns a browsable directory index instead of a "
+                f"normal page, exposing the names of every file and "
+                f"subdirectory it contains ({len(hrefs)} entries found)."
+            ),
+            request={"method": "GET", "url": url},
+            response_summary="200 OK, autoindex-style directory listing",
+            evidence=f"Listed entries: {preview}" + (" ..." if len(hrefs) > 15 else ""),
+            recommendation=(
+                "Disable directory indexing at the web server (e.g. "
+                "`Options -Indexes` in Apache, `autoindex off;` in nginx) and "
+                "review every listed entry for anything that should not be "
+                "publicly reachable."
+            ),
+            cwe="CWE-548",
+            cvss=5.3,
+            owasp="OWASP Top 10 A05:2021 Security Misconfiguration",
+            confirmed=True,
+            confidence=90,
+            confidence_reasons=["Response matched a directory-listing/autoindex page signature"],
+            endpoint=url,
+            parameter="",
+        )
+        finding.poc = ProofOfConcept(
+            summary="Directory listing exposes file/folder names",
+            curl_command=f'curl -sk "{url}"',
+            python_script=f'import requests\nr = requests.get("{url}")\nprint(r.text)\n',
+            burp_request=f"GET {urlparse(url).path or '/'} HTTP/1.1\nHost: {urlparse(url).netloc}\nConnection: close\n\n",
+            expected_result="The response body lists file and directory names.",
+            steps=[f"Open `{url}` in a browser to view the listing."],
+        )
+        return finding
 
+    def _build_unclassified_listed_finding(self, url: str) -> Finding:
+        finding = Finding(
+            title="Sensitive-Looking File Exposed via Directory Listing — Requires Manual Triage",
+            severity=Severity.MEDIUM,
+            category="Source Code Exposure",
+            description=(
+                f"`{url}` was reachable and its name suggests sensitive "
+                f"content (backup/credential/database-related), but its body "
+                f"did not match any known structured-format validator. "
+                f"Review it manually before reporting."
+            ),
+            request={"method": "GET", "url": url},
+            response_summary="200 OK, filename pattern suggests sensitive content",
+            evidence="Discovered via a directory listing at a related path",
+            recommendation=(
+                "Manually review the file content; remove it from the web "
+                "root if it contains anything sensitive."
+            ),
+            cwe="CWE-200",
+            cvss=0.0,
+            owasp="OWASP Top 10 A05:2021 Security Misconfiguration",
+            confirmed=False,
+            confidence=35,
+            confidence_reasons=[
+                "Filename pattern matched sensitive-file heuristics; content "
+                "did not match a structured validator"
+            ],
+            false_positive_checks=[
+                "Filename-based heuristic only — content was not validated "
+                "against a known format"
+            ],
+            endpoint=url,
+            parameter="",
+        )
+        finding.poc = ProofOfConcept(
+            summary="Sensitive-looking file exposed",
+            curl_command=f'curl -sk "{url}"',
+            python_script=f'import requests\nr = requests.get("{url}")\nprint(r.text[:1000])\n',
+            burp_request="",
+            expected_result="Manually confirm whether the file content is sensitive.",
+            steps=[f"Open `{url}` and inspect its content."],
+        )
+        return finding
 
     def _looks_like_js(self, url: str, headers: dict, body: str) -> bool:
         ct = ""
@@ -447,8 +959,6 @@ class SourceCodeScanner:
                 self._apply_patterns(url, host, combined, _JS_PATTERNS, source_label=f"reconstructed via {map_url}")
             )
         else:
-
-
             findings.extend(
                 self._apply_patterns(url, host, body, _MINIFIED_SAFE_PATTERNS, source_label="raw/minified JS")
             )
@@ -461,7 +971,7 @@ class SourceCodeScanner:
             return "", ""
         map_ref = m.group(1)
         if map_ref.startswith("data:"):
-            return "", ""  
+            return "", ""
         map_url = urljoin(js_url, map_ref)
         try:
             status, headers, map_body, _ = await self._request("GET", map_url)
@@ -525,8 +1035,8 @@ class SourceCodeScanner:
             confidence_reasons=[f"Static regex match for pattern `{pattern.id}`"],
             false_positive_checks=[
                 "Static pattern match only — not confirmed against runtime behavior",
-                "Requires manual review of surrounding code to confirm attacker "
-                "influence over the relevant value/flag",
+                "Requires manual review of surrounding code to confirm "
+                "attacker influence over the relevant value/flag",
             ],
             endpoint=url,
             parameter="",
@@ -538,7 +1048,6 @@ class SourceCodeScanner:
                 "import requests\n"
                 f'r = requests.get("{url}")\n'
                 "open('source.js', 'w').write(r.text)\n"
-                "# then search source.js manually around the snippet below\n"
             ),
             burp_request="",
             expected_result="Manually confirm exploitability of the flagged code path.",
