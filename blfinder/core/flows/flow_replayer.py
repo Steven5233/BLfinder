@@ -386,6 +386,164 @@ class FlowReplayer:
             confirmed=confirmed,
         )]
 
+    async def attack_resume_after_invalidation(
+        self,
+        steps: list[FlowStep],
+        base_url: str = "",
+        context: dict | None = None,
+    ) -> list:
+        """
+        The gap `attack_state_transitions` doesn't cover: that method only
+        ever re-orders requests WITHIN one uninterrupted run — it never
+        changes the parent resource's real state out from under the flow.
+
+        A manual hunter's actual "living in the app" move is different:
+        get partway through a flow, let (or make) the underlying resource
+        change — cancel the order, let a coupon get revoked, let a token
+        expire — then resume the flow from where it left off and see if
+        the next step still re-validates against CURRENT state or just
+        trusts that reaching this step at all means every precondition
+        still holds.
+
+        For every step that extracts an id-like variable, this method:
+          1. runs the flow up to and including that step,
+          2. finds the first later step whose URL template references
+             that variable, and uses the URL *up to* that variable as the
+             resource's own endpoint,
+          3. fires generic invalidation probes at that resource (DELETE,
+             then a status-cancel PATCH) and keeps whichever one a canary
+             check confirms actually changed something,
+          4. resumes the remaining steps and flags any one that still
+             succeeds — with a canary check at that step too, so a step
+             that was always going to succeed regardless of parent state
+             doesn't get reported as a false positive.
+        """
+        findings = []
+        if len(steps) < 2:
+            return findings
+
+        ctx: dict = dict(context or {})
+        for i, step in enumerate(steps[:-1]):
+            if step.skip:
+                continue
+
+            step_result = await self._execute_step(step, base_url, ctx)
+            ctx.update(step_result.extracted)
+            if not step_result.success and step.required:
+                break
+
+            id_vars = [v for v in step_result.extracted if "id" in v.lower()]
+            if not id_vars:
+                continue
+
+            for var in id_vars:
+                resource_url = self._resource_url_for_variable(var, steps[i + 1:], ctx, base_url)
+                if not resource_url:
+                    continue
+
+                invalidated, invalidation_evidence = await self._attempt_invalidation(resource_url)
+                if not invalidated:
+                    continue
+
+                remaining_ctx = dict(ctx)
+                for later_step in steps[i + 1:]:
+                    if later_step.skip:
+                        continue
+
+                    resolved_url  = self._resolve_template(later_step.url, remaining_ctx, base_url)
+                    resolved_body = self._resolve_body(later_step.body, remaining_ctx)
+
+                    status, _, resp_body, _ = await self._request(
+                        later_step.method, resolved_url,
+                        json=resolved_body if resolved_body else None,
+                        params=self._resolve_body(later_step.params, remaining_ctx) or None,
+                    )
+                    if status not in later_step.expected_status:
+                        break
+
+                    canary_status, _, _, _ = await self._request(
+                        later_step.method, resolved_url,
+                        json={"__canary_invalid__": True},
+                    )
+                    if canary_status in later_step.expected_status:
+                        break
+
+                    findings.append(self._make_finding(
+                        title=(
+                            f"Workflow Resumption After Invalidation — "
+                            f"'{later_step.id}' succeeded on a {var} the flow itself cancelled"
+                        ),
+                        severity="HIGH",
+                        category="Business Logic — Stale Precondition on Resume",
+                        description=(
+                            f"After step '{step.id}' produced `{var}`, it was "
+                            f"invalidated out-of-band ({invalidation_evidence}). "
+                            f"Resuming the flow at step '{later_step.id}' still "
+                            f"returned HTTP {status} — this step is trusting "
+                            f"that reaching it means every precondition still "
+                            f"holds, instead of re-checking current state."
+                        ),
+                        request={
+                            "method": later_step.method, "url": resolved_url,
+                            "body": resolved_body,
+                            "note": f"Resumed after invalidating {var} at {resource_url}",
+                        },
+                        response_summary=f"HTTP {status} — {resp_body[:300]}",
+                        evidence=(
+                            f"{invalidation_evidence}; then '{later_step.id}' "
+                            f"→ HTTP {status} (canary check: {canary_status})"
+                        ),
+                        recommendation=(
+                            "Re-validate the resource's current state (not just "
+                            "that a step was reached) on every step that mutates "
+                            "or depends on it, independent of how far the client "
+                            "claims the flow has progressed."
+                        ),
+                        cwe="CWE-696",
+                        owasp="API6:2023 Unrestricted Access to Sensitive Business Flows",
+                        confirmed=True,
+                    ))
+                    remaining_ctx.update(self._extract_values(resp_body, later_step.extract))
+                break
+
+        return findings
+
+    def _resource_url_for_variable(
+        self, var: str, later_steps: list[FlowStep], ctx: dict, base_url: str,
+    ) -> str:
+        placeholder = "{{" + var + "}}"
+        for later_step in later_steps:
+            idx = later_step.url.find(placeholder)
+            if idx == -1:
+                continue
+            truncated = later_step.url[: idx + len(placeholder)]
+            return self._resolve_template(truncated, ctx, base_url)
+        return ""
+
+    async def _attempt_invalidation(self, resource_url: str) -> tuple[bool, str]:
+        try:
+            del_status, _, del_body, _ = await self._request("DELETE", resource_url)
+            if del_status in (200, 202, 204):
+                return True, f"DELETE {resource_url} → HTTP {del_status}"
+        except Exception:
+            pass
+
+        try:
+            patch_status, _, patch_body, _ = await self._request(
+                "PATCH", resource_url, json={"status": "cancelled"},
+            )
+            if patch_status in (200, 202):
+                data = self._scanner._try_parse_json(patch_body)
+                if isinstance(data, dict) and str(data.get("status", "")).lower() in (
+                    "cancelled", "canceled", "void", "revoked",
+                ):
+                    return True, f"PATCH {resource_url} status=cancelled → HTTP {patch_status}, confirmed in response"
+                return True, f"PATCH {resource_url} status=cancelled → HTTP {patch_status} (unconfirmed in response)"
+        except Exception:
+            pass
+
+        return False, ""
+
     async def attack_state_transitions(
         self,
         steps: list[FlowStep],

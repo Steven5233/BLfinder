@@ -3951,6 +3951,12 @@ class BLFScanner:
                     )
                 )
 
+                findings.extend(
+                    await self._flow_replayer.attack_resume_after_invalidation(
+                        steps, base_url=base_url
+                    )
+                )
+
 
                 second_token = getattr(self.config, "second_user_token", "") or None
                 findings.extend(
