@@ -190,6 +190,12 @@ except ImportError:
     _HAS_SOURCE_SCAN = False
 
 try:
+    from .modules.numeric_precision import NumericPrecisionScanner
+    _HAS_NUMERIC_PRECISION = True
+except ImportError:
+    _HAS_NUMERIC_PRECISION = False
+
+try:
     from .intelligence.business_classifier import BusinessClassifier, AttackPlan
     _HAS_CLASSIFIER = True
 except ImportError:
@@ -720,6 +726,7 @@ class BLFScanner:
         self._ssrf_scanner:    Optional[SSRFScanner] = None
         self._csrf_scanner:    Optional[CSRFScanner] = None
         self._source_scanner:  Optional[SourceCodeScanner] = None
+        self._numeric_precision: Optional[NumericPrecisionScanner] = None
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
 
@@ -799,6 +806,8 @@ class BLFScanner:
             self._csrf_scanner = CSRFScanner(self)
         if _HAS_SOURCE_SCAN and getattr(self.config, "run_source_scan", False):
             self._source_scanner = SourceCodeScanner(self)
+        if _HAS_NUMERIC_PRECISION:
+            self._numeric_precision = NumericPrecisionScanner(self)
         if _HAS_CLASSIFIER:
             self._classifier = BusinessClassifier()
 
@@ -1997,6 +2006,7 @@ class BLFScanner:
             ("coupon_stacking",      self._check_coupon_stacking(url, method, body, params, status, base_body)),
             ("time_bypass",          self._check_time_logic_bypass(url, method, body, params, status, base_body)),
             ("integer_overflow",     self._check_integer_overflow(url, method, body, params, status, base_body)),
+            ("numeric_precision",    self._check_numeric_precision(url, method, body, status, base_body)),
             ("hidden_parameter",     self._check_hidden_parameter_disclosure(url, method, body, params, status, base_body)),
             ("state_machine_abuse",  self._check_state_machine_abuse(url, method, body, params, status, base_body)),
             ("race_condition",       self._check_race_condition(url, method, body, params, status, base_body)),
@@ -2036,6 +2046,11 @@ class BLFScanner:
 
 
 
+
+    async def _check_numeric_precision(self, url, method, body, base_status, base_body) -> list[Finding]:
+        if not _HAS_NUMERIC_PRECISION or not self._numeric_precision:
+            return []
+        return await self._numeric_precision.check(url, method, body, base_status, base_body)
 
     async def _check_price_manipulation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
