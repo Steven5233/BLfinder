@@ -79,27 +79,73 @@ class ConfidenceEngine:
 
         if _HAS_SEMANTIC_DIFF:
             try:
-                similarity = SemanticDiff.compare(
-                    baseline_body[:2000], tampered_body[:2000]
-                ).semantic_similarity
+                diff = SemanticDiff.compare(baseline_body[:4000], tampered_body[:4000])
             except Exception:
-                similarity = difflib.SequenceMatcher(
-                    None, baseline_body[:2000], tampered_body[:2000]
-                ).ratio()
+                diff = None
+        else:
+            diff = None
+
+        if diff is not None:
+            similarity = diff.semantic_similarity
+
+            if similarity > 0.98 and not diff.structural_change:
+                score -= 15
+                fp_checks.append(
+                    f"Responses semantically identical (similarity={similarity:.2f}) — "
+                    "likely same data returned regardless of tamper"
+                )
+            elif similarity < 0.5 and tampered_status == 200:
+                score += 20
+                reasons.append(f"Significantly different response (similarity={similarity:.2f})")
+            elif 0.5 <= similarity <= 0.95:
+                score += 10
+                reasons.append(f"Moderate response difference (similarity={similarity:.2f})")
+
+            if diff.privileged_changes:
+                score += 25
+                reasons.append(
+                    f"Privileged field(s) changed in response: {diff.privileged_changes[:3]}"
+                )
+            if diff.sensitive_changes:
+                score += 20
+                reasons.append(
+                    f"Sensitive field(s) changed in response: {diff.sensitive_changes[:3]}"
+                )
+            if diff.structural_change and diff.new_keys:
+                score += 15
+                reasons.append(
+                    f"New fields appeared in tampered response: {diff.new_keys[:5]}"
+                )
+
+            score += min(diff.confidence_boost, 30)
+            if diff.confidence_boost > 0:
+                reasons.append(
+                    f"SemanticDiff confidence boost: +{min(diff.confidence_boost, 30)}"
+                )
+
+            for sig in diff.fp_signals:
+                score -= 8
+                fp_checks.append(f"SemanticDiff FP signal: {sig}")
+
+            if diff.noise_ratio > 0.8 and not diff.structural_change:
+                score -= 10
+                fp_checks.append(
+                    f"Response diff is {diff.noise_ratio:.0%} volatile fields "
+                    "(timestamps/nonces) — real signal is weak"
+                )
         else:
             similarity = difflib.SequenceMatcher(
                 None, baseline_body[:2000], tampered_body[:2000]
             ).ratio()
-
-        if similarity > 0.98:
-            score -= 15
-            fp_checks.append(f"Responses nearly identical (similarity={similarity:.2f}) — may be same data")
-        elif similarity < 0.5 and tampered_status == 200:
-            score += 20
-            reasons.append(f"Significantly different response (similarity={similarity:.2f})")
-        elif 0.5 <= similarity <= 0.95:
-            score += 10
-            reasons.append(f"Moderate response difference (similarity={similarity:.2f})")
+            if similarity > 0.98:
+                score -= 15
+                fp_checks.append(f"Responses nearly identical (similarity={similarity:.2f})")
+            elif similarity < 0.5 and tampered_status == 200:
+                score += 20
+                reasons.append(f"Significantly different response (similarity={similarity:.2f})")
+            elif 0.5 <= similarity <= 0.95:
+                score += 10
+                reasons.append(f"Moderate response difference (similarity={similarity:.2f})")
 
 
         base_data = _safe_json(baseline_body)
