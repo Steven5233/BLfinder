@@ -235,6 +235,30 @@ class H1Report:
                 "An attacker can forge arbitrary JWT claims and impersonate any user, "
                 "including administrators, without knowing the signing secret."
             )
+        elif "webhook" in cat or "callback" in cat:
+            lines.append(
+                "An attacker can forge a payment-provider callback with an arbitrary "
+                "amount and status, causing the platform to treat an unpaid order as "
+                "paid — resulting in direct financial loss and fraudulent goods/service delivery."
+            )
+        elif "numeric precision" in cat or "rounding" in cat or "scale confusion" in cat:
+            lines.append(
+                "An attacker can purchase items at an effectively-free price by submitting "
+                "a fractional amount that rounds to zero under the backend's arithmetic, "
+                "causing direct financial loss without triggering a validation rejection."
+            )
+        elif "second-order" in cat or "second order" in cat:
+            lines.append(
+                "A tampered value set at one endpoint persists and is trusted by a different "
+                "endpoint that never re-validates it — compounding the impact of the original "
+                "tamper across a wider surface without requiring any further attacker action."
+            )
+        elif "stale precondition" in cat or "resumption" in cat:
+            lines.append(
+                "An attacker can resume a multi-step flow after its prerequisite resource "
+                "has been invalidated, causing business operations to proceed based on "
+                "stale state — for example, completing a checkout on a cancelled order."
+            )
 
         if f.confirmed:
             lines.append("")
@@ -361,11 +385,20 @@ def _url_to_path(url: str) -> str:
 
 def _vuln_short(category: str) -> str:
     mapping = {
+        "numeric precision": "Numeric Precision Abuse",
+        "scale confusion": "Unit/Currency Scale Confusion",
+        "second-order": "Second-Order State Reflection",
+        "second order": "Second-Order State Reflection",
+        "stale precondition": "Stale Precondition on Resume",
+        "resumption": "Workflow Resumption After Invalidation",
         "idor": "IDOR", "bola": "BOLA", "price": "Price Manipulation",
         "race": "Race Condition", "mass": "Mass Assignment",
         "jwt": "JWT Bypass", "privilege": "Privilege Escalation",
         "workflow": "Workflow Bypass", "state": "State Machine Abuse",
         "coupon": "Coupon Abuse", "graphql": "GraphQL Vulnerability",
+        "webhook": "Webhook Signature Bypass",
+        "callback": "Callback Trust Bypass",
+        "rounding": "Sub-Cent Rounding Abuse",
     }
     cat_lower = category.lower()
     for key, val in mapping.items():
@@ -376,6 +409,12 @@ def _vuln_short(category: str) -> str:
 
 def _vuln_long(category: str) -> str:
     mapping = {
+        "numeric precision": "numeric precision abuse",
+        "scale confusion": "unit/currency scale confusion",
+        "second-order": "second-order state reflection",
+        "second order": "second-order state reflection",
+        "stale precondition": "stale precondition on resume",
+        "resumption": "workflow resumption after invalidation",
         "idor": "Broken Object Level Authorization (IDOR/BOLA)",
         "bola": "Broken Object Level Authorization (IDOR/BOLA)",
         "price": "price manipulation",
@@ -387,6 +426,9 @@ def _vuln_long(category: str) -> str:
         "state": "state machine abuse",
         "coupon": "coupon/discount abuse",
         "graphql": "GraphQL security",
+        "webhook": "webhook signature bypass",
+        "callback": "payment callback trust bypass",
+        "rounding": "sub-cent rounding abuse",
     }
     cat_lower = category.lower()
     for key, val in mapping.items():

@@ -196,6 +196,12 @@ except ImportError:
     _HAS_NUMERIC_PRECISION = False
 
 try:
+    from .modules.webhook_bypass import WebhookBypassScanner
+    _HAS_WEBHOOK_BYPASS = True
+except ImportError:
+    _HAS_WEBHOOK_BYPASS = False
+
+try:
     from .analysis.second_order_tracker import SecondOrderTracker
     _HAS_SECOND_ORDER = True
 except ImportError:
@@ -733,6 +739,7 @@ class BLFScanner:
         self._csrf_scanner:    Optional[CSRFScanner] = None
         self._source_scanner:  Optional[SourceCodeScanner] = None
         self._numeric_precision: Optional[NumericPrecisionScanner] = None
+        self._webhook_bypass: Optional[WebhookBypassScanner] = None
         self._second_order: Optional[SecondOrderTracker] = None
         self._classifier:      Optional[BusinessClassifier] = None
         self._attack_plan:     Optional[AttackPlan]          = None
@@ -815,6 +822,8 @@ class BLFScanner:
             self._source_scanner = SourceCodeScanner(self)
         if _HAS_NUMERIC_PRECISION:
             self._numeric_precision = NumericPrecisionScanner(self)
+        if _HAS_WEBHOOK_BYPASS:
+            self._webhook_bypass = WebhookBypassScanner(self)
         if _HAS_SECOND_ORDER:
             self._second_order = SecondOrderTracker()
         if _HAS_CLASSIFIER:
@@ -2027,6 +2036,7 @@ class BLFScanner:
             ("time_bypass",          self._check_time_logic_bypass(url, method, body, params, status, base_body)),
             ("integer_overflow",     self._check_integer_overflow(url, method, body, params, status, base_body)),
             ("numeric_precision",    self._check_numeric_precision(url, method, body, status, base_body)),
+            ("webhook_bypass",       self._check_webhook_bypass(url, method, body, base_body)),
             ("hidden_parameter",     self._check_hidden_parameter_disclosure(url, method, body, params, status, base_body)),
             ("state_machine_abuse",  self._check_state_machine_abuse(url, method, body, params, status, base_body)),
             ("race_condition",       self._check_race_condition(url, method, body, params, status, base_body)),
@@ -2073,6 +2083,11 @@ class BLFScanner:
         if not _HAS_NUMERIC_PRECISION or not self._numeric_precision:
             return []
         return await self._numeric_precision.check(url, method, body, base_status, base_body)
+
+    async def _check_webhook_bypass(self, url, method, body, base_body) -> list[Finding]:
+        if not _HAS_WEBHOOK_BYPASS or not self._webhook_bypass:
+            return []
+        return await self._webhook_bypass.check_endpoint(url, method, body or base_body)
 
     async def _check_price_manipulation(self, url, method, body, params, base_status, base_body) -> list[Finding]:
         findings: list[Finding] = []
